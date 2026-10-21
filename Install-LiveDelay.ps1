@@ -65,7 +65,7 @@ function Find-ObsRoots {
 		'C:\Program Files (x86)\Steam\steamapps\common\OBS Studio',
 		'C:\Program Files\Steam\steamapps\common\OBS Studio'
 	)) { & $add $s }
-	# Always return Object[] — a single string makes $roots[0] mean the char 'C'.
+	# Always return Object[] - a single string makes $roots[0] mean the char 'C'.
 	return @($list | Select-Object -Unique)
 }
 
