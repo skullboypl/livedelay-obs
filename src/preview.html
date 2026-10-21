@@ -24,6 +24,11 @@
   .card h2 span { color: var(--muted); font-weight: 400; }
   video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; }
   .note { color: var(--muted); font-size: 13px; padding: 0 24px 24px; max-width: 900px; }
+  .chart { grid-column: 1 / -1; }
+  .chart canvas { display: block; width: 100%; height: 220px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0 16px 14px; font-size: 13px; color: var(--muted); }
+  .legend b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
   .off { display: grid; place-items: center; aspect-ratio: 16 / 9; color: var(--muted); background: #0b0c0f; }
 </style>
 </head>
@@ -44,24 +49,29 @@
     <div class="off" id="outOff" data-t="noSignal"></div>
     <video id="out" muted playsinline hidden></video>
   </section>
+  <section class="card chart">
+    <h2><b data-t="bitrate"></b><span data-t="bitrateSub"></span></h2>
+    <canvas id="chart"></canvas>
+    <div class="legend" id="legend"></div>
+  </section>
 </main>
 <p class="note" data-t="note"></p>
 <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
 <script>
   const I18N = {
-    en: { dest: { stopped: 'stopped', waiting: 'waiting', connecting: 'connecting', live: 'live', error: 'error' }, in: 'From OBS', inSub: 'what OBS sends to LiveDelay', out: 'To viewers', live: 'live, no delay',
+    en: { bitrate: 'Bitrate', bitrateSub: 'last 2 minutes, kb/s', inLine: 'From OBS', dest: { stopped: 'stopped', waiting: 'waiting', connecting: 'connecting', live: 'live', error: 'error' }, in: 'From OBS', inSub: 'what OBS sends to LiveDelay', out: 'To viewers', live: 'live, no delay',
           delayed: 'delayed {s} s', noSignal: 'Waiting for the stream from OBS…', waiting: 'WAITING FOR OBS',
           sLive: 'LIVE', sArming: 'ARMING {b}/{s} s', sArmed: 'ARMED {s} s', sDelayed: 'DELAY {s} s',
           note: 'Both players are muted and run on this computer only. The right one is exactly what LiveDelay sends to your platforms, so it trails by the delay plus a second or two of player buffer.' },
-    pl: { dest: { stopped: 'zatrzymana', waiting: 'czeka', connecting: 'łączy', live: 'nadaje', error: 'błąd' }, in: 'Z OBS', inSub: 'to, co OBS wysyła do LiveDelay', out: 'Do widzów', live: 'na żywo, bez opóźnienia',
+    pl: { bitrate: 'Bitrate', bitrateSub: 'ostatnie 2 minuty, kb/s', inLine: 'Z OBS', dest: { stopped: 'zatrzymana', waiting: 'czeka', connecting: 'łączy', live: 'nadaje', error: 'błąd' }, in: 'Z OBS', inSub: 'to, co OBS wysyła do LiveDelay', out: 'Do widzów', live: 'na żywo, bez opóźnienia',
           delayed: 'opóźnienie {s} s', noSignal: 'Czekam na stream z OBS…', waiting: 'CZEKAM NA OBS',
           sLive: 'NA ŻYWO', sArming: 'UZBRAJANIE {b}/{s} s', sArmed: 'UZBROJONE {s} s', sDelayed: 'OPÓŹNIENIE {s} s',
           note: 'Oba odtwarzacze są wyciszone i działają tylko na tym komputerze. Prawy pokazuje dokładnie to, co LiveDelay wysyła na platformy, więc jest z tyłu o opóźnienie plus sekundę czy dwie bufora odtwarzacza.' },
-    de: { dest: { stopped: 'gestoppt', waiting: 'wartet', connecting: 'verbindet', live: 'sendet', error: 'Fehler' }, in: 'Von OBS', inSub: 'was OBS an LiveDelay sendet', out: 'An die Zuschauer', live: 'live, ohne Verzögerung',
+    de: { bitrate: 'Bitrate', bitrateSub: 'letzte 2 Minuten, kb/s', inLine: 'Von OBS', dest: { stopped: 'gestoppt', waiting: 'wartet', connecting: 'verbindet', live: 'sendet', error: 'Fehler' }, in: 'Von OBS', inSub: 'was OBS an LiveDelay sendet', out: 'An die Zuschauer', live: 'live, ohne Verzögerung',
           delayed: 'verzögert {s} s', noSignal: 'Warte auf den Stream von OBS…', waiting: 'WARTE AUF OBS',
           sLive: 'LIVE', sArming: 'VORBEREITUNG {b}/{s} s', sArmed: 'BEREIT {s} s', sDelayed: 'VERZÖGERT {s} s',
           note: 'Beide Player sind stumm und laufen nur auf diesem Computer. Rechts siehst du genau das, was LiveDelay an deine Plattformen sendet; es liegt um die Verzögerung plus ein, zwei Sekunden Player-Puffer zurück.' },
-    ru: { dest: { stopped: 'остановлено', waiting: 'ожидание', connecting: 'подключение', live: 'в эфире', error: 'ошибка' }, in: 'Из OBS', inSub: 'что OBS отправляет в LiveDelay', out: 'Зрителям', live: 'эфир без задержки',
+    ru: { bitrate: 'Битрейт', bitrateSub: 'последние 2 минуты, кбит/с', inLine: 'Из OBS', dest: { stopped: 'остановлено', waiting: 'ожидание', connecting: 'подключение', live: 'в эфире', error: 'ошибка' }, in: 'Из OBS', inSub: 'что OBS отправляет в LiveDelay', out: 'Зрителям', live: 'эфир без задержки',
           delayed: 'задержка {s} с', noSignal: 'Жду трансляцию из OBS…', waiting: 'ЖДУ OBS',
           sLive: 'ЭФИР', sArming: 'ПОДГОТОВКА {b}/{s} с', sArmed: 'ГОТОВО {s} с', sDelayed: 'ЗАДЕРЖКА {s} с',
           note: 'Оба плеера без звука и работают только на этом компьютере. Справа ровно то, что LiveDelay отправляет на платформы, поэтому он отстаёт на задержку плюс секунду-две буфера плеера.' },
@@ -107,7 +117,58 @@
     document.getElementById('dests').textContent = s.dests.map(d => d.name + ': ' + (L.dest[d.state] || d.state) + (d.kbps ? ' ' + d.kbps + ' kb/s' : '')).join('  ·  ');
     if (!last || last.input !== s.input) { play('in', s.input); play('out', s.input); }
     last = s;
+    record(s);
   };
+
+  // Bitrate history: OBS input plus one line per platform, one point a second.
+  const HISTORY = 120, COLORS = ['#3ddc84', '#5ac8fa', '#ff9f0a', '#bf5af2', '#ff5a4f', '#ffd60a'];
+  const series = new Map();
+  let lastPoint = 0;
+  function record(s) {
+    const now = Date.now();
+    if (now - lastPoint < 900) return;
+    lastPoint = now;
+    const values = [[L.inLine, s.input ? s.in_kbps : 0]];
+    for (const d of s.dests) values.push([d.name, d.state === 'live' ? d.kbps : 0]);
+    for (const [name, v] of values) {
+      if (!series.has(name)) series.set(name, []);
+      const arr = series.get(name);
+      arr.push(v);
+      if (arr.length > HISTORY) arr.shift();
+    }
+    draw();
+  }
+  function draw() {
+    const c = document.getElementById('chart'), ctx = c.getContext('2d'), dpr = devicePixelRatio || 1;
+    const w = c.clientWidth, h = c.clientHeight;
+    c.width = w * dpr; c.height = h * dpr; ctx.scale(dpr, dpr);
+    let max = 1000;
+    for (const arr of series.values()) for (const v of arr) max = Math.max(max, v);
+    const step = max > 20000 ? 5000 : max > 8000 ? 2000 : 1000;
+    max = Math.ceil(max * 1.1 / step) * step;
+    const pad = { l: 56, r: 12, t: 10, b: 22 }, pw = w - pad.l - pad.r, ph = h - pad.t - pad.b;
+    ctx.font = '12px Segoe UI, system-ui, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let v = 0; v <= max; v += step) {
+      const y = pad.t + ph - v / max * ph;
+      ctx.strokeStyle = '#262a33'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(w - pad.r, y); ctx.stroke();
+      ctx.fillStyle = '#8b90a0'; ctx.fillText(v >= 1000 ? (v / 1000) + 'k' : v, pad.l - 8, y);
+    }
+    const legend = [];
+    let i = 0;
+    for (const [name, arr] of series) {
+      const color = COLORS[i++ % COLORS.length];
+      ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.beginPath();
+      arr.forEach((v, k) => {
+        const x = pad.l + (k + HISTORY - arr.length) / (HISTORY - 1) * pw, y = pad.t + ph - v / max * ph;
+        k ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+      });
+      ctx.stroke();
+      const cur = arr[arr.length - 1] || 0;
+      legend.push('<span><i style="background:' + color + '"></i>' + name.replace(/</g, '&lt;') + ' <b>' + Math.round(cur) + ' kb/s</b></span>');
+    }
+    document.getElementById('legend').innerHTML = legend.join('');
+  }
+  addEventListener('resize', draw);
 </script>
 </body>
 </html>

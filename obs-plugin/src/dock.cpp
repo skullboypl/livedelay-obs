@@ -9,6 +9,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMetaObject>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPointer>
 #include <QProgressBar>
 #include <QPushButton>
@@ -16,9 +18,44 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <chrono>
 #include <thread>
 
 namespace livedelay {
+
+// A tiny bitrate line for one row of the panel.
+class Sparkline : public QWidget {
+public:
+	Sparkline(const std::deque<double> &values, QColor color) : values_(values), color_(color)
+	{
+		setFixedSize(64, 18);
+	}
+
+protected:
+	void paintEvent(QPaintEvent *) override
+	{
+		if (values_.size() < 2)
+			return;
+		double max = 1000;
+		for (double v : values_)
+			max = std::max(max, v);
+		QPainter p(this);
+		p.setRenderHint(QPainter::Antialiasing);
+		QPainterPath line;
+		const double w = width() - 2, h = height() - 3;
+		for (size_t i = 0; i < values_.size(); i++) {
+			const double x = 1 + w * double(i + kHistory - values_.size()) / (kHistory - 1);
+			const double y = 1.5 + h - values_[i] / (max * 1.1) * h;
+			i ? line.lineTo(x, y) : line.moveTo(x, y);
+		}
+		p.setPen(QPen(color_, 1.6));
+		p.drawPath(line);
+	}
+
+private:
+	std::deque<double> values_;
+	QColor color_;
+};
 
 static QPushButton *Button(const char *text, const char *tip)
 {
@@ -196,8 +233,38 @@ void Dock::ShowDestinations(const std::string &j)
 		delete item->widget();
 		delete item;
 	}
-	size_t p = 0;
+	// One bitrate point a second per line.
+	const auto now = std::chrono::steady_clock::now();
+	const bool sample = now - lastSample_ >= std::chrono::milliseconds(900);
+	if (sample)
+		lastSample_ = now;
+	auto history = [&](const std::string &key, double v) -> std::deque<double> & {
+		auto &h = history_[key];
+		if (sample) {
+			h.push_back(v);
+			if (h.size() > kHistory)
+				h.pop_front();
+		}
+		return h;
+	};
+
 	int row = 0;
+	{
+		const bool input = JsonBool(j, "input");
+		const double kbps = input ? JsonNumber(j, "in_kbps") : 0;
+		auto *dot = new QLabel(QString::fromUtf8("●"));
+		dot->setStyleSheet(QString("color: %1;").arg(input ? "#5ac8fa" : "#7a7f8c"));
+		auto *name = new QLabel(T("Dock.InputRow"));
+		auto *rate = new QLabel(input ? QString("%1 kb/s").arg(kbps, 0, 'f', 0) : T("Dock.NoSignalShort"));
+		rate->setStyleSheet("color: palette(placeholder-text);");
+		destGrid_->addWidget(dot, row, 0);
+		destGrid_->addWidget(name, row, 1);
+		destGrid_->addWidget(new Sparkline(history("in", kbps), QColor("#5ac8fa")), row, 2);
+		destGrid_->addWidget(rate, row, 3);
+		row++;
+	}
+	size_t p = 0;
+	int index = 0;
 	while ((p = j.find("\"name\":\"", p)) != std::string::npos) {
 		const std::string state = JsonString(j, "state", p);
 		const bool on = JsonBool(j, "on", p);
@@ -207,7 +274,8 @@ void Dock::ShowDestinations(const std::string &j)
 
 		auto *dot = new QLabel(QString::fromUtf8("●"));
 		dot->setStyleSheet(QString("color: %1;").arg(color));
-		auto *name = new QLabel(QString::fromStdString(JsonString(j, "name", p)));
+		const std::string destName = JsonString(j, "name", p);
+		auto *name = new QLabel(QString::fromStdString(destName));
 		QString st = T(("Dest." + state).c_str());
 		if (kbps > 0)
 			st += QString(" · %1 kb/s").arg(kbps, 0, 'f', 0);
@@ -217,20 +285,22 @@ void Dock::ShowDestinations(const std::string &j)
 			stateLabel->setToolTip(QString::fromStdString(error));
 		auto *toggle = new QPushButton(on ? T("Dock.DestStop") : T("Dock.DestStart"));
 		toggle->setToolTip(on ? T("Dock.DestStopTip") : T("Dock.DestStartTip"));
-		const std::string path = std::string(on ? "dest/stop" : "dest/start") + "?i=" + std::to_string(row);
+		const std::string path = std::string(on ? "dest/stop" : "dest/start") + "?i=" + std::to_string(index);
 		connect(toggle, &QPushButton::clicked, this, [this, path] { Act(path); });
 
 		destGrid_->addWidget(dot, row, 0);
 		destGrid_->addWidget(name, row, 1);
-		destGrid_->addWidget(stateLabel, row, 2);
-		destGrid_->addWidget(toggle, row, 3);
+		destGrid_->addWidget(new Sparkline(history(destName, state == "live" ? kbps : 0), QColor(color)), row, 2);
+		destGrid_->addWidget(stateLabel, row, 3);
+		destGrid_->addWidget(toggle, row, 4);
 		p += 8;
 		row++;
+		index++;
 	}
-	if (row == 0) {
+	if (index == 0) {
 		auto *none = new QLabel(T("Dock.NoPlatforms"));
 		none->setWordWrap(true);
-		destGrid_->addWidget(none, 0, 0, 1, 4);
+		destGrid_->addWidget(none, row, 0, 1, 5);
 	}
 	dests_->show();
 }

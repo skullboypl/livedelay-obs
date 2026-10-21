@@ -112,6 +112,10 @@ pub struct Engine {
     sent_video_cfg: Option<OutTag>,
     sent_audio_cfg: Option<OutTag>,
 
+    /// Bytes received since the instant, for the input bitrate.
+    in_window: (Instant, u64),
+    in_kbps: f64,
+
     /// Config tags that fell out of the buffer, still needed by jumps to older-than-them points.
     evicted_cfg: [Option<Tag>; 3],
 
@@ -166,6 +170,8 @@ pub struct Status {
     pub arm_delay_s: Option<f64>,
     pub armed: bool,
     pub cut_pending: bool,
+    /// Input bitrate from OBS over the last second.
+    pub in_kbps: f64,
 }
 
 impl Engine {
@@ -193,6 +199,8 @@ impl Engine {
             sent_video_cfg: None,
             sent_audio_cfg: None,
             evicted_cfg: [None, None, None],
+            in_window: (Instant::now(), 0),
+            in_kbps: 0.0,
             arm_delay: None,
             input_out: broadcast::channel(1).0,
             input_cfg: [None, None, None],
@@ -236,6 +244,12 @@ impl Engine {
         let ts = self.expand_ts(raw_ts);
         let (config, key) = classify(kind, &data);
         self.bytes += data.len();
+        self.in_window.1 += data.len() as u64;
+        let el = now.saturating_duration_since(self.in_window.0);
+        if el >= Duration::from_secs(1) {
+            self.in_kbps = self.in_window.1 as f64 * 8.0 / 1000.0 / el.as_secs_f64();
+            self.in_window = (now, 0);
+        }
         let tag = Tag { seq: self.next_seq, ts, arrival: now, kind, key, config, data: Arc::new(data) };
         if let Some(slot) = cfg_slot(&tag) {
             self.input_cfg[slot] = Some(OutTag { kind, ts, key, config: true, data: tag.data.clone() });
@@ -453,6 +467,7 @@ impl Engine {
             arm_delay_s: self.arm_delay.map(|d| d.as_secs_f64()),
             armed: self.is_armed(now),
             cut_pending: self.cut_after_seq.is_some(),
+            in_kbps: if self.publishing && now.saturating_duration_since(self.in_window.0) < Duration::from_secs(3) { self.in_kbps } else { 0.0 },
         }
     }
 }

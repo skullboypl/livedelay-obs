@@ -2,6 +2,9 @@
 
 #include <QWidget>
 
+#include <chrono>
+#include <deque>
+#include <map>
 #include <memory>
 #include <string>
 
@@ -15,6 +18,7 @@ class QSpinBox;
 namespace livedelay {
 
 class EventStream;
+constexpr size_t kHistory = 60; // seconds of bitrate shown per row
 
 // The LiveDelay panel: state at a glance plus Arm / Activate / Cut.
 // Redraws only when the proxy pushes a new state; no polling.
@@ -50,6 +54,8 @@ private:
 	QPushButton *disarm_;
 	QPushButton *start_;
 	bool delay_set_ = false;
+	std::map<std::string, std::deque<double>> history_;
+	std::chrono::steady_clock::time_point lastSample_{};
 	std::unique_ptr<EventStream> events_;
 };
 

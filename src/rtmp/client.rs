@@ -282,7 +282,7 @@ async fn stream(
         }
         out.clear();
         let el = window_start.elapsed();
-        if el >= Duration::from_secs(2) {
+        if el >= Duration::from_secs(1) {
             status.lock().unwrap().kbps = sent_bytes as f64 * 8.0 / 1000.0 / el.as_secs_f64();
             sent_bytes = 0;
             window_start = Instant::now();

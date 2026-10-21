@@ -49,7 +49,7 @@ pub fn state_json(ctx: &Ctx) -> String {
     let st = ctx.shared.eng.lock().unwrap().status(Instant::now());
     let mode = if st.mode == Mode::Delayed { "delayed" } else { "live" };
     let mut j = format!(
-        "{{\"mode\":\"{mode}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"default_delay\":{},\"dests\":[",
+        "{{\"mode\":\"{mode}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"default_delay\":{},\"dests\":[",
         st.input,
         st.delay_s,
         st.buffer_s,
@@ -57,6 +57,7 @@ pub fn state_json(ctx: &Ctx) -> String {
         st.arm_delay_s.map(|d| format!("{d:.1}")).unwrap_or("null".into()),
         st.armed,
         st.cut_pending,
+        st.in_kbps,
         ctx.default_delay.as_secs_f64(),
     );
     for (i, dest) in ctx.dests.iter().enumerate() {
@@ -209,8 +210,11 @@ async fn events(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
     loop {
         let j = state_json(ctx);
         sock.write_all(format!("data: {j}\n\n").as_bytes()).await?;
+        // Once a second while anything moves (buffer filling, a stream in or out), so
+        // progress and bitrate charts stay live; otherwise only on changes.
         let filling = j.contains("\"armed\":false") && !j.contains("\"arm_delay\":null");
-        let tick = if filling { Duration::from_secs(1) } else { Duration::from_secs(15) };
+        let busy = filling || j.contains("\"input\":true") || j.contains("\"state\":\"live\"");
+        let tick = if busy { Duration::from_secs(1) } else { Duration::from_secs(15) };
         tokio::select! {
             r = rx.changed() => if r.is_err() { return Ok(()) },
             _ = tokio::time::sleep(tick) => {}
