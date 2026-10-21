@@ -310,17 +310,58 @@ function Unblock-PluginFiles([string]$root) {
 	}
 }
 
+function Get-DllFileVersion([string]$path) {
+	try {
+		if (-not (Test-Path -LiteralPath $path)) { return $null }
+		$v = (Get-Item -LiteralPath $path).VersionInfo.FileVersion
+		if (-not $v) { return $null }
+		return [version]$v
+	} catch {
+		return $null
+	}
+}
+
+function Get-InstalledLivedelayVersion {
+	$root = Join-Path $env:ProgramData 'obs-studio\plugins\livedelay-obs'
+	foreach ($rel in @('bin\64bit\livedelay-obs.dll', 'livedelay-obs.dll')) {
+		$v = Get-DllFileVersion (Join-Path $root $rel)
+		if ($v) { return $v }
+	}
+	return $null
+}
+
 function Install-ToProgramData([string]$dllSrc, [string]$dataSrc, [version]$obsVer) {
 	$root = Join-Path $env:ProgramData 'obs-studio\plugins\livedelay-obs'
 	$dataDst = Join-Path $root 'data'
 	$legacyBin = Join-Path $root 'bin\64bit'
+	$prev = Get-InstalledLivedelayVersion
+	$next = Get-DllFileVersion $dllSrc
+	if ($prev -and $next) {
+		if ($next -gt $prev) {
+			Write-Info "Updating LiveDelay $prev -> $next (ProgramData overwrite)."
+		} elseif ($next -eq $prev) {
+			Write-Info "Reinstalling LiveDelay $next (same version, overwrite)."
+		} else {
+			Write-Warn "Installing LiveDelay $next over newer $prev (downgrade / overwrite)."
+		}
+	} elseif ($next) {
+		Write-Info "Fresh install LiveDelay $next."
+	} else {
+		Write-Info "Installing LiveDelay into ProgramData (overwrite if present)."
+	}
 	New-Item -ItemType Directory -Force -Path $dataDst, $legacyBin | Out-Null
+	# -Force overwrites an existing plugin (update path). OBS must be closed so the DLL unlocks.
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $legacyBin 'livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $root 'livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force
 	Unblock-PluginFiles -root $root
 	Write-Ok "Installed to ProgramData (no admin):"
 	Write-Host "  $root"
+	if ($prev -and $next) {
+		Write-Ok "LiveDelay version now: $next (was $prev)"
+	} elseif ($next) {
+		Write-Ok "LiveDelay version now: $next"
+	}
 	if ($obsVer -and $obsVer.Major -ge 33) {
 		Write-Info "OBS $($obsVer.Major)+ -> flat DLL + legacy bin\64bit."
 	} else {
