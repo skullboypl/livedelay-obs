@@ -1,8 +1,10 @@
 #include "dock.hpp"
 #include "client.hpp"
+#include "encode.hpp"
 #include "i18n.hpp"
 #include "icons.hpp"
 #include "limits.hpp"
+#include "outputs.hpp"
 #include "settings.hpp"
 
 #include <QDesktopServices>
@@ -132,10 +134,12 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	limits_->setStyleSheet("#ldLimits { background: rgba(255, 90, 79, .13); border: 1px solid rgba(255, 90, 79, .5); border-radius: 6px; }");
 	limitsText_ = new QLabel;
 	limitsText_->setWordWrap(true);
-	auto *fit = Button("Limits.Fit", "Limits.FitTip", Icon::Settings, "#ff5a4f");
+	limitsFit_ = Button("Limits.Fit", "Limits.FitTip", Icon::Settings, "#ff5a4f");
+	limitsHide_ = Button("Limits.Hide", "Limits.HideTip", Icon::Disarm);
 	auto *limitsLayout = new QHBoxLayout(limits_);
 	limitsLayout->addWidget(limitsText_, 1);
-	limitsLayout->addWidget(fit);
+	limitsLayout->addWidget(limitsFit_);
+	limitsLayout->addWidget(limitsHide_);
 	limits_->hide();
 
 	status_ = new QLabel;
@@ -216,10 +220,14 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 		ShowSettings(window());
 		UpdateBanner();
 	});
-	connect(fit, &QPushButton::clicked, this, [this] {
-		const bool ok = FitObsOutput(PlatformLimits());
+	connect(limitsFit_, &QPushButton::clicked, this, [this] {
+		const bool ok = FitEncodeForObsMode();
 		UpdateBanner();
 		ShowError(ok ? QString() : T("Settings.SaveFailed"));
+	});
+	connect(limitsHide_, &QPushButton::clicked, this, [this] {
+		limitsHidden_ = true;
+		UpdateBanner();
 	});
 	// OBS settings can change behind our back (Settings dialog, profile switch).
 	auto *timer = new QTimer(this);
@@ -281,9 +289,24 @@ void Dock::UpdateBanner()
 {
 	const bool routed = ObsRoutedToLiveDelay();
 	banner_->setVisible(!routed);
-	const QStringList problems = routed ? LimitProblems(PlatformLimits(), ReadObsOutput()) : QStringList();
-	limitsText_->setText("<b>" + T("Limits.Title") + "</b><br>" + problems.join("<br>"));
-	limits_->setVisible(!problems.isEmpty());
+	QStringList problems = routed ? EncodeProblems() : QStringList();
+	const QString info = MultiEncodeInfo();
+	if (problems.isEmpty() && !info.isEmpty()) {
+		limitsText_->setText(info);
+		limits_->setStyleSheet(
+			"#ldLimits { background: rgba(90, 200, 250, .12); border: 1px solid rgba(90, 200, 250, .45); border-radius: 6px; }");
+		limitsFit_->setVisible(false);
+		limitsHide_->setVisible(false);
+		limits_->setVisible(true);
+		return;
+	}
+	limits_->setStyleSheet(
+		"#ldLimits { background: rgba(255, 90, 79, .13); border: 1px solid rgba(255, 90, 79, .5); border-radius: 6px; }");
+	const bool show = !problems.isEmpty() && !limitsHidden_;
+	limitsFit_->setVisible(show);
+	limitsHide_->setVisible(show);
+	limitsText_->setText(problems.isEmpty() ? QString() : ("<b>" + T("Limits.Title") + "</b><br>" + problems.join("<br>")));
+	limits_->setVisible(show);
 }
 
 static void Pill(QLabel *l, const QString &text, const char *bg)
@@ -367,7 +390,15 @@ void Dock::ShowDestinations(const std::string &j)
 		toggle->setIconSize(QSize(12, 12));
 		toggle->setCursor(Qt::PointingHandCursor);
 		const std::string path = std::string(on ? "dest/stop" : "dest/start") + "?i=" + std::to_string(index);
-		connect(toggle, &QPushButton::clicked, this, [this, path] { Act(path); });
+		const int destIndex = index;
+		const bool turningOn = !on;
+		connect(toggle, &QPushButton::clicked, this, [this, path, destIndex, turningOn] {
+			if (turningOn)
+				OutputStartDest(size_t(destIndex));
+			else
+				OutputStopDest(size_t(destIndex));
+			Act(path);
+		});
 
 		destGrid_->addWidget(dot, row, 0);
 		destGrid_->addWidget(name, row, 1);

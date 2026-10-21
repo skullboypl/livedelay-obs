@@ -13,7 +13,8 @@
 //! GET  /overlay/config   overlay look and texts as JSON; POST replaces it
 //! GET  /edit-theme       visual editor for the overlay
 
-use crate::engine::{Mode, Shared};
+use crate::engine::Mode;
+use crate::hub::Hub;
 use crate::rtmp::client::Dest;
 use std::fmt::Write as _;
 use std::io;
@@ -23,7 +24,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 pub struct Ctx {
-    pub shared: Arc<Shared>,
+    pub hub: Arc<Hub>,
     pub dests: Vec<Arc<Dest>>,
     pub default_delay: Duration,
     pub overlay: crate::overlay::OverlayStore,
@@ -49,7 +50,7 @@ fn esc(s: &str) -> String {
 }
 
 pub fn state_json(ctx: &Ctx) -> String {
-    let st = ctx.shared.eng.lock().unwrap().status(Instant::now());
+    let st = ctx.hub.status(Instant::now());
     let mode = if st.mode == Mode::Delayed { "delayed" } else { "live" };
     let mut j = format!(
         "{{\"mode\":\"{mode}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},\"dests\":[",
@@ -66,16 +67,18 @@ pub fn state_json(ctx: &Ctx) -> String {
     );
     for (i, dest) in ctx.dests.iter().enumerate() {
         let d = dest.status.lock().unwrap();
+        let ingest = ctx.hub.slot(i).map(|s| s.ingest_key.as_str()).unwrap_or("");
         let _ = write!(
             j,
-            "{}{{\"name\":\"{}\",\"state\":\"{}\",\"kbps\":{:.0},\"on\":{},\"autostart\":{},\"error\":\"{}\"}}",
+            "{}{{\"name\":\"{}\",\"state\":\"{}\",\"kbps\":{:.0},\"on\":{},\"autostart\":{},\"error\":\"{}\",\"ingest_key\":\"{}\"}}",
             if i > 0 { "," } else { "" },
             esc(&d.name),
             d.state,
             d.kbps,
             dest.is_on(),
             dest.autostart,
-            esc(&d.error)
+            esc(&d.error),
+            esc(ingest)
         );
     }
     j.push_str("]}");
@@ -85,30 +88,31 @@ pub fn state_json(ctx: &Ctx) -> String {
 /// Runs an action; shared by the HTTP API, the tray menu and hotkeys.
 pub fn act(ctx: &Ctx, action: &str, delay: Option<f64>) -> Result<(), String> {
     let now = Instant::now();
-    let r = ctx.shared.with(|e| match action {
+    let r = match action {
         "arm" => {
             let d = delay.map(Duration::from_secs_f64).unwrap_or(ctx.default_delay);
             if d.is_zero() || d > Duration::from_secs(3600) {
-                return Err("delay_range".to_string());
+                Err("delay_range".to_string())
+            } else {
+                ctx.hub.arm_all(d);
+                Ok(())
             }
-            e.arm(d);
-            Ok(())
         }
-        "activate" => e.activate(now).map_err(str::to_string),
+        "activate" => ctx.hub.activate_all(now),
         "cut" => {
-            e.cut(now);
+            ctx.hub.cut_all(now);
             Ok(())
         }
         "cut-after" => {
-            e.cut_after_airs();
+            ctx.hub.cut_after_all();
             Ok(())
         }
         "disarm" => {
-            e.disarm();
+            ctx.hub.disarm_all();
             Ok(())
         }
         _ => Err("unknown_action".to_string()),
-    });
+    };
     match &r {
         Ok(()) => log!("action: {action}"),
         Err(e) => log!("action {action} refused: {e}"),
@@ -138,6 +142,10 @@ async fn respond_typed(sock: &mut TcpStream, code: &str, ctype: &str, body: &str
 
 async fn respond(sock: &mut TcpStream, code: &str, body: &str) -> io::Result<()> {
     respond_typed(sock, code, "application/json", body).await
+}
+
+fn query_i(query: &str) -> Option<usize> {
+    query.split('&').find_map(|kv| kv.strip_prefix("i=")).and_then(|v| v.parse().ok())
 }
 
 async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
@@ -171,8 +179,6 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
     let mut lines = head.lines();
     let mut parts = lines.next().unwrap_or("").split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
-    // A web page in a browser must not be able to cut your stream: browsers mark
-    // cross-site requests with Sec-Fetch-Site, while Stream Deck, curl and the plugin don't.
     let cross_site = lines.any(|l| {
         let l = l.to_ascii_lowercase();
         l.starts_with("sec-fetch-site:") && !(l.contains("none") || l.contains("same-origin"))
@@ -182,6 +188,7 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     let delay = query.split('&').find_map(|kv| kv.strip_prefix("delay=")).and_then(|v| v.parse::<f64>().ok());
+    let slot_i = query_i(query).unwrap_or(0);
     match (method, path) {
         ("GET", "/state") => respond(&mut sock, "200 OK", &state_json(ctx)).await,
         ("GET", "/events") => events(sock, ctx).await,
@@ -190,22 +197,34 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
         ("GET", "/overlay/config") => respond(&mut sock, "200 OK", &ctx.overlay.get()).await,
         ("POST", "/overlay/config") => match ctx.overlay.set(&String::from_utf8_lossy(&body)) {
             Ok(()) => {
-                ctx.shared.state.send_modify(|v| *v += 1);
+                ctx.hub.bump();
                 respond(&mut sock, "200 OK", "{\"ok\":true}").await
             }
             Err(e) => respond(&mut sock, "400 Bad Request", &format!("{{\"error\":\"{e}\"}}")).await,
         },
         ("GET", "/live-preview") => respond_typed(&mut sock, "200 OK", "text/html", PREVIEW_HTML).await,
-        ("GET", "/live-preview/out.flv") => crate::preview::serve(sock, &ctx.shared, crate::preview::Feed::Output).await,
-        ("GET", "/live-preview/in.flv") => crate::preview::serve(sock, &ctx.shared, crate::preview::Feed::Input).await,
+        ("GET", "/live-preview/out.flv") => {
+            let shared = ctx.hub.slot(slot_i).map(|s| s.shared.clone()).or_else(|| ctx.hub.slot(0).map(|s| s.shared.clone()));
+            match shared {
+                Some(s) => crate::preview::serve(sock, &s, crate::preview::Feed::Output).await,
+                None => respond(&mut sock, "404 Not Found", "{\"error\":\"no_slot\"}").await,
+            }
+        }
+        ("GET", "/live-preview/in.flv") => {
+            let shared = ctx.hub.slot(slot_i).map(|s| s.shared.clone()).or_else(|| ctx.hub.slot(0).map(|s| s.shared.clone()));
+            match shared {
+                Some(s) => crate::preview::serve(sock, &s, crate::preview::Feed::Input).await,
+                None => respond(&mut sock, "404 Not Found", "{\"error\":\"no_slot\"}").await,
+            }
+        }
         ("GET" | "POST", "/dest/start" | "/dest/stop") => {
-            let i = query.split('&').find_map(|kv| kv.strip_prefix("i=")).and_then(|v| v.parse::<usize>().ok());
+            let i = query_i(query);
             match i.and_then(|i| ctx.dests.get(i)) {
                 Some(d) => {
                     let on = path == "/dest/start";
                     d.set_on(on);
                     log!("{}: {}", d.status.lock().unwrap().name, if on { "start" } else { "stop" });
-                    ctx.shared.state.send_modify(|v| *v += 1);
+                    ctx.hub.bump();
                     respond(&mut sock, "200 OK", &state_json(ctx)).await
                 }
                 None => respond(&mut sock, "404 Not Found", "{\"error\":\"unknown_destination\"}").await,
@@ -219,16 +238,12 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
     }
 }
 
-/// Server-sent events: one line of JSON per change, plus a refresh every
-/// second while the buffer is filling so the progress moves.
 async fn events(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
     sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\n\r\n").await?;
-    let mut rx = ctx.shared.state.subscribe();
+    let mut rx = ctx.hub.state.subscribe();
     loop {
         let j = state_json(ctx);
         sock.write_all(format!("data: {j}\n\n").as_bytes()).await?;
-        // Once a second while anything moves (buffer filling, a stream in or out), so
-        // progress and bitrate charts stay live; otherwise only on changes.
         let filling = j.contains("\"armed\":false") && !j.contains("\"arm_delay\":null");
         let busy = filling || j.contains("\"input\":true") || j.contains("\"state\":\"live\"");
         let tick = if busy { Duration::from_secs(1) } else { Duration::from_secs(15) };
@@ -236,7 +251,6 @@ async fn events(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
             r = rx.changed() => if r.is_err() { return Ok(()) },
             _ = tokio::time::sleep(tick) => {}
         }
-        // Coalesce bursts of changes into one update.
         tokio::time::sleep(Duration::from_millis(50)).await;
         rx.borrow_and_update();
     }

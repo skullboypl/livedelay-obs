@@ -40,9 +40,9 @@ fn main() {
     let cfg = config::load(&path).unwrap_or_else(|e| fatal(&e));
     log!("settings: {}", path.display());
 
-    let proxy = Proxy::start(&cfg, |e| fatal(&e), |_shared| {
+    let proxy = Proxy::start(&cfg, |e| fatal(&e), |_hub| {
         #[cfg(windows)]
-        tokio::spawn(tray::watch_state(_shared.clone()));
+        tokio::spawn(tray::watch_state(_hub.clone()));
     });
 
     #[cfg(windows)]

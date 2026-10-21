@@ -1,0 +1,398 @@
+#include "outputs.hpp"
+#include "encode.hpp"
+#include "settings.hpp"
+
+#include <obs-frontend-api.h>
+#include <obs-module.h>
+#include <util/config-file.h>
+#include <util/platform.h>
+
+#include <string>
+#include <vector>
+
+namespace livedelay {
+
+namespace {
+
+struct Rendition {
+	uint32_t width = 0;
+	uint32_t height = 0;
+	int kbps = 0;
+};
+
+struct DestOutput {
+	std::string name;
+	std::string ingest_key;
+	obs_output_t *output = nullptr;
+	obs_encoder_t *video = nullptr;
+	std::vector<obs_encoder_t *> extra_video; // EB ladder (idx 1…)
+	obs_encoder_t *vod_audio = nullptr;
+	obs_service_t *service = nullptr;
+	bool want = false;
+};
+
+std::vector<DestOutput> g_outs;
+obs_encoder_t *g_audio = nullptr;
+bool g_inited = false;
+
+void EnableCustomServerVodTrack()
+{
+	// OBS only offers VOD on Twitch service unless this user.ini flag is set.
+	config_t *cfg = obs_frontend_get_user_config();
+	if (!cfg)
+		return;
+	if (!config_get_bool(cfg, "General", "EnableCustomServerVodTrack")) {
+		config_set_bool(cfg, "General", "EnableCustomServerVodTrack", true);
+		config_save_safe(cfg, "tmp", nullptr);
+		blog(LOG_INFO, "[livedelay] enabled EnableCustomServerVodTrack for Twitch VOD on custom RTMP");
+	}
+}
+
+void ReleaseOne(DestOutput &o)
+{
+	if (o.output) {
+		if (obs_output_active(o.output))
+			obs_output_force_stop(o.output);
+		obs_output_set_audio_encoder(o.output, nullptr, 1);
+		obs_output_release(o.output);
+		o.output = nullptr;
+	}
+	if (o.video) {
+		obs_encoder_release(o.video);
+		o.video = nullptr;
+	}
+	for (obs_encoder_t *e : o.extra_video) {
+		if (e)
+			obs_encoder_release(e);
+	}
+	o.extra_video.clear();
+	if (o.vod_audio) {
+		obs_encoder_release(o.vod_audio);
+		o.vod_audio = nullptr;
+	}
+	if (o.service) {
+		obs_service_release(o.service);
+		o.service = nullptr;
+	}
+}
+
+void ReleaseAll()
+{
+	for (DestOutput &o : g_outs)
+		ReleaseOne(o);
+	g_outs.clear();
+	if (g_audio) {
+		obs_encoder_release(g_audio);
+		g_audio = nullptr;
+	}
+}
+
+obs_data_t *VideoSettings(const EncodeSettings &e, int kbps_override = 0)
+{
+	obs_data_t *s = obs_data_create();
+	obs_data_set_string(s, "rate_control", e.rate_control.toUtf8().constData());
+	obs_data_set_int(s, "bitrate", kbps_override > 0 ? kbps_override : e.video_kbps);
+	obs_data_set_int(s, "keyint_sec", e.keyint_sec);
+	obs_data_set_string(s, "preset", "hq");
+	obs_data_set_string(s, "preset2", "p5");
+	obs_data_set_string(s, "tune", "hq");
+	obs_data_set_string(s, "multipass", "qres");
+	obs_data_set_string(s, "profile", "high");
+	obs_data_set_bool(s, "psycho_aq", true);
+	return s;
+}
+
+obs_data_t *AudioSettings(int kbps)
+{
+	obs_data_t *s = obs_data_create();
+	obs_data_set_int(s, "bitrate", kbps);
+	return s;
+}
+
+size_t LiveAudioMixer()
+{
+	config_t *cfg = obs_frontend_get_profile_config();
+	if (!cfg)
+		return 0;
+	const char *mode = config_get_string(cfg, "Output", "Mode");
+	if (mode && std::string(mode) == "Advanced") {
+		int track = int(config_get_int(cfg, "AdvOut", "TrackIndex"));
+		if (track < 1 || track > 6)
+			track = 1;
+		return size_t(track - 1);
+	}
+	return 0;
+}
+
+bool VodMixer(size_t &out_mixer)
+{
+	config_t *cfg = obs_frontend_get_profile_config();
+	if (!cfg)
+		return false;
+	const char *mode = config_get_string(cfg, "Output", "Mode");
+	if (!(mode && std::string(mode) == "Advanced"))
+		return false;
+	if (!config_get_bool(cfg, "AdvOut", "VodTrackEnabled"))
+		return false;
+	int live = int(config_get_int(cfg, "AdvOut", "TrackIndex"));
+	int vod = int(config_get_int(cfg, "AdvOut", "VodTrackIndex"));
+	if (vod < 1 || vod > 6)
+		vod = 2;
+	if (live == vod)
+		return false;
+	out_mixer = size_t(vod - 1);
+	return true;
+}
+
+bool EnsureAudio(int kbps)
+{
+	if (g_audio)
+		return true;
+	const QString id = ObsStreamAudioEncoderId();
+	obs_data_t *as = AudioSettings(kbps > 0 ? kbps : 160);
+	g_audio = obs_audio_encoder_create(id.toUtf8().constData(), "livedelay_audio", as, LiveAudioMixer(), nullptr);
+	obs_data_release(as);
+	if (!g_audio) {
+		blog(LOG_ERROR, "[livedelay] could not create audio encoder %s", id.toUtf8().constData());
+		return false;
+	}
+	obs_encoder_set_audio(g_audio, obs_get_audio());
+	return true;
+}
+
+bool EnsureVodAudio(DestOutput &o, int kbps)
+{
+	if (o.vod_audio)
+		return true;
+	size_t mixer = 0;
+	if (!VodMixer(mixer)) {
+		blog(LOG_WARNING, "[livedelay] VOD audio requested but OBS AdvOut VodTrack is off or same as live track");
+		return false;
+	}
+	EnableCustomServerVodTrack();
+	const QString id = ObsStreamAudioEncoderId();
+	obs_data_t *as = AudioSettings(kbps > 0 ? kbps : 160);
+	const std::string name = "livedelay_vod_" + o.ingest_key;
+	o.vod_audio = obs_audio_encoder_create(id.toUtf8().constData(), name.c_str(), as, mixer, nullptr);
+	obs_data_release(as);
+	if (!o.vod_audio)
+		return false;
+	obs_encoder_set_audio(o.vod_audio, obs_get_audio());
+	return true;
+}
+
+std::vector<Rendition> PartnerLadder(uint32_t canvas_w, uint32_t canvas_h, int primary_kbps)
+{
+	std::vector<Rendition> r;
+	r.push_back({canvas_w, canvas_h, primary_kbps});
+	if (canvas_w >= 1280 && canvas_h >= 720)
+		r.push_back({1280, 720, std::min(4500, primary_kbps)});
+	if (canvas_w >= 852 && canvas_h >= 480)
+		r.push_back({852, 480, 1600});
+	if (canvas_w >= 640 && canvas_h >= 360)
+		r.push_back({640, 360, 800});
+	return r;
+}
+
+bool BuildOne(DestOutput &o, const Destination &d, size_t index)
+{
+	ReleaseOne(o);
+	o.name = d.name;
+	o.ingest_key = d.ingest_key.empty() ? ("ld" + std::to_string(index)) : d.ingest_key;
+
+	const EncodeSettings enc = ResolveEncode(d);
+	if (!EnsureAudio(enc.audio_kbps))
+		return false;
+
+	obs_video_info ovi{};
+	uint32_t cw = 1920, ch = 1080;
+	if (obs_get_video_info(&ovi)) {
+		cw = ovi.base_width;
+		ch = ovi.base_height;
+	}
+
+	obs_data_t *vs = VideoSettings(enc);
+	const std::string vname = "livedelay_v_" + o.ingest_key;
+	o.video = obs_video_encoder_create(enc.video_encoder_id.toUtf8().constData(), vname.c_str(), vs, nullptr);
+	obs_data_release(vs);
+	if (!o.video) {
+		blog(LOG_ERROR, "[livedelay] video encoder %s failed for %s", enc.video_encoder_id.toUtf8().constData(),
+		     o.name.c_str());
+		return false;
+	}
+	obs_encoder_set_video(o.video, obs_get_video());
+	if (enc.width > 0 && enc.height > 0)
+		obs_encoder_set_scaled_size(o.video, enc.width, enc.height);
+
+	const int port = Settings::Load(ConfigPath()).RtmpPort();
+	const std::string server = "rtmp://127.0.0.1:" + std::to_string(port) + "/live";
+	obs_data_t *svc = obs_data_create();
+	obs_data_set_string(svc, "server", server.c_str());
+	obs_data_set_string(svc, "key", o.ingest_key.c_str());
+	const std::string sname = "livedelay_svc_" + o.ingest_key;
+	o.service = obs_service_create("rtmp_custom", sname.c_str(), svc, nullptr);
+	obs_data_release(svc);
+	if (!o.service) {
+		blog(LOG_ERROR, "[livedelay] service failed for %s", o.name.c_str());
+		ReleaseOne(o);
+		return false;
+	}
+
+	const std::string oname = "livedelay_out_" + o.ingest_key;
+	o.output = obs_output_create("rtmp_output", oname.c_str(), nullptr, nullptr);
+	if (!o.output) {
+		blog(LOG_ERROR, "[livedelay] rtmp_output failed for %s", o.name.c_str());
+		ReleaseOne(o);
+		return false;
+	}
+	obs_output_set_service(o.output, o.service);
+	obs_output_set_video_encoder(o.output, o.video);
+	obs_output_set_audio_encoder(o.output, g_audio, 0);
+
+	if (d.enhanced_broadcasting) {
+		const auto ladder = PartnerLadder(cw, ch, enc.video_kbps);
+		for (size_t i = 1; i < ladder.size(); ++i) {
+			const Rendition &r = ladder[i];
+			obs_data_t *es = VideoSettings(enc, r.kbps);
+			const std::string ename = "livedelay_v" + std::to_string(i) + "_" + o.ingest_key;
+			obs_encoder_t *ve =
+				obs_video_encoder_create(enc.video_encoder_id.toUtf8().constData(), ename.c_str(), es, nullptr);
+			obs_data_release(es);
+			if (!ve)
+				continue;
+			obs_encoder_set_video(ve, obs_get_video());
+			obs_encoder_set_scaled_size(ve, r.width, r.height);
+			obs_output_set_video_encoder2(o.output, ve, i);
+			o.extra_video.push_back(ve);
+			blog(LOG_INFO, "[livedelay] EB ladder #%zu %ux%u @ %d kb/s for %s", i, r.width, r.height, r.kbps,
+			     o.name.c_str());
+		}
+	}
+
+	if (d.vod_audio) {
+		if (EnsureVodAudio(o, enc.audio_kbps))
+			obs_output_set_audio_encoder(o.output, o.vod_audio, 1);
+	}
+
+	blog(LOG_INFO, "[livedelay] ready %s → %s key=%s (%s %d kb/s)%s%s", o.name.c_str(), server.c_str(),
+	     o.ingest_key.c_str(), enc.video_encoder_id.toUtf8().constData(), enc.video_kbps,
+	     d.vod_audio ? " +VOD" : "", d.enhanced_broadcasting ? " +EB" : "");
+	return true;
+}
+
+void Rebuild()
+{
+	for (DestOutput &o : g_outs) {
+		if (o.output && obs_output_active(o.output))
+			obs_output_force_stop(o.output);
+	}
+	ReleaseAll();
+
+	Settings s = Settings::Load(ConfigPath());
+	g_outs.resize(s.dests.size());
+	for (size_t i = 0; i < s.dests.size(); ++i) {
+		if (s.dests[i].ingest_key.empty())
+			s.dests[i].ingest_key = "ld" + std::to_string(i);
+		BuildOne(g_outs[i], s.dests[i], i);
+	}
+}
+
+bool StartIndex(size_t i)
+{
+	if (i >= g_outs.size())
+		return false;
+	DestOutput &o = g_outs[i];
+	if (!o.output) {
+		Settings s = Settings::Load(ConfigPath());
+		if (i >= s.dests.size())
+			return false;
+		if (!BuildOne(o, s.dests[i], i))
+			return false;
+	}
+	if (obs_output_active(o.output))
+		return true;
+	if (!obs_output_start(o.output)) {
+		const char *err = obs_output_get_last_error(o.output);
+		blog(LOG_WARNING, "[livedelay] could not start output for %s: %s", o.name.c_str(), err ? err : "?");
+		return false;
+	}
+	o.want = true;
+	blog(LOG_INFO, "[livedelay] started encode for %s", o.name.c_str());
+	return true;
+}
+
+void StopIndex(size_t i)
+{
+	if (i >= g_outs.size())
+		return;
+	DestOutput &o = g_outs[i];
+	o.want = false;
+	if (o.output && obs_output_active(o.output))
+		obs_output_stop(o.output);
+}
+
+void OnFrontendEvent(enum obs_frontend_event event, void *)
+{
+	if (event == OBS_FRONTEND_EVENT_STREAMING_STARTING)
+		OutputsOnStreamingStarting();
+	else if (event == OBS_FRONTEND_EVENT_STREAMING_STOPPING || event == OBS_FRONTEND_EVENT_STREAMING_STOPPED)
+		OutputsOnStreamingStopping();
+	else if (event == OBS_FRONTEND_EVENT_EXIT)
+		OutputsShutdown();
+}
+
+} // namespace
+
+void OutputsInit()
+{
+	if (g_inited)
+		return;
+	g_inited = true;
+	Rebuild();
+	obs_frontend_add_event_callback(OnFrontendEvent, nullptr);
+}
+
+void OutputsShutdown()
+{
+	if (!g_inited)
+		return;
+	obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
+	ReleaseAll();
+	g_inited = false;
+}
+
+void OutputsOnStreamingStarting()
+{
+	if (g_outs.empty())
+		Rebuild();
+	Settings s = Settings::Load(ConfigPath());
+	for (size_t i = 0; i < s.dests.size() && i < g_outs.size(); ++i) {
+		if (s.dests[i].autostart && s.dests[i].enabled)
+			StartIndex(i);
+	}
+}
+
+void OutputsOnStreamingStopping()
+{
+	for (size_t i = 0; i < g_outs.size(); ++i)
+		StopIndex(i);
+}
+
+bool OutputStartDest(size_t index)
+{
+	if (g_outs.empty())
+		Rebuild();
+	return StartIndex(index);
+}
+
+void OutputStopDest(size_t index)
+{
+	StopIndex(index);
+}
+
+void OutputsReloadConfig()
+{
+	Rebuild();
+}
+
+} // namespace livedelay

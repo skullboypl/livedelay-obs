@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -7,12 +8,26 @@ class QWidget;
 
 namespace livedelay {
 
+enum class EncodeMode { Auto, Recommended, TwitchPartner, Obs, Manual };
+
 // livedelay.ini as the settings window sees it. The proxy reads the same file.
 struct Destination {
 	std::string name, url, key;
 	bool enabled = true;
 	bool autostart = true;
 	std::string service; // name from OBS's service list, empty = custom server
+	std::string ingest_key; // RTMP key into LiveDelay (ld0, …)
+	EncodeMode encode_mode = EncodeMode::Obs;
+	uint32_t video_kbps = 0;
+	uint32_t audio_kbps = 0;
+	uint32_t keyint_sec = 0;
+	std::string rate_control = "CBR";
+	uint32_t width = 0;
+	uint32_t height = 0;
+	/// Second AAC track for Twitch VOD (mixer from OBS AdvOut VodTrackIndex).
+	bool vod_audio = false;
+	/// Multiple video encodes (Partner ladder / Enhanced Broadcasting path).
+	bool enhanced_broadcasting = false;
 };
 
 struct Settings {

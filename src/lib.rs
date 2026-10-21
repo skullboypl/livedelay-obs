@@ -9,6 +9,7 @@ pub mod api;
 pub mod config;
 pub mod engine;
 mod ffi;
+pub mod hub;
 pub mod overlay;
 mod preview;
 pub mod rtmp;
@@ -71,18 +72,23 @@ impl Proxy {
     pub fn start(
         cfg: &config::Config,
         on_fatal: impl FnOnce(String) + Send + 'static,
-        extra: impl FnOnce(&Arc<engine::Shared>) + Send + 'static,
+        extra: impl FnOnce(&Arc<hub::Hub>) + Send + 'static,
     ) -> Proxy {
-        let shared = engine::Shared::new(cfg.max_buffer_mb * 1024 * 1024);
+        let n = cfg.dests.len().max(1);
+        let per_slot = (cfg.max_buffer_mb * 1024 * 1024) / n;
+        let pairs: Vec<(String, String)> = cfg.dests.iter().map(|d| (d.name.clone(), d.ingest_key.clone())).collect();
+        let hub = hub::Hub::new(&pairs, per_slot);
+
         let mut dests = Vec::new();
         let mut targets = Vec::new();
-        // Every platform shows up in the panel; "enabled = no" (older versions) just means it does not autostart.
-        for d in cfg.dests.iter() {
+        for (i, d) in cfg.dests.iter().enumerate() {
             match rtmp::client::parse_url(&d.url, &d.key) {
                 Ok(t) => {
                     let dest = rtmp::client::Dest::new(&d.name, d.autostart && d.enabled);
                     dests.push(dest.clone());
-                    targets.push((t, dest));
+                    if let Some(slot) = hub.slot(i) {
+                        targets.push((t, dest, slot.shared.clone()));
+                    }
                 }
                 Err(e) => log!("{}: {e}", d.name),
             }
@@ -91,7 +97,7 @@ impl Proxy {
             log!("no enabled platforms - the stream will not go anywhere");
         }
         let ctx = Arc::new(api::Ctx {
-            shared: shared.clone(),
+            hub: hub.clone(),
             dests,
             default_delay: Duration::from_secs_f64(cfg.delay_s),
             overlay: overlay::OverlayStore::load(cfg.overlay_file.clone(), &cfg.overlay),
@@ -107,13 +113,16 @@ impl Proxy {
                     Err(e) => return on_fatal(format!("tokio: {e}")),
                 };
                 rt.block_on(async move {
-                    for (target, dest) in targets {
-                        tokio::spawn(rtmp::client::run(target, shared.clone(), dest));
+                    hub.spawn_state_forwarders();
+                    for (target, dest, shared) in targets {
+                        tokio::spawn(rtmp::client::run(target, shared, dest));
                     }
-                    tokio::spawn(engine::run_pump(shared.clone()));
-                    extra(&shared);
+                    for slot in &hub.slots {
+                        tokio::spawn(engine::run_pump(slot.shared.clone()));
+                    }
+                    extra(&hub);
                     let api = tokio::spawn(api::run(api_addr, proxy_ctx));
-                    let ingest = tokio::spawn(rtmp::server::run(listen, shared));
+                    let ingest = tokio::spawn(rtmp::server::run(listen, hub));
                     let err = tokio::select! {
                         _ = stop_rx => return,
                         r = api => format!("API: {r:?}"),
@@ -121,7 +130,6 @@ impl Proxy {
                     };
                     on_fatal(format!("LiveDelay cannot run ({err}). Is the port already in use, e.g. by another copy?"));
                 });
-                // Dropping the runtime here closes every socket and task.
             })
             .expect("spawn proxy thread");
         Proxy { ctx, stop: Some(stop_tx), thread: Some(thread) }

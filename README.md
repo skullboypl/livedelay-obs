@@ -7,7 +7,7 @@ Turn a stream delay on and off while you are live, without reconnecting. LiveDel
 - **One plugin, no extra program.** The delay proxy runs inside OBS (Rust core, about 0.1% CPU and 30 MB RAM for a 15 s delay at 6 Mb/s).
 - **Native dock.** A Qt panel, not a browser dock, so it costs next to nothing.
 - **Hotkeys.** Arm, Activate, Cut and "Cut after it airs" in Settings → Hotkeys. Bind them to the numpad or a Stream Deck.
-- **Several platforms at once.** Twitch, YouTube, Kick, Facebook or any RTMP/RTMPS server, each with its own Start / Stop and an autostart switch.
+- **Several platforms at once.** Twitch, YouTube, Kick, Facebook or any RTMP/RTMPS server, each with its own Start / Stop, autostart, delay buffer and encoder (Auto / Recommended / Match OBS / Manual).
 - **Live preview.** `/live-preview` shows what OBS sends next to what viewers get.
 - **Guided setup.** A "How to connect?" walkthrough, and the dock offers to point OBS at LiveDelay when it isn't yet.
 - **Overlay.** A Browser source that tells viewers what is going on: LIVE, ARMING…, ARMED, DELAY 25s.
@@ -17,7 +17,7 @@ Turn a stream delay on and off while you are live, without reconnecting. LiveDel
 
 ## How it works
 
-OBS streams to LiveDelay on `rtmp://127.0.0.1:1935/live`. LiveDelay keeps the last few seconds in RAM and sends the stream on to your platforms.
+OBS Start Streaming kicks off one encoder per platform into LiveDelay (`rtmp://127.0.0.1:1935/live` with keys `ld0`, `ld1`, …). Each platform has its own RAM delay buffer; Arm / Activate / Cut stay shared. Stock OBS streaming goes to `_idle` and is discarded so the Start button still works.
 
 - **Arm** starts keeping a buffer for the delay you set.
 - **Activate** jumps viewers back to the keyframe at least N seconds old. Timestamps keep counting up, so players see one continuous stream.

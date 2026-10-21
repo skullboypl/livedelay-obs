@@ -44,6 +44,8 @@ private:
 	QFrame *banner_;
 	QFrame *limits_;
 	QLabel *limitsText_;
+	QPushButton *limitsFit_;
+	QPushButton *limitsHide_;
 	QFrame *dests_;
 	QGridLayout *destGrid_;
 	QLabel *status_;
@@ -58,6 +60,7 @@ private:
 	QPushButton *disarm_;
 	QPushButton *start_;
 	bool delay_set_ = false;
+	bool limitsHidden_ = false; // session-only skip of the limits banner
 	std::string last_; // last state JSON, empty while offline
 	std::map<std::string, std::deque<double>> history_;
 	std::chrono::steady_clock::time_point lastSample_{};

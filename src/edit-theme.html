@@ -79,7 +79,9 @@
         <label><input type="checkbox" id="uppercase"> <span data-t="uppercase"></span></label>
         <label><input type="checkbox" id="dot"> <span data-t="dot"></span></label>
         <label><input type="checkbox" id="animate"> <span data-t="animate"></span></label>
+        <label><input type="checkbox" id="armedAsLive"> <span data-t="armedAsLive"></span></label>
       </div>
+      <div class="hint" data-t="armedAsLiveHint"></div>
     </section>
     <section>
       <h2 data-t="states"></h2>
@@ -95,38 +97,46 @@
 </main>
 <script>
   const I18N = {
-    en: { title: 'overlay look', save: 'Save', revert: 'Undo changes', reset: 'Theme defaults', saved: 'Saved – the overlay on stream already uses it.',
+    en: { title: 'overlay look', save: 'Save', revert: 'Undo changes', reset: 'Theme defaults', saved: 'Saved – the Browser source already shows it.',
           failed: 'Could not save.', theme: 'Theme', layout: 'Layout', align: 'Alignment', left: 'Left', center: 'Center', right: 'Right',
           alignHint: 'Right: the box grows to the left, so it fits a right-hand corner.', size: 'Size', font: 'Font', radius: 'Corners',
           pill: 'Pill', rounded: 'Rounded', square: 'Square', opacity: 'Background', uppercase: 'CAPITAL LETTERS', dot: 'Status light',
-          animate: 'Animations', states: 'States', live: 'Live', arming: 'Arming', armed: 'Armed', delayed: 'Delayed',
+          animate: 'Animations', armedAsLive: 'Arming & Armed look like Live',
+          armedAsLiveHint: 'Viewers keep seeing LIVE while you arm — no ARMED / ARMING text.',
+          states: 'States', live: 'Live', arming: 'Arming', armed: 'Armed', delayed: 'Delayed',
           showState: 'show', placeholders: '{s} = delay in seconds, {buf} = seconds buffered.',
           stageHint: 'Preview with sample values (25 s delay, 12 s buffered). Unsaved changes show here only.', url: 'Browser source address:',
-          glass: 'Glass', minimal: 'Minimal', solid: 'Solid', neon: 'Neon', bar: 'Lower third' },
-    pl: { title: 'wygląd overlayu', save: 'Zapisz', revert: 'Cofnij zmiany', reset: 'Domyślne motywu', saved: 'Zapisano – overlay na streamie już tego używa.',
+          glass: 'Glass', frost: 'Frost', clear: 'Clear', soft: 'Soft', minimal: 'Minimal', solid: 'Solid', neon: 'Neon', bar: 'Lower third' },
+    pl: { title: 'wygląd overlayu', save: 'Zapisz', revert: 'Cofnij zmiany', reset: 'Domyślne motywu', saved: 'Zapisano – źródło Przeglądarka już to pokazuje.',
           failed: 'Nie udało się zapisać.', theme: 'Motyw', layout: 'Układ', align: 'Wyrównanie', left: 'Lewo', center: 'Środek', right: 'Prawo',
           alignHint: 'Prawo: pudełko rośnie w lewo, więc pasuje do prawego rogu.', size: 'Rozmiar', font: 'Czcionka', radius: 'Rogi',
           pill: 'Pigułka', rounded: 'Zaokrąglone', square: 'Kwadratowe', opacity: 'Tło', uppercase: 'WIELKIE LITERY', dot: 'Lampka stanu',
-          animate: 'Animacje', states: 'Stany', live: 'Na żywo', arming: 'Uzbrajanie', armed: 'Uzbrojone', delayed: 'Opóźnienie',
+          animate: 'Animacje', armedAsLive: 'Uzbrajanie i Uzbrojone jak Na żywo',
+          armedAsLiveHint: 'Widzowie nadal widzą LIVE podczas uzbrajania — bez tekstu ARMED / ARMING.',
+          states: 'Stany', live: 'Na żywo', arming: 'Uzbrajanie', armed: 'Uzbrojone', delayed: 'Opóźnienie',
           showState: 'pokazuj', placeholders: '{s} = opóźnienie w sekundach, {buf} = sekundy w buforze.',
           stageHint: 'Podgląd z przykładowymi wartościami (25 s opóźnienia, 12 s w buforze). Niezapisane zmiany widać tylko tutaj.', url: 'Adres źródła Przeglądarka:',
-          glass: 'Szkło', minimal: 'Minimalny', solid: 'Pełny kolor', neon: 'Neon', bar: 'Belka TV' },
-    de: { title: 'Overlay-Aussehen', save: 'Speichern', revert: 'Änderungen verwerfen', reset: 'Theme-Standard', saved: 'Gespeichert – das Overlay im Stream nutzt es schon.',
+          glass: 'Szkło', frost: 'Szron', clear: 'Przezroczysty', soft: 'Miękki', minimal: 'Minimalny', solid: 'Pełny kolor', neon: 'Neon', bar: 'Belka TV' },
+    de: { title: 'Overlay-Aussehen', save: 'Speichern', revert: 'Änderungen verwerfen', reset: 'Theme-Standard', saved: 'Gespeichert – die Browser-Quelle zeigt es schon.',
           failed: 'Speichern fehlgeschlagen.', theme: 'Theme', layout: 'Layout', align: 'Ausrichtung', left: 'Links', center: 'Mitte', right: 'Rechts',
           alignHint: 'Rechts: Die Box wächst nach links und passt so in eine rechte Ecke.', size: 'Größe', font: 'Schrift', radius: 'Ecken',
           pill: 'Pille', rounded: 'Abgerundet', square: 'Eckig', opacity: 'Hintergrund', uppercase: 'GROSSBUCHSTABEN', dot: 'Statuslicht',
-          animate: 'Animationen', states: 'Zustände', live: 'Live', arming: 'Vorbereitung', armed: 'Bereit', delayed: 'Verzögert',
+          animate: 'Animationen', armedAsLive: 'Vorbereitung & Bereit wie Live',
+          armedAsLiveHint: 'Zuschauer sehen weiter LIVE beim Vorbereiten – kein ARMED / ARMING-Text.',
+          states: 'Zustände', live: 'Live', arming: 'Vorbereitung', armed: 'Bereit', delayed: 'Verzögert',
           showState: 'anzeigen', placeholders: '{s} = Verzögerung in Sekunden, {buf} = Sekunden im Puffer.',
           stageHint: 'Vorschau mit Beispielwerten (25 s Verzögerung, 12 s gepuffert). Ungespeicherte Änderungen nur hier.', url: 'Adresse der Browser-Quelle:',
-          glass: 'Glas', minimal: 'Minimal', solid: 'Vollfarbe', neon: 'Neon', bar: 'Bauchbinde' },
-    ru: { title: 'вид оверлея', save: 'Сохранить', revert: 'Отменить изменения', reset: 'По умолчанию', saved: 'Сохранено – оверлей в эфире уже использует это.',
+          glass: 'Glas', frost: 'Frost', clear: 'Klar', soft: 'Weich', minimal: 'Minimal', solid: 'Vollfarbe', neon: 'Neon', bar: 'Bauchbinde' },
+    ru: { title: 'вид оверлея', save: 'Сохранить', revert: 'Отменить изменения', reset: 'По умолчанию', saved: 'Сохранено – источник «Браузер» уже показывает это.',
           failed: 'Не удалось сохранить.', theme: 'Тема', layout: 'Макет', align: 'Выравнивание', left: 'Слева', center: 'По центру', right: 'Справа',
           alignHint: 'Справа: блок растёт влево и помещается в правый угол.', size: 'Размер', font: 'Шрифт', radius: 'Углы',
           pill: 'Капсула', rounded: 'Скруглённые', square: 'Прямые', opacity: 'Фон', uppercase: 'ЗАГЛАВНЫЕ БУКВЫ', dot: 'Индикатор',
-          animate: 'Анимации', states: 'Состояния', live: 'Эфир', arming: 'Подготовка', armed: 'Готово', delayed: 'Задержка',
+          animate: 'Анимации', armedAsLive: 'Подготовка и Готово как Эфир',
+          armedAsLiveHint: 'Зрители продолжают видеть LIVE при подготовке — без текста ARMED / ARMING.',
+          states: 'Состояния', live: 'Эфир', arming: 'Подготовка', armed: 'Готово', delayed: 'Задержка',
           showState: 'показывать', placeholders: '{s} = задержка в секундах, {buf} = секунд в буфере.',
           stageHint: 'Предпросмотр с примером (задержка 25 с, в буфере 12 с). Несохранённые изменения видны только здесь.', url: 'Адрес источника «Браузер»:',
-          glass: 'Стекло', minimal: 'Минимал', solid: 'Сплошной', neon: 'Неон', bar: 'Плашка ТВ' },
+          glass: 'Стекло', frost: 'Иней', clear: 'Прозрачный', soft: 'Мягкий', minimal: 'Минимал', solid: 'Сплошной', neon: 'Неон', bar: 'Плашка ТВ' },
   };
   const q = new URLSearchParams(location.search);
   const lang = (q.get('lang') || navigator.language || 'en').slice(0, 2);
@@ -137,6 +147,9 @@
   const KINDS = ['live', 'arming', 'armed', 'delayed'];
   const THEMES = {
     glass: { opacity: .78, radius: 'pill', uppercase: false, dot: true, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffbf3c', delayed: '#ff5a4f' } },
+    frost: { opacity: .55, radius: 'pill', uppercase: false, dot: true, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffbf3c', delayed: '#ff5a4f' } },
+    clear: { opacity: 0, radius: 'pill', uppercase: false, dot: true, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffbf3c', delayed: '#ff5a4f' } },
+    soft: { opacity: .65, radius: 'rounded', uppercase: false, dot: true, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffbf3c', delayed: '#ff5a4f' } },
     minimal: { opacity: 0, radius: 'pill', uppercase: false, dot: true, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffbf3c', delayed: '#ff5a4f' } },
     solid: { opacity: .95, radius: 'rounded', uppercase: true, dot: true, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffd166', delayed: '#ff5a4f' } },
     neon: { opacity: .7, radius: 'rounded', uppercase: true, dot: true, colors: { live: '#39ff88', arming: '#ffd23f', armed: '#ffd23f', delayed: '#ff3b6b' } },
@@ -146,6 +159,9 @@
   let saved = null, cfg = null;
   const preview = document.getElementById('preview');
   const send = () => preview.contentWindow && preview.contentWindow.postMessage({ type: 'ld-config', config: cfg }, location.origin);
+  function notifyBrowserSources() {
+    try { new BroadcastChannel('ld-overlay').postMessage({ type: 'ld-overlay-saved' }); } catch (e) {}
+  }
 
   function buildThemes() {
     const box = document.getElementById('themes');
@@ -160,7 +176,6 @@
       label.textContent = L[name];
       card.append(f, label);
       card.onclick = () => { Object.assign(cfg, JSON.parse(JSON.stringify(THEMES[name])), { theme: name }); sync(); };
-      // Thumbnails show each theme with its own colours, not the current draft.
       f.onload = () => f.contentWindow.postMessage({ type: 'ld-config', config: { ...cfg, ...THEMES[name], theme: name, size: 18, align: 'left' } }, location.origin);
       box.appendChild(card);
     }
@@ -202,9 +217,13 @@
     font.value = cfg.font; font.onchange = () => { cfg.font = font.value; send(); };
     for (const k of ['uppercase', 'dot', 'animate']) {
       const el = document.getElementById(k);
-      el.checked = cfg[k] !== false && !!cfg[k];
+      if (cfg[k] === undefined) cfg[k] = true;
+      el.checked = !!cfg[k];
       el.onchange = () => { cfg[k] = el.checked; send(); };
     }
+    const aal = document.getElementById('armedAsLive');
+    aal.checked = !!cfg.armedAsLive;
+    aal.onchange = () => { cfg.armedAsLive = aal.checked; send(); };
     buildThemes();
     buildStates();
     send();
@@ -220,12 +239,13 @@
     saved = await (await fetch('/overlay/config', { cache: 'no-store' })).json();
     cfg = JSON.parse(JSON.stringify(saved));
     cfg.colors = cfg.colors || {}; cfg.texts = cfg.texts || {}; cfg.show = cfg.show || {};
+    cfg.armedAsLive = !!cfg.armedAsLive;
     sync();
   }
   preview.onload = send;
   document.getElementById('save').onclick = async () => {
     const r = await fetch('/overlay/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
-    if (r.ok) { saved = JSON.parse(JSON.stringify(cfg)); toast(L.saved, true); } else toast(L.failed, false);
+    if (r.ok) { saved = JSON.parse(JSON.stringify(cfg)); notifyBrowserSources(); toast(L.saved, true); } else toast(L.failed, false);
   };
   document.getElementById('revert').onclick = () => { cfg = JSON.parse(JSON.stringify(saved)); sync(); };
   document.getElementById('reset').onclick = () => { Object.assign(cfg, JSON.parse(JSON.stringify(THEMES[cfg.theme] || THEMES.glass))); sync(); };

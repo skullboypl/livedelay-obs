@@ -10,6 +10,7 @@
 #include <string>
 
 #include "dock.hpp"
+#include "outputs.hpp"
 #include "settings.hpp"
 
 extern "C" {
@@ -86,6 +87,7 @@ bool obs_module_load(void)
 	std::string err = livedelay::StartProxy();
 	if (!err.empty())
 		blog(LOG_WARNING, "[livedelay] %s", err.c_str());
+	livedelay::OutputsInit();
 
 	for (Hotkey &h : hotkeys)
 		h.id = obs_hotkey_register_frontend(h.name, obs_module_text(h.description), OnHotkey, &h);
@@ -113,6 +115,7 @@ void obs_module_unload(void)
 		obs_hotkey_unregister(h.id);
 	// OBS owns and deletes the dock widget.
 	dock = nullptr;
+	livedelay::OutputsShutdown();
 	ld_stop();
 }
 

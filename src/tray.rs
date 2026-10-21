@@ -40,8 +40,8 @@ static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// Runs on the proxy's runtime: repaints the tray on every state change, and once a
 /// second so the buffer fill shown in the tooltip moves.
-pub async fn watch_state(shared: Arc<livedelay::engine::Shared>) {
-    let mut rx = shared.state.subscribe();
+pub async fn watch_state(hub: Arc<livedelay::hub::Hub>) {
+    let mut rx = hub.state.subscribe();
     loop {
         if let Ok(Err(_)) = tokio::time::timeout(std::time::Duration::from_secs(1), rx.changed()).await {
             return;
@@ -98,7 +98,7 @@ fn notify_data(hwnd: HWND) -> NOTIFYICONDATAW {
 }
 
 fn summary(app: &App) -> (usize, String) {
-    let st = app.ctx.shared.eng.lock().unwrap().status(Instant::now());
+    let st = app.ctx.hub.status(Instant::now());
     let input = if st.input { "" } else { " · brak sygnału z OBS" };
     match st.mode {
         Mode::Delayed => (2, format!("OPÓŹNIENIE {:.0} s{input}", st.delay_s)),
@@ -141,7 +141,7 @@ fn run_action(action: &str) {
 
 fn show_menu(hwnd: HWND) {
     let Some(app) = APP.get() else { return };
-    let st = app.ctx.shared.eng.lock().unwrap().status(Instant::now());
+    let st = app.ctx.hub.status(Instant::now());
     let (_, text) = summary(app);
     let default = app.ctx.default_delay.as_secs_f64();
     unsafe {

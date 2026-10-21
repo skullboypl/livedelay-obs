@@ -1,8 +1,10 @@
 #include "settings.hpp"
 #include "dock.hpp"
+#include "encode.hpp"
 #include "i18n.hpp"
 #include "services.hpp"
 #include "limits.hpp"
+#include "outputs.hpp"
 #include "client.hpp"
 
 #include <obs-module.h>
@@ -28,7 +30,11 @@
 #include <QListWidget>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QScreen>
 #include <QSpinBox>
+#include <QSplitter>
+#include <QTabWidget>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -86,7 +92,9 @@ Settings Settings::Load(const std::string &path)
 		if (line.front() == '[' && line.back() == ']') {
 			std::string sec = Trim(line.substr(1, line.size() - 2));
 			if (sec.rfind("dest", 0) == 0) {
-				s.dests.push_back({Trim(sec.substr(4)), "", "", true});
+				Destination d;
+				d.name = Trim(sec.substr(4));
+				s.dests.push_back(d);
 				dest = &s.dests.back();
 			}
 			continue;
@@ -106,6 +114,26 @@ Settings Settings::Load(const std::string &path)
 				dest->enabled = Yes(v);
 			else if (k == "autostart")
 				dest->autostart = Yes(v);
+			else if (k == "ingest_key")
+				dest->ingest_key = v;
+			else if (k == "encode_mode")
+				dest->encode_mode = ParseEncodeMode(v);
+			else if (k == "video_kbps")
+				dest->video_kbps = uint32_t(std::atoi(v.c_str()));
+			else if (k == "audio_kbps")
+				dest->audio_kbps = uint32_t(std::atoi(v.c_str()));
+			else if (k == "keyint_sec")
+				dest->keyint_sec = uint32_t(std::atoi(v.c_str()));
+			else if (k == "rate_control")
+				dest->rate_control = v;
+			else if (k == "width")
+				dest->width = uint32_t(std::atoi(v.c_str()));
+			else if (k == "height")
+				dest->height = uint32_t(std::atoi(v.c_str()));
+			else if (k == "vod_audio")
+				dest->vod_audio = Yes(v);
+			else if (k == "enhanced_broadcasting" || k == "enhanced")
+				dest->enhanced_broadcasting = Yes(v);
 			continue;
 		}
 		if (k == "listen")
@@ -131,6 +159,10 @@ Settings Settings::Load(const std::string &path)
 		s.delay = 15;
 	if (s.max_buffer_mb < 16)
 		s.max_buffer_mb = 512;
+	for (size_t i = 0; i < s.dests.size(); ++i) {
+		if (s.dests[i].ingest_key.empty())
+			s.dests[i].ingest_key = "ld" + std::to_string(i);
+	}
 	return s;
 }
 
@@ -153,9 +185,20 @@ std::string Settings::Text() const
 	o << "# LiveDelay settings (edited from OBS: Tools -> LiveDelay)\n\n"
 	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb << "\nlanguage = " << language
 	  << "\n";
-	for (const Destination &d : dests)
+	for (size_t i = 0; i < dests.size(); ++i) {
+		const Destination &d = dests[i];
+		const std::string ingest = d.ingest_key.empty() ? ("ld" + std::to_string(i)) : d.ingest_key;
 		o << "\n[dest " << d.name << "]\nservice = " << d.service << "\nurl = " << d.url << "\nkey = " << d.key
-		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\nautostart = " << (d.autostart ? "yes" : "no") << "\n";
+		  << "\ningest_key = " << ingest << "\nencode_mode = " << EncodeModeKey(d.encode_mode)
+		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\nautostart = " << (d.autostart ? "yes" : "no");
+		if (d.encode_mode == EncodeMode::Manual) {
+			o << "\nvideo_kbps = " << d.video_kbps << "\naudio_kbps = " << d.audio_kbps
+			  << "\nkeyint_sec = " << d.keyint_sec << "\nrate_control = " << d.rate_control
+			  << "\nwidth = " << d.width << "\nheight = " << d.height;
+		}
+		o << "\nvod_audio = " << (d.vod_audio ? "yes" : "no")
+		  << "\nenhanced_broadcasting = " << (d.enhanced_broadcasting ? "yes" : "no") << "\n";
+	}
 	return o.str();
 }
 
@@ -277,12 +320,15 @@ void PointObsAtLiveDelay(int port)
 	obs_data_t *s = obs_data_create();
 	std::string server = "rtmp://127.0.0.1:" + std::to_string(port) + "/live";
 	obs_data_set_string(s, "server", server.c_str());
-	obs_data_set_string(s, "key", "livedelay");
+	// Stock OBS encode is discarded by the proxy; real platforms use ld0… via plugin outputs.
+	obs_data_set_string(s, "key", "_idle");
 	obs_service_t *svc = obs_service_create("rtmp_custom", "default_service", s, nullptr);
 	obs_frontend_set_streaming_service(svc);
 	obs_frontend_save_streaming_service();
 	obs_service_release(svc);
 	obs_data_release(s);
+	// Do not change OBS → Output bitrates here: mode "obs" reads them as the
+	// template for each platform. Stock publish to _idle is discarded by the proxy.
 }
 
 bool RoutedTo(int port)
@@ -305,12 +351,28 @@ QLabel *Hint(const QString &text)
 	return l;
 }
 
+QScrollArea *ScrollWrap(QWidget *inner)
+{
+	auto *scroll = new QScrollArea;
+	scroll->setWidgetResizable(true);
+	scroll->setFrameShape(QFrame::NoFrame);
+	scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+	scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+	scroll->setWidget(inner);
+	return scroll;
+}
+
 class SettingsDialog : public QDialog {
 public:
 	explicit SettingsDialog(QWidget *parent) : QDialog(parent), s_(Settings::Load(ConfigPath()))
 	{
 		setWindowTitle(T("Settings.Title"));
-		setMinimumWidth(660);
+		setMinimumSize(520, 420);
+		resize(720, 560);
+		if (QScreen *scr = QApplication::primaryScreen()) {
+			const QRect ag = scr->availableGeometry();
+			resize(qMin(780, int(ag.width() * 0.9)), qMin(640, int(ag.height() * 0.85)));
+		}
 
 		auto *delay = new QSpinBox;
 		delay->setRange(1, 3600);
@@ -357,6 +419,39 @@ public:
 		enabled_ = new QCheckBox(T("Settings.SendHere"));
 		autostart_ = new QCheckBox(T("Settings.Autostart"));
 		autostart_->setToolTip(T("Settings.AutostartTip"));
+		encodeMode_ = new QComboBox;
+		encodeMode_->addItem(T("Encode.ModeAuto"), int(EncodeMode::Auto));
+		encodeMode_->addItem(T("Encode.ModeRecommended"), int(EncodeMode::Recommended));
+		encodeMode_->addItem(T("Encode.ModeTwitchPartner"), int(EncodeMode::TwitchPartner));
+		encodeMode_->addItem(T("Encode.ModeObs"), int(EncodeMode::Obs));
+		encodeMode_->addItem(T("Encode.ModeManual"), int(EncodeMode::Manual));
+		encodeMode_->setToolTip(T("Encode.ModeTip"));
+		encodeSummary_ = new QLabel;
+		encodeSummary_->setWordWrap(true);
+		encodeSummary_->setStyleSheet("color: palette(placeholder-text);");
+		videoKbps_ = new QSpinBox;
+		videoKbps_->setRange(100, 100000);
+		videoKbps_->setSuffix(" kb/s");
+		audioKbps_ = new QSpinBox;
+		audioKbps_->setRange(32, 512);
+		audioKbps_->setSuffix(" kb/s");
+		keyint_ = new QSpinBox;
+		keyint_->setRange(0, 10);
+		keyint_->setSuffix(" s");
+		rateControl_ = new QComboBox;
+		rateControl_->addItems({"CBR", "VBR", "CQP", "CRF"});
+		width_ = new QSpinBox;
+		width_->setRange(0, 7680);
+		width_->setSpecialValueText(T("Encode.Canvas"));
+		height_ = new QSpinBox;
+		height_->setRange(0, 4320);
+		height_->setSpecialValueText(T("Encode.Canvas"));
+		vodAudio_ = new QCheckBox(T("Encode.VodAudio"));
+		vodAudio_->setToolTip(T("Encode.VodAudioTip"));
+		enhanced_ = new QCheckBox(T("Encode.Enhanced"));
+		enhanced_->setToolTip(T("Encode.EnhancedTip"));
+		auto *allObs = new QPushButton(T("Encode.AllObs"));
+		allObs->setToolTip(T("Encode.AllObsTip"));
 		auto *keyRow = new QHBoxLayout;
 		keyRow->addWidget(key_, 1);
 		keyRow->addWidget(show);
@@ -369,27 +464,47 @@ public:
 		form->addRow(QString(), keyLink_);
 		enabled_->hide(); // superseded by autostart + Start/Stop in the panel
 		form->addRow(QString(), autostart_);
-		fields_ = new QWidget;
-		fields_->setLayout(form);
+		form->addRow(T("Encode.Mode"), encodeMode_);
+		form->addRow(QString(), encodeSummary_);
+		form->addRow(T("Encode.Video"), videoKbps_);
+		form->addRow(T("Encode.Audio"), audioKbps_);
+		form->addRow(T("Encode.Keyint"), keyint_);
+		form->addRow(T("Encode.RateControl"), rateControl_);
+		form->addRow(T("Encode.Width"), width_);
+		form->addRow(T("Encode.Height"), height_);
+		form->addRow(QString(), vodAudio_);
+		form->addRow(QString(), enhanced_);
+		form->addRow(QString(), allObs);
+		auto *fieldsInner = new QWidget;
+		fieldsInner->setLayout(form);
+		fields_ = ScrollWrap(fieldsInner);
 		auto *add = new QPushButton(T("Settings.Add"));
 		auto *remove = new QPushButton(T("Settings.Remove"));
+		list_->setMinimumWidth(120);
+		list_->setMaximumWidth(220);
 		auto *listCol = new QVBoxLayout;
 		listCol->addWidget(list_, 1);
 		auto *listBtns = new QHBoxLayout;
 		listBtns->addWidget(add);
 		listBtns->addWidget(remove);
 		listCol->addLayout(listBtns);
-		auto *destRow = new QHBoxLayout;
-		destRow->addLayout(listCol);
-		destRow->addWidget(fields_, 1);
+		auto *listWrap = new QWidget;
+		listWrap->setLayout(listCol);
+		auto *splitter = new QSplitter(Qt::Horizontal);
+		splitter->addWidget(listWrap);
+		splitter->addWidget(fields_);
+		splitter->setStretchFactor(0, 0);
+		splitter->setStretchFactor(1, 1);
+		splitter->setSizes({160, 480});
 		auto *importBtn = new QPushButton(T("Settings.SwitchObs"));
 		auto *livePreview = new QPushButton(T("Settings.LivePreview"));
 		livePreview->setToolTip(T("Settings.LivePreviewTip"));
 		auto *helpBtn = new QPushButton(T("Dock.Help"));
-		auto *destBox = new QGroupBox(T("Settings.Platforms"));
-		auto *destLayout = new QVBoxLayout(destBox);
+		auto *destPage = new QWidget;
+		auto *destLayout = new QVBoxLayout(destPage);
+		destLayout->setContentsMargins(8, 8, 8, 8);
 		destLayout->addWidget(Hint(T("Settings.PlatformsAbout")));
-		destLayout->addLayout(destRow);
+		destLayout->addWidget(splitter, 1);
 		auto *destBtns = new QHBoxLayout;
 		destBtns->addWidget(importBtn, 1);
 		destBtns->addWidget(livePreview);
@@ -437,41 +552,56 @@ public:
 			connect(r.text, &QLineEdit::textChanged, this, update);
 			UpdateOverlayPreview(r);
 		}
+		armedAsLive_ = new QCheckBox(T("Settings.ArmedAsLive"));
+		armedAsLive_->setToolTip(T("Settings.ArmedAsLiveTip"));
+		armedAsLive_->setChecked(overlay_.value("armedAsLive").toBool(false));
+		ovForm->addRow(QString(), armedAsLive_);
 		auto *editorRow = new QHBoxLayout;
 		editorRow->addWidget(Hint(T("Settings.ThemeEditorAbout")), 1);
 		editorRow->addWidget(editor);
 		ovForm->addRow(QString(), editorRow);
-		auto *ovBox = new QGroupBox(T("Settings.Overlay"));
-		auto *ovLayout = new QVBoxLayout(ovBox);
+		auto *ovPage = new QWidget;
+		auto *ovLayout = new QVBoxLayout(ovPage);
+		ovLayout->setContentsMargins(8, 8, 8, 8);
 		ovLayout->addWidget(Hint(T("Settings.OverlayAbout")));
 		ovLayout->addLayout(ovForm);
 		ovLayout->addWidget(Hint(T("Settings.OverlayTips")));
+		ovLayout->addStretch();
 
-		// Support and the author's other app: a quiet footer, not part of any output.
+		auto *generalPage = new QWidget;
+		auto *generalOuter = new QVBoxLayout(generalPage);
+		generalOuter->setContentsMargins(8, 8, 8, 8);
+		auto *generalTop = new QHBoxLayout;
+		generalTop->addLayout(general, 1);
+		generalTop->addWidget(helpBtn, 0, Qt::AlignTop);
+		generalOuter->addLayout(generalTop);
+		generalOuter->addStretch();
+
 		auto *support = new QPushButton(T("Settings.SupportButton"));
 		auto *wizard = new QPushButton(T("Settings.SmoothWizardButton"));
-		auto *footer = new QFrame;
-		footer->setObjectName("livedelayFooter");
-		footer->setStyleSheet("#livedelayFooter { border: 1px solid palette(mid); border-radius: 6px; }");
-		auto *footerLayout = new QGridLayout(footer);
-		footerLayout->addWidget(Hint(T("Settings.SupportText")), 0, 0);
-		footerLayout->addWidget(support, 0, 1);
-		footerLayout->addWidget(Hint(T("Settings.SmoothWizardText")), 1, 0);
-		footerLayout->addWidget(wizard, 1, 1);
-		footerLayout->setColumnStretch(0, 1);
+		auto *aboutPage = new QWidget;
+		auto *aboutLayout = new QVBoxLayout(aboutPage);
+		aboutLayout->setContentsMargins(8, 8, 8, 8);
+		aboutLayout->addWidget(Hint(T("Settings.SupportText")));
+		aboutLayout->addWidget(support, 0, Qt::AlignLeft);
+		aboutLayout->addSpacing(12);
+		aboutLayout->addWidget(Hint(T("Settings.SmoothWizardText")));
+		aboutLayout->addWidget(wizard, 0, Qt::AlignLeft);
+		aboutLayout->addStretch();
+
+		auto *tabs = new QTabWidget;
+		tabs->addTab(ScrollWrap(generalPage), T("Settings.TabGeneral"));
+		tabs->addTab(destPage, T("Settings.TabPlatforms"));
+		tabs->addTab(ScrollWrap(ovPage), T("Settings.TabOverlay"));
+		tabs->addTab(ScrollWrap(aboutPage), T("Settings.TabAbout"));
 
 		auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
 		buttons->button(QDialogButtonBox::Save)->setText(T("Settings.Save"));
 		buttons->button(QDialogButtonBox::Cancel)->setText(T("Settings.Cancel"));
 
-		auto *top = new QHBoxLayout;
-		top->addLayout(general, 1);
-		top->addWidget(helpBtn, 0, Qt::AlignTop);
 		auto *layout = new QVBoxLayout(this);
-		layout->addLayout(top);
-		layout->addWidget(destBox);
-		layout->addWidget(ovBox);
-		layout->addWidget(footer);
+		layout->setContentsMargins(10, 10, 10, 10);
+		layout->addWidget(tabs, 1);
 		layout->addWidget(buttons);
 
 		for (const Destination &d : s_.dests)
@@ -488,11 +618,20 @@ public:
 				if (current_ >= 0)
 					list_->item(current_)->setText(name_->text());
 			}
+			UpdateEncodeFields();
 		});
-		connect(server_, &QComboBox::activated, this,
-			[this](int i) { url_->setText(server_->itemData(i).toString()); });
+		connect(server_, &QComboBox::activated, this, [this](int i) {
+			url_->setText(server_->itemData(i).toString());
+			UpdateEncodeFields();
+		});
+		connect(url_, &QLineEdit::textChanged, this, [this] { UpdateEncodeFields(); });
+		connect(vodAudio_, &QCheckBox::toggled, this, [this] { UpdateEncodeFields(); });
+		connect(enhanced_, &QCheckBox::toggled, this, [this] { UpdateEncodeFields(); });
 		connect(add, &QPushButton::clicked, this, [this] {
-			s_.dests.push_back({S(T("Settings.NewPlatform")), "", "", true});
+			Destination d;
+			d.name = S(T("Settings.NewPlatform"));
+			d.ingest_key = "ld" + std::to_string(s_.dests.size());
+			s_.dests.push_back(d);
 			list_->addItem(T("Settings.NewPlatform"));
 			list_->setCurrentRow(list_->count() - 1);
 			name_->setFocus();
@@ -509,6 +648,13 @@ public:
 		connect(name_, &QLineEdit::textEdited, this, [this](const QString &t) {
 			if (current_ >= 0)
 				list_->item(current_)->setText(t);
+		});
+		connect(encodeMode_, &QComboBox::currentIndexChanged, this, [this] { UpdateEncodeFields(); });
+		connect(allObs, &QPushButton::clicked, this, [this] {
+			Store();
+			for (Destination &d : s_.dests)
+				d.encode_mode = EncodeMode::Obs;
+			Select(current_);
 		});
 		connect(importBtn, &QPushButton::clicked, this, [this] { Import(); });
 		connect(livePreview, &QPushButton::clicked, this,
@@ -575,12 +721,15 @@ private:
 		QJsonObject next = overlay_;
 		next["texts"] = texts;
 		next["show"] = show;
+		next["armedAsLive"] = armedAsLive_ && armedAsLive_->isChecked();
 		if (next == overlay_)
 			return;
 		int status = 0;
 		Request("POST", "/overlay/config", QJsonDocument(next).toJson(QJsonDocument::Compact).toStdString(), &status);
 		if (status != 200)
 			QMessageBox::warning(this, "LiveDelay", T("Settings.SaveFailed"));
+		else
+			overlay_ = next;
 	}
 
 	// Lists the servers (regions) of `service`, selecting the one matching `url`.
@@ -621,6 +770,52 @@ private:
 		d.service = service_->currentIndex() > 0 ? S(service_->currentText()) : "";
 		d.enabled = true;
 		d.autostart = autostart_->isChecked();
+		d.encode_mode = EncodeMode(encodeMode_->currentData().toInt());
+		d.video_kbps = uint32_t(videoKbps_->value());
+		d.audio_kbps = uint32_t(audioKbps_->value());
+		d.keyint_sec = uint32_t(keyint_->value());
+		d.rate_control = S(rateControl_->currentText());
+		d.width = uint32_t(width_->value());
+		d.height = uint32_t(height_->value());
+		d.vod_audio = vodAudio_->isChecked();
+		d.enhanced_broadcasting = enhanced_->isChecked();
+		if (d.ingest_key.empty() && current_ >= 0)
+			d.ingest_key = "ld" + std::to_string(current_);
+	}
+
+	void UpdateEncodeFields()
+	{
+		const bool manual = encodeMode_->currentData().toInt() == int(EncodeMode::Manual);
+		for (QWidget *w : {static_cast<QWidget *>(videoKbps_), static_cast<QWidget *>(audioKbps_),
+				   static_cast<QWidget *>(keyint_), static_cast<QWidget *>(rateControl_),
+				   static_cast<QWidget *>(width_), static_cast<QWidget *>(height_)})
+			w->setEnabled(manual);
+		const bool twitch = service_->currentText().contains("Twitch", Qt::CaseInsensitive) ||
+				    url_->text().contains("twitch", Qt::CaseInsensitive) ||
+				    url_->text().contains("live-video.net", Qt::CaseInsensitive);
+		vodAudio_->setEnabled(twitch);
+		enhanced_->setEnabled(twitch);
+		if (!twitch) {
+			vodAudio_->setChecked(false);
+			enhanced_->setChecked(false);
+		}
+		if (current_ < 0 || current_ >= int(s_.dests.size())) {
+			encodeSummary_->clear();
+			return;
+		}
+		Destination tmp = s_.dests[current_];
+		tmp.encode_mode = EncodeMode(encodeMode_->currentData().toInt());
+		tmp.video_kbps = uint32_t(videoKbps_->value());
+		tmp.audio_kbps = uint32_t(audioKbps_->value());
+		tmp.keyint_sec = uint32_t(keyint_->value());
+		tmp.rate_control = S(rateControl_->currentText());
+		tmp.width = uint32_t(width_->value());
+		tmp.height = uint32_t(height_->value());
+		tmp.vod_audio = vodAudio_->isChecked();
+		tmp.enhanced_broadcasting = enhanced_->isChecked();
+		tmp.service = service_->currentIndex() > 0 ? S(service_->currentText()) : tmp.service;
+		tmp.url = S(url_->text());
+		encodeSummary_->setText(ResolveEncode(tmp).summary);
 	}
 
 	void Select(int row)
@@ -642,6 +837,20 @@ private:
 		key_->setText(Q(d.key));
 		enabled_->setChecked(d.enabled);
 		autostart_->setChecked(d.autostart && d.enabled);
+		const int modeIdx = encodeMode_->findData(int(d.encode_mode));
+		encodeMode_->blockSignals(true);
+		encodeMode_->setCurrentIndex(modeIdx < 0 ? encodeMode_->findData(int(EncodeMode::Obs)) : modeIdx);
+		encodeMode_->blockSignals(false);
+		videoKbps_->setValue(d.video_kbps > 0 ? int(d.video_kbps) : 6000);
+		audioKbps_->setValue(d.audio_kbps > 0 ? int(d.audio_kbps) : 160);
+		keyint_->setValue(int(d.keyint_sec));
+		const int rc = rateControl_->findText(Q(d.rate_control.empty() ? "CBR" : d.rate_control));
+		rateControl_->setCurrentIndex(rc < 0 ? 0 : rc);
+		width_->setValue(int(d.width));
+		height_->setValue(int(d.height));
+		vodAudio_->setChecked(d.vod_audio);
+		enhanced_->setChecked(d.enhanced_broadcasting);
+		UpdateEncodeFields();
 	}
 
 	void Import()
@@ -656,7 +865,10 @@ private:
 		} else if (!already) {
 			// OBS had no server/key yet: route it anyway and let the user add the platform here.
 			PointObsAtLiveDelay(s_.RtmpPort());
-			s_.dests.push_back({S(T("Settings.NewPlatform")), "", "", true});
+			Destination neu;
+			neu.name = S(T("Settings.NewPlatform"));
+			neu.ingest_key = "ld" + std::to_string(s_.dests.size());
+			s_.dests.push_back(neu);
 			list_->addItem(T("Settings.NewPlatform"));
 			list_->setCurrentRow(list_->count() - 1);
 			QMessageBox::information(this, "LiveDelay", T("Settings.RoutedNoTarget"));
@@ -686,6 +898,7 @@ private:
 			if (!err.empty())
 				QMessageBox::warning(this, "LiveDelay", Q(err));
 		}
+		OutputsReloadConfig();
 		if (languageChanged)
 			ApplyLanguage(s_.language);
 		accept();
@@ -695,6 +908,7 @@ private:
 	Settings original_;
 	QJsonObject overlay_;
 	OverlayRow rows_[4];
+	QCheckBox *armedAsLive_ = nullptr;
 	QComboBox *language_;
 	int current_ = -1;
 	QListWidget *list_;
@@ -705,6 +919,12 @@ private:
 	QLabel *keyLink_;
 	QCheckBox *enabled_;
 	QCheckBox *autostart_;
+	QComboBox *encodeMode_;
+	QLabel *encodeSummary_;
+	QSpinBox *videoKbps_, *audioKbps_, *keyint_, *width_, *height_;
+	QComboBox *rateControl_;
+	QCheckBox *vodAudio_;
+	QCheckBox *enhanced_;
 };
 
 } // namespace
@@ -745,12 +965,11 @@ void RouteObsThroughLiveDelay(QWidget *parent)
 		StartProxy();
 	}
 	PointObsAtLiveDelay(s.RtmpPort());
-	// A Custom server gets no platform limits from OBS, so apply them here.
-	const Limits limits = PlatformLimits();
-	const bool fitted = !LimitProblems(limits, ReadObsOutput()).isEmpty() && FitObsOutput(limits);
+	OutputsReloadConfig();
+	const bool fitted = !EncodeProblems().isEmpty() && FitEncodeForObsMode();
 	QString msg = already ? T("Settings.AlreadyRouted") : T("Settings.RoutedSaved");
 	if (fitted)
-		msg += "\n\n" + T("Limits.Fitted").arg(ReadObsOutput().video_kbps).arg(limits.keyint_sec);
+		msg += "\n\n" + T("Limits.Fitted").arg(ReadObsOutput().video_kbps).arg(2);
 	QMessageBox::information(parent, "LiveDelay", msg);
 }
 

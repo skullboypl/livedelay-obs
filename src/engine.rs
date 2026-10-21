@@ -110,7 +110,8 @@ pub struct Engine {
     /// Latest config tags sent, so a destination that (re)connects can start cleanly.
     sent_meta: Option<OutTag>,
     sent_video_cfg: Option<OutTag>,
-    sent_audio_cfg: Option<OutTag>,
+    /// Live + VOD (and EB) audio configs — re-emitted together on Activate/Cut.
+    sent_audio_cfgs: Vec<OutTag>,
 
     /// Bytes received since the instant, for the input bitrate.
     in_window: (Instant, u64),
@@ -160,7 +161,7 @@ impl Shared {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Status {
     pub mode: Mode,
     pub input: bool,
@@ -197,7 +198,7 @@ impl Engine {
             cut_after_seq: None,
             sent_meta: None,
             sent_video_cfg: None,
-            sent_audio_cfg: None,
+            sent_audio_cfgs: Vec::new(),
             evicted_cfg: [None, None, None],
             in_window: (Instant::now(), 0),
             in_kbps: 0.0,
@@ -310,7 +311,15 @@ impl Engine {
         if t.kind == MSG_VIDEO && t.config {
             self.sent_video_cfg = Some(t.clone());
         } else if t.kind == MSG_AUDIO && t.config {
-            self.sent_audio_cfg = Some(t.clone());
+            // Keep distinct audio configs (track 0 live + track 1 VOD, etc.).
+            if let Some(i) = self.sent_audio_cfgs.iter().position(|p| p.data == t.data) {
+                self.sent_audio_cfgs[i] = t.clone();
+            } else if self.sent_audio_cfgs.len() < 6 {
+                self.sent_audio_cfgs.push(t.clone());
+            } else {
+                self.sent_audio_cfgs.remove(0);
+                self.sent_audio_cfgs.push(t.clone());
+            }
         } else if t.kind == MSG_DATA {
             self.sent_meta = Some(t.clone());
         }
@@ -344,8 +353,22 @@ impl Engine {
         }
         // Metadata is not repeated: players treat a second onMetaData as a new data stream.
         cfg[0] = None;
+        let audios = self.sent_audio_cfgs.clone();
+        let fallback_audio = cfg[2].clone();
         for t in cfg.into_iter().flatten() {
+            if t.kind == MSG_AUDIO {
+                continue;
+            }
             self.emit(OutTag { kind: t.kind, ts: next_out, key: false, config: true, data: t.data });
+        }
+        if audios.is_empty() {
+            if let Some(t) = fallback_audio {
+                self.emit(OutTag { kind: t.kind, ts: next_out, key: false, config: true, data: t.data });
+            }
+        } else {
+            for a in audios {
+                self.emit(OutTag { kind: a.kind, ts: next_out, key: false, config: true, data: a.data });
+            }
         }
     }
 
@@ -454,7 +477,15 @@ impl Engine {
 
     /// Config tags a freshly connected destination needs before the first keyframe.
     pub fn current_config(&self) -> Vec<OutTag> {
-        [&self.sent_meta, &self.sent_video_cfg, &self.sent_audio_cfg].into_iter().flatten().cloned().collect()
+        let mut v = Vec::new();
+        if let Some(m) = &self.sent_meta {
+            v.push(m.clone());
+        }
+        if let Some(vid) = &self.sent_video_cfg {
+            v.push(vid.clone());
+        }
+        v.extend(self.sent_audio_cfgs.iter().cloned());
+        v
     }
 
     pub fn status(&self, now: Instant) -> Status {

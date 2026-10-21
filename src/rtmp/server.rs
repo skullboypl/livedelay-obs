@@ -1,10 +1,10 @@
-//! Ingest: accepts the RTMP publish from OBS and feeds the delay engine.
+//! Ingest: accepts RTMP publishes from OBS (one key per platform, plus `_idle`).
 
 use super::amf0::{obj, s, Amf};
 use super::chunk::*;
 use super::*;
 use crate::engine::Shared;
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::hub::Hub;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -13,17 +13,15 @@ use tokio::net::{TcpListener, TcpStream};
 const WINDOW: u32 = 2_500_000;
 const STREAM_ID: u32 = 1;
 
-pub async fn run(addr: String, shared: Arc<Shared>) -> io::Result<()> {
+pub async fn run(addr: String, hub: Arc<Hub>) -> io::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
-    log!("RTMP: waiting for OBS on rtmp://{addr}/live");
-    let busy = Arc::new(AtomicBool::new(false));
+    log!("RTMP: waiting for OBS on rtmp://{addr}/live (keys ld0… / _idle)");
     loop {
         let (sock, peer) = listener.accept().await?;
         let _ = sock.set_nodelay(true);
-        let shared = shared.clone();
-        let busy = busy.clone();
+        let hub = hub.clone();
         tokio::spawn(async move {
-            match handle(sock, &shared, &busy).await {
+            match handle(sock, &hub).await {
                 Ok(()) => log!("RTMP: {peer} disconnected"),
                 Err(e) => log!("RTMP: {peer} disconnected: {e}"),
             }
@@ -46,21 +44,31 @@ fn status(code: &str, desc: &str) -> Amf {
     obj(&[("level", s("status")), ("code", s(code)), ("description", s(desc))])
 }
 
-/// Releases the single publisher slot even if the connection dies mid-stream.
-struct PublishGuard<'a> {
-    busy: &'a AtomicBool,
-    shared: &'a Shared,
+/// Releases the publisher slot even if the connection dies mid-stream.
+struct PublishGuard {
+    hub: Arc<Hub>,
+    key: String,
+    shared: Option<Arc<Shared>>,
 }
 
-impl Drop for PublishGuard<'_> {
+impl Drop for PublishGuard {
     fn drop(&mut self) {
-        self.shared.with(|e| e.end_session());
-        self.busy.store(false, Ordering::SeqCst);
-        log!("RTMP: OBS stopped streaming");
+        if let Some(shared) = &self.shared {
+            shared.with(|e| e.end_session());
+            log!("RTMP: OBS stopped streaming ({})", self.key);
+        } else {
+            log!("RTMP: OBS idle publish ended");
+        }
+        self.hub.release(&self.key);
     }
 }
 
-async fn handle(mut sock: TcpStream, shared: &Shared, busy: &AtomicBool) -> io::Result<()> {
+fn publish_key(v: &[Amf]) -> String {
+    // publish(null, streamName, type)
+    v.get(3).and_then(Amf::as_str).unwrap_or("").to_string()
+}
+
+async fn handle(mut sock: TcpStream, hub: &Arc<Hub>) -> io::Result<()> {
     handshake_server(&mut sock).await?;
     let (rd, mut wr) = sock.into_split();
     let mut rd = BufReader::with_capacity(64 * 1024, rd);
@@ -73,21 +81,29 @@ async fn handle(mut sock: TcpStream, shared: &Shared, busy: &AtomicBool) -> io::
     loop {
         let m = reader.read(&mut rd).await?;
         match m.typ {
-            MSG_AUDIO | MSG_VIDEO if guard.is_some() => {
-                shared.with(|e| e.push(m.typ, m.ts, m.payload, Instant::now()));
+            MSG_AUDIO | MSG_VIDEO => {
+                if let Some(g) = guard.as_ref() {
+                    if let Some(shared) = &g.shared {
+                        shared.with(|e| e.push(m.typ, m.ts, m.payload, Instant::now()));
+                    }
+                    // idle: drop
+                }
             }
-            MSG_DATA_AMF0 if guard.is_some() => {
-                // Forward "@setDataFrame onMetaData {...}" as the client sent it.
-                let v = amf0::decode_all(&m.payload);
-                if v.iter().any(|x| x.as_str() == Some("onMetaData")) {
-                    let payload = if v.first().and_then(Amf::as_str) == Some("@setDataFrame") {
-                        m.payload
-                    } else {
-                        let mut p = amf0::encode_all(&[s("@setDataFrame")]);
-                        p.extend_from_slice(&m.payload);
-                        p
-                    };
-                    shared.with(|e| e.push(MSG_DATA_AMF0, m.ts, payload, Instant::now()));
+            MSG_DATA_AMF0 => {
+                if let Some(g) = guard.as_ref() {
+                    if let Some(shared) = &g.shared {
+                        let v = amf0::decode_all(&m.payload);
+                        if v.iter().any(|x| x.as_str() == Some("onMetaData")) {
+                            let payload = if v.first().and_then(Amf::as_str) == Some("@setDataFrame") {
+                                m.payload
+                            } else {
+                                let mut p = amf0::encode_all(&[s("@setDataFrame")]);
+                                p.extend_from_slice(&m.payload);
+                                p
+                            };
+                            shared.with(|e| e.push(MSG_DATA_AMF0, m.ts, payload, Instant::now()));
+                        }
+                    }
                 }
             }
             MSG_WINDOW_ACK if m.payload.len() >= 4 => {
@@ -117,16 +133,35 @@ async fn handle(mut sock: TcpStream, shared: &Shared, busy: &AtomicBool) -> io::
                         ses.send(CS_COMMAND, command(0, &[s("_result"), Amf::Number(txn), Amf::Null, Amf::Undefined]));
                     }
                     "publish" => {
-                        if guard.is_some() || busy.swap(true, Ordering::SeqCst) {
+                        if guard.is_some() {
                             ses.send(CS_COMMAND, command(m.stream_id, &[s("onStatus"), Amf::Number(0.0), Amf::Null, status("NetStream.Publish.BadName", "Already publishing")]));
                             wr.write_all(&ses.out).await?;
-                            return Err(io::Error::other("second publisher refused"));
+                            return Err(io::Error::other("second publish on same connection"));
                         }
-                        shared.with(|e| e.begin_session());
-                        guard = Some(PublishGuard { busy, shared });
-                        log!("RTMP: OBS is streaming");
-                        ses.send(CS_CONTROL, user_control(0, &STREAM_ID.to_be_bytes()));
-                        ses.send(CS_COMMAND, command(m.stream_id, &[s("onStatus"), Amf::Number(0.0), Amf::Null, status("NetStream.Publish.Start", "Publishing")]));
+                        let key = publish_key(&v);
+                        match hub.try_claim(&key) {
+                            Ok(shared) => {
+                                if let Some(ref s) = shared {
+                                    s.with(|e| e.begin_session());
+                                    log!("RTMP: OBS is streaming as {key}");
+                                } else {
+                                    log!("RTMP: OBS idle publish ({key}) — discarded");
+                                }
+                                guard = Some(PublishGuard { hub: hub.clone(), key, shared });
+                                ses.send(CS_CONTROL, user_control(0, &STREAM_ID.to_be_bytes()));
+                                ses.send(CS_COMMAND, command(m.stream_id, &[s("onStatus"), Amf::Number(0.0), Amf::Null, status("NetStream.Publish.Start", "Publishing")]));
+                            }
+                            Err("busy") => {
+                                ses.send(CS_COMMAND, command(m.stream_id, &[s("onStatus"), Amf::Number(0.0), Amf::Null, status("NetStream.Publish.BadName", "Already publishing")]));
+                                wr.write_all(&ses.out).await?;
+                                return Err(io::Error::other("publisher busy"));
+                            }
+                            Err(_) => {
+                                ses.send(CS_COMMAND, command(m.stream_id, &[s("onStatus"), Amf::Number(0.0), Amf::Null, status("NetStream.Publish.BadName", "Unknown stream key")]));
+                                wr.write_all(&ses.out).await?;
+                                return Err(io::Error::other(format!("unknown stream key")));
+                            }
+                        }
                     }
                     "FCUnpublish" | "deleteStream" | "closeStream" => {
                         guard = None;

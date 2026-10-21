@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Per-platform encode (option A):** each destination gets its own OBS video encoder and its own delay buffer; stream keys `ld0`, `ld1`, … into the proxy. Stock OBS publish uses `_idle` (discarded).
+- Encode modes per platform: Auto, Recommended, Match OBS (performance, default), Manual.
+- Dock banner + **Fix/Dopasuj** for Match OBS when Output exceeds platform limits; info tip when 3+ encoders.
+
 ## 0.1.0 – 2026-10-21
 
 First release.

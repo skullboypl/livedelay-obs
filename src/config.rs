@@ -9,7 +9,7 @@ listen = 127.0.0.1:1935
 api = 127.0.0.1:7799
 # delay in seconds used by Arm
 delay = 15
-# memory limit for the buffer (MB). 15 s at 8 Mb/s is about 15 MB.
+# memory limit for the buffer (MB). Split across platforms when multi-encoding.
 max_buffer_mb = 512
 
 # Overlay texts (Browser source: http://127.0.0.1:7799/overlay).
@@ -27,12 +27,48 @@ hotkey_cut_after =
 
 # One block per platform. enabled = no turns it off without deleting it,
 # autostart = no waits for Start in LiveDelay instead of following OBS.
+# encode_mode: auto | recommended | obs | manual  (obs = match OBS Output)
 [dest Twitch]
 url = rtmp://live.twitch.tv/app
 key = PASTE_YOUR_KEY
+ingest_key = ld0
+encode_mode = obs
 enabled = no
 autostart = yes
 ";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EncodeMode {
+    Auto,
+    Recommended,
+    TwitchPartner,
+    /// Mirror OBS Settings → Output → Streaming (performance / default).
+    Obs,
+    Manual,
+}
+
+impl EncodeMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "recommended" | "zalecane" => Some(Self::Recommended),
+            "twitch_partner" | "partner" | "zalecane_partner" => Some(Self::TwitchPartner),
+            "obs" | "output" | "performance" => Some(Self::Obs),
+            "manual" | "recznie" | "ręcznie" => Some(Self::Manual),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Recommended => "recommended",
+            Self::TwitchPartner => "twitch_partner",
+            Self::Obs => "obs",
+            Self::Manual => "manual",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct Dest {
@@ -42,6 +78,39 @@ pub struct Dest {
     pub enabled: bool,
     /// Start sending as soon as OBS streams; otherwise wait for Start in LiveDelay.
     pub autostart: bool,
+    /// RTMP publish key into this proxy (`ld0`, …). Empty → assigned as `ld{index}` at start.
+    pub ingest_key: String,
+    pub encode_mode: EncodeMode,
+    pub video_kbps: u32,
+    pub audio_kbps: u32,
+    pub keyint_sec: u32,
+    pub rate_control: String,
+    pub width: u32,
+    pub height: u32,
+    pub vod_audio: bool,
+    pub enhanced_broadcasting: bool,
+}
+
+impl Default for Dest {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            url: String::new(),
+            key: String::new(),
+            enabled: true,
+            autostart: true,
+            ingest_key: String::new(),
+            encode_mode: EncodeMode::Obs,
+            video_kbps: 0,
+            audio_kbps: 0,
+            keyint_sec: 0,
+            rate_control: "CBR".into(),
+            width: 0,
+            height: 0,
+            vod_audio: false,
+            enhanced_broadcasting: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -79,7 +148,16 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { listen: "127.0.0.1:1935".into(), api: "127.0.0.1:7799".into(), delay_s: 15.0, max_buffer_mb: 512, dests: vec![], hotkeys: vec![], overlay: Overlay::default(), overlay_file: Default::default() }
+        Self {
+            listen: "127.0.0.1:1935".into(),
+            api: "127.0.0.1:7799".into(),
+            delay_s: 15.0,
+            max_buffer_mb: 512,
+            dests: vec![],
+            hotkeys: vec![],
+            overlay: Overlay::default(),
+            overlay_file: Default::default(),
+        }
     }
 }
 
@@ -97,7 +175,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         let err = |m: &str| format!("livedelay.ini, line {}: {m}", n + 1);
         if let Some(sec) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             let name = sec.trim().strip_prefix("dest").map(str::trim).ok_or_else(|| err("a section must look like [dest Name]"))?;
-            c.dests.push(Dest { name: name.to_string(), url: String::new(), key: String::new(), enabled: true, autostart: true });
+            c.dests.push(Dest { name: name.to_string(), ..Dest::default() });
             continue;
         }
         let (k, v) = line.split_once('=').ok_or_else(|| err("brak znaku ="))?;
@@ -108,6 +186,20 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 "key" => d.key = v.into(),
                 "enabled" => d.enabled = yes(v),
                 "autostart" => d.autostart = yes(v),
+                "ingest_key" => d.ingest_key = v.into(),
+                "encode_mode" => {
+                    d.encode_mode = EncodeMode::parse(v).ok_or_else(|| {
+                        err("encode_mode must be auto, recommended, twitch_partner, obs or manual")
+                    })?;
+                }
+                "video_kbps" => d.video_kbps = v.parse().map_err(|_| err("video_kbps must be a number"))?,
+                "audio_kbps" => d.audio_kbps = v.parse().map_err(|_| err("audio_kbps must be a number"))?,
+                "keyint_sec" => d.keyint_sec = v.parse().map_err(|_| err("keyint_sec must be a number"))?,
+                "rate_control" => d.rate_control = v.into(),
+                "width" => d.width = v.parse().map_err(|_| err("width must be a number"))?,
+                "height" => d.height = v.parse().map_err(|_| err("height must be a number"))?,
+                "vod_audio" => d.vod_audio = yes(v),
+                "enhanced_broadcasting" | "enhanced" => d.enhanced_broadcasting = yes(v),
                 // Which OBS service the URL came from; only the settings window uses it.
                 "service" => {}
                 _ => return Err(err(&format!("unknown key {k}"))),
@@ -139,6 +231,12 @@ pub fn parse(text: &str) -> Result<Config, String> {
             _ => return Err(err(&format!("unknown key {k}"))),
         }
     }
+    // Fill empty ingest keys so every dest has a stable publish name.
+    for (i, d) in c.dests.iter_mut().enumerate() {
+        if d.ingest_key.is_empty() {
+            d.ingest_key = format!("ld{i}");
+        }
+    }
     Ok(c)
 }
 
@@ -163,6 +261,8 @@ mod tests {
         assert_eq!(c.delay_s, 15.0);
         assert_eq!(c.dests.len(), 1);
         assert!(!c.dests[0].enabled);
+        assert_eq!(c.dests[0].encode_mode, EncodeMode::Obs);
+        assert_eq!(c.dests[0].ingest_key, "ld0");
     }
 
     #[test]

@@ -40,15 +40,52 @@
   .arming #fill { opacity: .9; }
   body.still *, body.still *::after { animation: none !important; transition: none !important; }
 
-  /* Themes */
+  /* Themes — glass / frost use Instant Delay-style liquid glass when blur is available */
   [data-theme="glass"] #tag {
     background: linear-gradient(180deg, rgba(28, 31, 40, var(--alpha)), rgba(14, 16, 22, var(--alpha)));
-    border: 1px solid rgba(255, 255, 255, .09);
-    box-shadow: 0 .25em .9em rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .06);
+    border: 1px solid rgba(255, 255, 255, .12);
+    box-shadow: 0 .25em .9em rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .1);
+  }
+  @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    [data-theme="glass"] #tag {
+      background: color-mix(in srgb, rgba(22, 26, 34, var(--alpha)) 88%, transparent);
+      -webkit-backdrop-filter: blur(14px) saturate(1.35);
+      backdrop-filter: blur(14px) saturate(1.35);
+    }
   }
   [data-theme="glass"] #tag.delayed {
     background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 28%, rgba(20, 12, 14, var(--alpha))), rgba(30, 10, 12, var(--alpha)));
     border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  [data-theme="frost"] #tag {
+    background: rgba(255, 255, 255, calc(var(--alpha) * .22));
+    border: 1px solid rgba(255, 255, 255, .28);
+    box-shadow: 0 .3em 1em rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .35);
+    color: #f8fafc;
+  }
+  @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+    [data-theme="frost"] #tag {
+      -webkit-backdrop-filter: blur(18px) saturate(1.5);
+      backdrop-filter: blur(18px) saturate(1.5);
+    }
+  }
+  [data-theme="frost"] #tag.delayed {
+    background: color-mix(in srgb, var(--accent) 22%, rgba(255, 255, 255, calc(var(--alpha) * .18)));
+    border-color: color-mix(in srgb, var(--accent) 45%, rgba(255, 255, 255, .3));
+  }
+  [data-theme="clear"] #tag {
+    background: transparent; border: 1px solid rgba(255, 255, 255, .18);
+    box-shadow: none; text-shadow: 0 .06em .3em rgba(0, 0, 0, .9), 0 0 .1em rgba(0, 0, 0, .85);
+    padding-left: .35em; padding-right: .55em;
+  }
+  [data-theme="clear"] #tag.delayed { border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+  [data-theme="soft"] #tag {
+    background: color-mix(in srgb, #1a1e28 calc(var(--alpha) * 100%), transparent);
+    border: 1px solid rgba(255, 255, 255, .06);
+    box-shadow: 0 .2em .7em rgba(0, 0, 0, .28);
+  }
+  [data-theme="soft"] #tag.delayed {
+    background: color-mix(in srgb, var(--accent) 18%, rgba(22, 14, 16, var(--alpha)));
   }
   [data-theme="minimal"] #tag { padding-left: .2em; padding-right: .2em; text-shadow: 0 .06em .25em rgba(0, 0, 0, .85), 0 0 .08em rgba(0, 0, 0, .9); }
   [data-theme="solid"] #tag { background: color-mix(in srgb, var(--accent) calc(var(--alpha) * 100%), transparent); color: #101216;
@@ -62,6 +99,13 @@
   [data-theme="bar"] #tag { padding-left: 1em; background: rgba(12, 14, 19, var(--alpha)); box-shadow: 0 .2em .8em rgba(0, 0, 0, .35); }
   [data-theme="bar"] #tag::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: .28em; background: var(--accent); transition: background .6s; }
   [data-theme="bar"] #dot { display: none; }
+
+  @media (prefers-reduced-transparency: reduce) {
+    [data-theme="glass"] #tag, [data-theme="frost"] #tag {
+      -webkit-backdrop-filter: none !important; backdrop-filter: none !important;
+      background: linear-gradient(180deg, rgba(28, 31, 40, .92), rgba(14, 16, 22, .95));
+    }
+  }
 
   /* Preview page */
   body.preview { display: block; overflow: auto; min-height: 100vh; padding: 28px;
@@ -84,7 +128,7 @@
   const KINDS = ['live', 'arming', 'armed', 'delayed'];
   const RADIUS = { pill: '999px', rounded: '.35em', square: '0' };
   let cfg = { theme: 'glass', align: 'left', size: 30, font: 'Segoe UI', uppercase: false, dot: true, animate: true,
-              radius: 'pill', opacity: .78, colors: {}, texts: {}, show: {} };
+              radius: 'pill', opacity: .78, armedAsLive: false, colors: {}, texts: {}, show: {} };
 
   // ?live=…&size=40&theme=neon&align=right override the saved look for one source.
   function effective(c) {
@@ -93,6 +137,7 @@
     for (const k of KINDS) if (q.has(k)) { e.texts[k] = q.get(k); e.show[k] = q.get(k) !== ''; }
     for (const k of ['theme', 'align', 'font']) if (q.has(k)) e[k] = q.get(k);
     if (q.has('size')) e.size = +q.get('size');
+    if (q.has('armedAsLive')) e.armedAsLive = q.get('armedAsLive') !== '0' && q.get('armedAsLive') !== 'false';
     return e;
   }
 
@@ -115,10 +160,13 @@
     if (s.mode === 'delayed') { kind = 'delayed'; secs = s.delay; }
     else if (s.arm_delay !== null && s.armed) { kind = 'armed'; secs = s.arm_delay; }
     else if (s.arm_delay !== null) { kind = 'arming'; secs = s.arm_delay; }
+    const wasArming = kind === 'arming';
+    if (c.armedAsLive && (kind === 'arming' || kind === 'armed')) kind = 'live';
     const shown = c.show[kind] !== false;
     const buf = Math.min(Math.floor(s.buffer_s), Math.round(secs));
     const text = shown ? (c.texts[kind] || '').replaceAll('{s}', Math.round(secs)).replaceAll('{buf}', buf) : '';
-    return { kind, text, fill: kind === 'arming' && secs ? Math.min(1, s.buffer_s / secs) : 0 };
+    const fill = wasArming && !c.armedAsLive && secs ? Math.min(1, s.buffer_s / secs) : 0;
+    return { kind, text, fill };
   }
 
   function render(tag, d, c, animate) {
@@ -155,14 +203,15 @@
       row.className = 'row';
       const t = tag.cloneNode(true);
       const code = document.createElement('code');
-      code.textContent = name + (c.show[name] === false ? ' · off' : '');
+      const d = describe(SAMPLES[name], { ...c, show: { ...c.show, [name]: true, live: true } });
+      const label = (c.armedAsLive && (name === 'arming' || name === 'armed')) ? name + ' → live' : name;
+      code.textContent = label + (c.show[name] === false && !(c.armedAsLive && (name === 'arming' || name === 'armed')) ? ' · off' : '');
       row.append(t, code);
       document.body.appendChild(row);
-      const d = describe(SAMPLES[name], { ...c, show: { ...c.show, [name]: true } });
-      const hidden = c.show[name] === false || !d.text;
+      const hidden = (!c.armedAsLive || (name !== 'arming' && name !== 'armed')) && (c.show[name] === false || !d.text);
       if (!d.text) d.text = '(empty)';
       render(t, d, c, false);
-      if (hidden) t.className = name + ' empty';
+      if (hidden) t.className = d.kind + ' empty';
     }
   }
 
@@ -177,6 +226,10 @@
     current = effective(cfg);
     refresh();
   }
+  function onRev(next) {
+    if (next === undefined || next === null) return;
+    if (next !== rev) { rev = next; loadConfig(); }
+  }
 
   if (preview) {
     document.body.classList.add('preview');
@@ -189,6 +242,10 @@
   }
   loadConfig();
   if (!preview) {
+    try {
+      const bc = new BroadcastChannel('ld-overlay');
+      bc.onmessage = (e) => { if (e.data && e.data.type === 'ld-overlay-saved') loadConfig(); };
+    } catch (e) {}
     const es = new EventSource('/events');
     es.onmessage = (e) => {
       const s = JSON.parse(e.data);
@@ -196,6 +253,17 @@
       if (s.overlay_rev !== rev) { rev = s.overlay_rev; loadConfig(); } else refresh();
     };
     es.onerror = () => { tag.className = 'hidden'; first = true; };
+    // CEF / idle SSE can lag — poll overlay_rev so Save is visible without Refresh.
+    setInterval(async () => {
+      try {
+        const s = await (await fetch('/state', { cache: 'no-store' })).json();
+        if (s) {
+          lastState = s;
+          onRev(s.overlay_rev);
+          if (s.overlay_rev === rev) refresh();
+        }
+      } catch (e) {}
+    }, 2000);
   }
 </script>
 </body>
