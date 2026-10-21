@@ -1,6 +1,6 @@
 [package]
 name = "livedelay"
-version = "1.0.10"
+version = "1.0.11"
 license = "GPL-2.0-or-later"
 edition = "2021"
 description = "Lekki przełącznik opóźnienia streamu dla OBS (proxy RTMP z buforem w RAM)."
