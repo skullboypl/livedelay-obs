@@ -83,6 +83,10 @@ QVector<Service> Load()
 		s.name = o.value("name").toString();
 		s.common = o.value("common").toBool();
 		s.key_link = o.value("stream_key_link").toString();
+		const QJsonObject rec = o.value("recommended").toObject();
+		s.max_video_kbps = rec.value("max video bitrate").toInt();
+		s.max_audio_kbps = rec.value("max audio bitrate").toInt();
+		s.keyint_sec = rec.value("keyint").toInt();
 		for (const QJsonValue &sv : o.value("servers").toArray()) {
 			QJsonObject so = sv.toObject();
 			Server srv{so.value("name").toString(), so.value("url").toString()};
@@ -104,13 +108,13 @@ QVector<Service> Load()
 	};
 	if (!has("Kick"))
 		list.push_back({"Kick", {{"Default", "rtmps://fa723fc1b171.global-contribute.live-video.net/app"}},
-				"https://dashboard.kick.com/settings/stream", true});
+				"https://dashboard.kick.com/settings/stream", true, 8000, 320, 2});
 	if (!has("Twitch"))
 		list.push_back({"Twitch", {{T("Settings.AutoServer"), "rtmp://live.twitch.tv/app"}},
-				"https://dashboard.twitch.tv/settings/stream", true});
+				"https://dashboard.twitch.tv/settings/stream", true, 6000, 320, 2});
 	if (!has("YouTube - RTMPS"))
 		list.push_back({"YouTube - RTMPS", {{"Primary", "rtmps://a.rtmps.youtube.com:443/live2"}},
-				"https://studio.youtube.com/channel/UC/livestreaming", true});
+				"https://studio.youtube.com/channel/UC/livestreaming", true, 51000, 160, 2});
 	std::stable_sort(list.begin(), list.end(), [](const Service &a, const Service &b) {
 		if (a.common != b.common)
 			return a.common;

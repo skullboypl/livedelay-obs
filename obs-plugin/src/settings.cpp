@@ -2,6 +2,7 @@
 #include "dock.hpp"
 #include "i18n.hpp"
 #include "services.hpp"
+#include "limits.hpp"
 #include "client.hpp"
 
 #include <obs-module.h>
@@ -744,7 +745,13 @@ void RouteObsThroughLiveDelay(QWidget *parent)
 		StartProxy();
 	}
 	PointObsAtLiveDelay(s.RtmpPort());
-	QMessageBox::information(parent, "LiveDelay", already ? T("Settings.AlreadyRouted") : T("Settings.RoutedSaved"));
+	// A Custom server gets no platform limits from OBS, so apply them here.
+	const Limits limits = PlatformLimits();
+	const bool fitted = !LimitProblems(limits, ReadObsOutput()).isEmpty() && FitObsOutput(limits);
+	QString msg = already ? T("Settings.AlreadyRouted") : T("Settings.RoutedSaved");
+	if (fitted)
+		msg += "\n\n" + T("Limits.Fitted").arg(ReadObsOutput().video_kbps).arg(limits.keyint_sec);
+	QMessageBox::information(parent, "LiveDelay", msg);
 }
 
 void ShowHelp(QWidget *parent)

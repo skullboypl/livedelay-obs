@@ -16,7 +16,7 @@ endif()
 file(GLOB WINDOWS_TARGETS_LIB "$ENV{USERPROFILE}/.cargo/registry/src/*/windows_x86_64_msvc-0.52.*/lib/windows.0.52.0.lib")
 list(GET WINDOWS_TARGETS_LIB 0 WINDOWS_TARGETS_LIB)
 
-add_library(livedelay-obs MODULE src/plugin.cpp src/dock.cpp src/client.cpp src/settings.cpp src/services.cpp src/icons.cpp src/version.rc)
+add_library(livedelay-obs MODULE src/plugin.cpp src/dock.cpp src/client.cpp src/settings.cpp src/services.cpp src/icons.cpp src/limits.cpp src/version.rc)
 set_target_properties(livedelay-obs PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_compile_options(livedelay-obs PRIVATE /utf-8 /W3 /Zc:__cplusplus /permissive-)
 target_compile_definitions(livedelay-obs PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)

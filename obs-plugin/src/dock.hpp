@@ -42,6 +42,8 @@ private:
 	void UpdateBanner();
 
 	QFrame *banner_;
+	QFrame *limits_;
+	QLabel *limitsText_;
 	QFrame *dests_;
 	QGridLayout *destGrid_;
 	QLabel *status_;

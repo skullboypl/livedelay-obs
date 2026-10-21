@@ -2,6 +2,7 @@
 #include "client.hpp"
 #include "i18n.hpp"
 #include "icons.hpp"
+#include "limits.hpp"
 #include "settings.hpp"
 
 #include <QDesktopServices>
@@ -16,6 +17,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -124,6 +126,18 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	bannerLayout->addWidget(route);
 	banner_->hide();
 
+	// Shown while OBS's stream settings exceed what a platform accepts.
+	limits_ = new QFrame;
+	limits_->setObjectName("ldLimits");
+	limits_->setStyleSheet("#ldLimits { background: rgba(255, 90, 79, .13); border: 1px solid rgba(255, 90, 79, .5); border-radius: 6px; }");
+	limitsText_ = new QLabel;
+	limitsText_->setWordWrap(true);
+	auto *fit = Button("Limits.Fit", "Limits.FitTip", Icon::Settings, "#ff5a4f");
+	auto *limitsLayout = new QHBoxLayout(limits_);
+	limitsLayout->addWidget(limitsText_, 1);
+	limitsLayout->addWidget(fit);
+	limits_->hide();
+
 	status_ = new QLabel;
 	status_->setAlignment(Qt::AlignCenter);
 	status_->setMinimumHeight(36);
@@ -179,6 +193,7 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 
 	auto *layout = new QVBoxLayout(this);
 	layout->addWidget(banner_);
+	layout->addWidget(limits_);
 	layout->addWidget(status_);
 	layout->addWidget(fill_);
 	layout->addWidget(detail_);
@@ -197,7 +212,19 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	connect(cut_after_, &QPushButton::clicked, this, [this] { Act("cut-after"); });
 	connect(disarm_, &QPushButton::clicked, this, [this] { Act("disarm"); });
 	connect(start_, &QPushButton::clicked, this, [this] { ShowError(QString::fromStdString(livedelay::StartProxy())); });
-	connect(settings, &QPushButton::clicked, this, [this] { ShowSettings(window()); });
+	connect(settings, &QPushButton::clicked, this, [this] {
+		ShowSettings(window());
+		UpdateBanner();
+	});
+	connect(fit, &QPushButton::clicked, this, [this] {
+		const bool ok = FitObsOutput(PlatformLimits());
+		UpdateBanner();
+		ShowError(ok ? QString() : T("Settings.SaveFailed"));
+	});
+	// OBS settings can change behind our back (Settings dialog, profile switch).
+	auto *timer = new QTimer(this);
+	connect(timer, &QTimer::timeout, this, [this] { UpdateBanner(); });
+	timer->start(10000);
 	connect(preview, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QString::fromStdString(LivePreviewUrl()))); });
 	connect(help, &QPushButton::clicked, this, [this] { ShowHelp(window()); });
 	connect(route, &QPushButton::clicked, this, [this] {
@@ -252,7 +279,11 @@ void Dock::ShowError(const QString &msg)
 
 void Dock::UpdateBanner()
 {
-	banner_->setVisible(!ObsRoutedToLiveDelay());
+	const bool routed = ObsRoutedToLiveDelay();
+	banner_->setVisible(!routed);
+	const QStringList problems = routed ? LimitProblems(PlatformLimits(), ReadObsOutput()) : QStringList();
+	limitsText_->setText("<b>" + T("Limits.Title") + "</b><br>" + problems.join("<br>"));
+	limits_->setVisible(!problems.isEmpty());
 }
 
 static void Pill(QLabel *l, const QString &text, const char *bg)

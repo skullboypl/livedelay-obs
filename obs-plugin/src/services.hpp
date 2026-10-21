@@ -16,6 +16,10 @@ struct Service {
 	QVector<Server> servers;
 	QString key_link;
 	bool common = false;
+	// From services.json "recommended"; 0 = no limit given.
+	int max_video_kbps = 0;
+	int max_audio_kbps = 0;
+	int keyint_sec = 0;
 };
 
 // Common services first, then the rest by name. RTMP/RTMPS servers only.
