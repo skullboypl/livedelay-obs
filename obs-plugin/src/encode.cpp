@@ -136,6 +136,30 @@ QString ObsStreamVideoEncoderId()
 	return SimpleEncoderId(config_get_string(cfg, "SimpleOutput", "StreamEncoder"));
 }
 
+bool NeedsClassicH264(const Destination &d)
+{
+	const QString svc = QString::fromStdString(d.service).toLower();
+	const QString url = QString::fromStdString(d.url).toLower();
+	return svc.contains("twitch") || url.contains("twitch.tv") || url.contains("ttvnw.net") ||
+	       url.contains("live-video.net") || url.contains("contribute.live-video.net");
+}
+
+// Classic Twitch RTMP rejects HEVC/AV1 → player error #1000. Map to H.264 sibling.
+QString ForceClassicH264(const QString &id)
+{
+	const QString l = id.toLower();
+	if (!(l.contains("hevc") || l.contains("h265") || l.contains("av1")))
+		return id;
+	if (l.contains("nvenc"))
+		return obs_encoder_get_display_name("obs_nvenc_h264_tex") ? QStringLiteral("obs_nvenc_h264_tex")
+									 : QStringLiteral("ffmpeg_nvenc");
+	if (l.contains("amf") || l.contains("amd"))
+		return QStringLiteral("h264_texture_amf");
+	if (l.contains("qsv"))
+		return QStringLiteral("obs_qsv11_v2");
+	return QStringLiteral("obs_x264");
+}
+
 QString ObsStreamAudioEncoderId()
 {
 	config_t *cfg = obs_frontend_get_profile_config();
@@ -221,6 +245,16 @@ EncodeSettings ResolveEncode(const Destination &d)
 		e.height = d.height;
 		e.summary = T("Encode.SummaryManual").arg(e.video_kbps).arg(e.rate_control).arg(e.keyint_sec);
 		break;
+	}
+	if (NeedsClassicH264(d)) {
+		const QString was = e.video_encoder_id;
+		e.video_encoder_id = ForceClassicH264(e.video_encoder_id);
+		if (e.video_encoder_id != was) {
+			blog(LOG_WARNING,
+			     "[livedelay] %s: classic Twitch RTMP needs H.264 — mapped %s → %s (HEVC/AV1 → player #1000)",
+			     d.name.c_str(), was.toUtf8().constData(), e.video_encoder_id.toUtf8().constData());
+			e.summary += " · H.264";
+		}
 	}
 	return e;
 }

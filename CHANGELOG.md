@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.5 – 2026-10-21
+
+- **Twitch #1000 hardening:** force H.264 (never HEVC/AV1) on classic Twitch RTMP; reseed codec configs after egress lag; wait for video before dialing Twitch.
+
 ## 1.0.4 – 2026-10-21
 
 - **One-click auto-update:** Update downloads the zip, closes OBS, replaces the plugin (ProgramData or Program Files layout), and restarts OBS. No manual unzip.

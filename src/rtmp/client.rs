@@ -250,16 +250,26 @@ async fn stream(
             Ok(OutMsg::Tag(t)) => t,
             Ok(OutMsg::End) => break Ended::StreamEnd,
             Err(broadcast::error::RecvError::Lagged(_)) => {
+                // Reseed codec headers or Twitch reconnects with a header-less stream (#1000).
                 need_key = true;
+                pending = shared.eng.lock().unwrap().current_config();
                 continue;
             }
             Err(broadcast::error::RecvError::Closed) => break Ended::StreamEnd,
         };
         if tag.config {
-            // Keep only the newest config of each kind until the stream starts.
             if need_key {
-                pending.retain(|p| p.kind != tag.kind);
-                pending.push(tag);
+                // Keep one video/meta config; keep distinct AAC configs (live + VOD).
+                if tag.kind == MSG_AUDIO {
+                    if let Some(i) = pending.iter().position(|p| p.kind == MSG_AUDIO && p.data == tag.data) {
+                        pending[i] = tag;
+                    } else {
+                        pending.push(tag);
+                    }
+                } else {
+                    pending.retain(|p| p.kind != tag.kind);
+                    pending.push(tag);
+                }
                 continue;
             }
         } else if need_key {
@@ -326,11 +336,25 @@ pub async fn run(target: Target, shared: Arc<Shared>, dest: Arc<Dest>) {
             continue;
         }
         set("waiting", String::new());
-        // Wait for the first tag of a stream before dialing out.
+        // Wait for video (config or keyframe) before dialing Twitch — avoids an empty
+        // "live" publish that the player aborts with error #1000.
         let go = loop {
+            let has_video = shared.eng.lock().unwrap().current_config().iter().any(|t| t.kind == MSG_VIDEO);
+            if has_video {
+                break true;
+            }
             tokio::select! {
                 r = rx.recv() => match r {
-                    Ok(OutMsg::Tag(_)) | Err(broadcast::error::RecvError::Lagged(_)) => break true,
+                    Ok(OutMsg::Tag(t)) => {
+                        if t.kind == MSG_VIDEO {
+                            break true;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        if shared.eng.lock().unwrap().current_config().iter().any(|t| t.kind == MSG_VIDEO) {
+                            break true;
+                        }
+                    }
                     Ok(OutMsg::End) => continue,
                     Err(broadcast::error::RecvError::Closed) => return,
                 },
