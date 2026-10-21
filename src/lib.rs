@@ -9,6 +9,7 @@ pub mod api;
 pub mod config;
 pub mod engine;
 mod ffi;
+pub mod overlay;
 mod preview;
 pub mod rtmp;
 
@@ -92,7 +93,7 @@ impl Proxy {
             shared: shared.clone(),
             dests,
             default_delay: Duration::from_secs_f64(cfg.delay_s),
-            overlay: cfg.overlay.clone(),
+            overlay: overlay::OverlayStore::load(cfg.overlay_file.clone(), &cfg.overlay),
         });
         let (listen, api_addr) = (cfg.listen.clone(), cfg.api.clone());
         let (stop_tx, stop_rx) = oneshot::channel();

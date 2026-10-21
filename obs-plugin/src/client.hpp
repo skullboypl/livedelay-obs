@@ -15,6 +15,8 @@ constexpr uint16_t kApiPort = 7799;
 // Sends one request and returns the response body, or an empty string when the
 // proxy is unreachable. `status` gets the HTTP status code (0 on failure).
 std::string Request(const char *method, const std::string &path, int *status = nullptr);
+// Same, with a JSON body.
+std::string Request(const char *method, const std::string &path, const std::string &body, int *status);
 
 // Follows GET /events on a background thread. `on_state` gets each JSON
 // snapshot, `on_offline` fires when the connection drops; both run on that thread.

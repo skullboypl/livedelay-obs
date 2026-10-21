@@ -10,6 +10,8 @@
 //! GET  /overlay          status text for an OBS Browser source (?preview shows every state)
 //! GET  /live-preview     what OBS sends vs. what viewers get, side by side
 //! POST /dest/start?i=0   start / stop one destination (/dest/stop?i=0)
+//! GET  /overlay/config   overlay look and texts as JSON; POST replaces it
+//! GET  /edit-theme       visual editor for the overlay
 
 use crate::engine::{Mode, Shared};
 use crate::rtmp::client::Dest;
@@ -24,11 +26,12 @@ pub struct Ctx {
     pub shared: Arc<Shared>,
     pub dests: Vec<Arc<Dest>>,
     pub default_delay: Duration,
-    pub overlay: crate::config::Overlay,
+    pub overlay: crate::overlay::OverlayStore,
 }
 
 const OVERLAY_HTML: &str = include_str!("overlay.html");
 const PREVIEW_HTML: &str = include_str!("preview.html");
+const EDITOR_HTML: &str = include_str!("edit-theme.html");
 
 fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
@@ -49,7 +52,7 @@ pub fn state_json(ctx: &Ctx) -> String {
     let st = ctx.shared.eng.lock().unwrap().status(Instant::now());
     let mode = if st.mode == Mode::Delayed { "delayed" } else { "live" };
     let mut j = format!(
-        "{{\"mode\":\"{mode}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"default_delay\":{},\"dests\":[",
+        "{{\"mode\":\"{mode}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},\"dests\":[",
         st.input,
         st.delay_s,
         st.buffer_s,
@@ -58,6 +61,7 @@ pub fn state_json(ctx: &Ctx) -> String {
         st.armed,
         st.cut_pending,
         st.in_kbps,
+        ctx.overlay.rev(),
         ctx.default_delay.as_secs_f64(),
     );
     for (i, dest) in ctx.dests.iter().enumerate() {
@@ -136,19 +140,6 @@ async fn respond(sock: &mut TcpStream, code: &str, body: &str) -> io::Result<()>
     respond_typed(sock, code, "application/json", body).await
 }
 
-fn overlay_page(ctx: &Ctx) -> String {
-    let o = &ctx.overlay;
-    let texts = format!(
-        "{{\"live\":\"{}\",\"arming\":\"{}\",\"armed\":\"{}\",\"delayed\":\"{}\"}}",
-        esc(&o.live),
-        esc(&o.arming),
-        esc(&o.armed),
-        esc(&o.delayed)
-    );
-    // Keep "</script>" from ever closing the script block the JSON sits in.
-    OVERLAY_HTML.replace("__TEXTS__", &texts.replace('<', "\\u003c"))
-}
-
 async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
     let mut buf = Vec::with_capacity(1024);
     let mut tmp = [0u8; 1024];
@@ -159,7 +150,24 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
         }
         buf.extend_from_slice(&tmp[..n]);
     }
-    let head = String::from_utf8_lossy(&buf).to_string();
+    let header_end = buf.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(0) + 4;
+    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
+    let content_length = head
+        .lines()
+        .find_map(|l| l.to_ascii_lowercase().strip_prefix("content-length:").map(|v| v.trim().parse::<usize>().unwrap_or(0)))
+        .unwrap_or(0);
+    if content_length > 64 * 1024 {
+        return respond(&mut sock, "413 Payload Too Large", "{\"error\":\"too_large\"}").await;
+    }
+    let mut body = buf[header_end..].to_vec();
+    while body.len() < content_length {
+        let n = tokio::time::timeout(Duration::from_secs(5), sock.read(&mut tmp)).await.map_err(|_| io::Error::other("timeout"))??;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&tmp[..n]);
+    }
+    body.truncate(content_length);
     let mut lines = head.lines();
     let mut parts = lines.next().unwrap_or("").split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
@@ -177,7 +185,16 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
     match (method, path) {
         ("GET", "/state") => respond(&mut sock, "200 OK", &state_json(ctx)).await,
         ("GET", "/events") => events(sock, ctx).await,
-        ("GET", "/overlay") => respond_typed(&mut sock, "200 OK", "text/html", &overlay_page(ctx)).await,
+        ("GET", "/overlay") => respond_typed(&mut sock, "200 OK", "text/html", OVERLAY_HTML).await,
+        ("GET", "/edit-theme") => respond_typed(&mut sock, "200 OK", "text/html", EDITOR_HTML).await,
+        ("GET", "/overlay/config") => respond(&mut sock, "200 OK", &ctx.overlay.get()).await,
+        ("POST", "/overlay/config") => match ctx.overlay.set(&String::from_utf8_lossy(&body)) {
+            Ok(()) => {
+                ctx.shared.state.send_modify(|v| *v += 1);
+                respond(&mut sock, "200 OK", "{\"ok\":true}").await
+            }
+            Err(e) => respond(&mut sock, "400 Bad Request", &format!("{{\"error\":\"{e}\"}}")).await,
+        },
         ("GET", "/live-preview") => respond_typed(&mut sock, "200 OK", "text/html", PREVIEW_HTML).await,
         ("GET", "/live-preview/out.flv") => crate::preview::serve(sock, &ctx.shared, crate::preview::Feed::Output).await,
         ("GET", "/live-preview/in.flv") => crate::preview::serve(sock, &ctx.shared, crate::preview::Feed::Input).await,

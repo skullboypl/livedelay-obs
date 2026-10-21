@@ -58,14 +58,20 @@ bool SendAll(SOCKET s, const std::string &data)
 	return true;
 }
 
-std::string RequestLine(const char *method, const std::string &path)
+std::string RequestLine(const char *method, const std::string &path, const std::string &body = {})
 {
-	return std::string(method) + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+	return std::string(method) + " " + path + " HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: " +
+	       std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
 }
 
 } // namespace
 
 std::string Request(const char *method, const std::string &path, int *status)
+{
+	return Request(method, path, std::string(), status);
+}
+
+std::string Request(const char *method, const std::string &path, const std::string &body, int *status)
 {
 	if (status)
 		*status = 0;
@@ -73,19 +79,19 @@ std::string Request(const char *method, const std::string &path, int *status)
 	if (s == INVALID_SOCKET)
 		return {};
 	std::string resp;
-	if (SendAll(s, RequestLine(method, path))) {
+	if (SendAll(s, RequestLine(method, path, body))) {
 		char buf[4096];
 		int n;
 		while ((n = recv(s, buf, sizeof(buf), 0)) > 0)
 			resp.append(buf, size_t(n));
 	}
 	closesocket(s);
-	size_t body = resp.find("\r\n\r\n");
-	if (body == std::string::npos)
+	size_t header_end = resp.find("\r\n\r\n");
+	if (header_end == std::string::npos)
 		return {};
 	if (status && resp.size() > 12)
 		*status = std::atoi(resp.c_str() + 9);
-	return resp.substr(body + 4);
+	return resp.substr(header_end + 4);
 }
 
 EventStream::EventStream(std::function<void(const std::string &)> on_state, std::function<void()> on_offline)

@@ -8,7 +8,7 @@ First release.
 - Native dock and four OBS hotkeys.
 - Settings window: default delay, buffer memory limit, platforms with presets (Twitch, YouTube, Kick, Facebook), "Route OBS through LiveDelay".
 - Several platforms at once over RTMP and RTMPS.
-- Browser-source overlay with editable texts and `?preview`.
+- Browser-source overlay: five themes, alignment, look editor at `/edit-theme`, per-state on/off, `?preview`.
 - Local HTTP API for Stream Deck and scripts.
 - Per-platform Start / Stop and autostart.
 - `/live-preview`: OBS input and viewer output side by side.

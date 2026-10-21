@@ -1,0 +1,235 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiveDelay – overlay</title>
+<style>
+  :root { --bg: #0f1115; --panel: #161920; --card: #1c2028; --line: #2a2f39; --text: #e8eaef; --muted: #8b90a0; --accent: #5ac8fa; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 12px; padding: 14px 22px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 2; }
+  h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  #toast { color: #3ddc84; font-size: 13px; opacity: 0; transition: opacity .3s; }
+  #toast.on { opacity: 1; }
+  button { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  button:hover { border-color: #3a404c; }
+  button.primary { background: #1f5f86; border-color: #2a7bb0; font-weight: 600; }
+  button.primary:hover { background: #24709e; }
+  main { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; min-height: calc(100vh - 57px); }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  aside { border-right: 1px solid var(--line); background: var(--panel); padding: 18px 20px 40px; overflow: auto; }
+  section { margin-bottom: 22px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  .themes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .theme { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; cursor: pointer; background: var(--card); }
+  .theme.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .theme iframe { display: block; width: 100%; height: 66px; border: 0; pointer-events: none; }
+  .theme span { display: block; padding: 6px 10px; font-size: 13px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; padding: 6px 14px; }
+  .seg button.on { background: #24303d; color: #fff; }
+  .field { display: grid; grid-template-columns: 130px 1fr; align-items: center; gap: 10px; margin: 8px 0; }
+  .field label { color: var(--muted); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  input[type=text], select { width: 100%; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  .toggles label { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+  .state { display: grid; grid-template-columns: 22px 1fr 36px; gap: 8px; align-items: center; margin: 8px 0; }
+  .state input[type=color] { width: 36px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
+  .state small { grid-column: 2 / 4; color: var(--muted); margin-top: -4px; }
+  .hint { color: var(--muted); font-size: 12.5px; }
+  .stage { padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+  .stage iframe { width: 100%; flex: 1; min-height: 420px; border: 1px solid var(--line); border-radius: 12px; background: #1d1f25; }
+  code { background: #232833; padding: 1px 6px; border-radius: 5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LiveDelay · <span data-t="title"></span></h1>
+  <span id="toast"></span>
+  <span class="spacer"></span>
+  <button id="reset" data-t="reset"></button>
+  <button id="revert" data-t="revert"></button>
+  <button id="save" class="primary" data-t="save"></button>
+</header>
+<main>
+  <aside>
+    <section>
+      <h2 data-t="theme"></h2>
+      <div class="themes" id="themes"></div>
+    </section>
+    <section>
+      <h2 data-t="layout"></h2>
+      <div class="field"><label data-t="align"></label>
+        <div class="seg" id="align"><button data-v="left" data-t="left"></button><button data-v="center" data-t="center"></button><button data-v="right" data-t="right"></button></div></div>
+      <div class="hint" data-t="alignHint"></div>
+      <div class="field"><label data-t="size"></label><input type="range" id="size" min="14" max="96"></div>
+      <div class="field"><label data-t="font"></label>
+        <select id="font">
+          <option>Segoe UI</option><option>Segoe UI Variable Display</option><option>Bahnschrift</option><option>Arial</option>
+          <option>Verdana</option><option>Trebuchet MS</option><option>Impact</option><option>Consolas</option><option>Georgia</option>
+        </select></div>
+      <div class="field"><label data-t="radius"></label>
+        <div class="seg" id="radius"><button data-v="pill" data-t="pill"></button><button data-v="rounded" data-t="rounded"></button><button data-v="square" data-t="square"></button></div></div>
+      <div class="field"><label data-t="opacity"></label><input type="range" id="opacity" min="0" max="1" step="0.02"></div>
+      <div class="toggles">
+        <label><input type="checkbox" id="uppercase"> <span data-t="uppercase"></span></label>
+        <label><input type="checkbox" id="dot"> <span data-t="dot"></span></label>
+        <label><input type="checkbox" id="animate"> <span data-t="animate"></span></label>
+      </div>
+    </section>
+    <section>
+      <h2 data-t="states"></h2>
+      <div id="states"></div>
+      <div class="hint" data-t="placeholders"></div>
+    </section>
+  </aside>
+  <div class="stage">
+    <div class="hint" data-t="stageHint"></div>
+    <iframe id="preview" src="/overlay?preview"></iframe>
+    <div class="hint"><span data-t="url"></span> <code id="url"></code></div>
+  </div>
+</main>
+<script>
+  const I18N = {
+    en: { title: 'overlay look', save: 'Save', revert: 'Undo changes', reset: 'Theme defaults', saved: 'Saved – the overlay on stream already uses it.',
+          failed: 'Could not save.', theme: 'Theme', layout: 'Layout', align: 'Alignment', left: 'Left', center: 'Center', right: 'Right',
+          alignHint: 'Right: the box grows to the left, so it fits a right-hand corner.', size: 'Size', font: 'Font', radius: 'Corners',
+          pill: 'Pill', rounded: 'Rounded', square: 'Square', opacity: 'Background', uppercase: 'CAPITAL LETTERS', dot: 'Status light',
+          animate: 'Animations', states: 'States', live: 'Live', arming: 'Arming', armed: 'Armed', delayed: 'Delayed',
+          showState: 'show', placeholders: '{s} = delay in seconds, {buf} = seconds buffered.',
+          stageHint: 'Preview with sample values (25 s delay, 12 s buffered). Unsaved changes show here only.', url: 'Browser source address:',
+          glass: 'Glass', minimal: 'Minimal', solid: 'Solid', neon: 'Neon', bar: 'Lower third' },
+    pl: { title: 'wygląd overlayu', save: 'Zapisz', revert: 'Cofnij zmiany', reset: 'Domyślne motywu', saved: 'Zapisano – overlay na streamie już tego używa.',
+          failed: 'Nie udało się zapisać.', theme: 'Motyw', layout: 'Układ', align: 'Wyrównanie', left: 'Lewo', center: 'Środek', right: 'Prawo',
+          alignHint: 'Prawo: pudełko rośnie w lewo, więc pasuje do prawego rogu.', size: 'Rozmiar', font: 'Czcionka', radius: 'Rogi',
+          pill: 'Pigułka', rounded: 'Zaokrąglone', square: 'Kwadratowe', opacity: 'Tło', uppercase: 'WIELKIE LITERY', dot: 'Lampka stanu',
+          animate: 'Animacje', states: 'Stany', live: 'Na żywo', arming: 'Uzbrajanie', armed: 'Uzbrojone', delayed: 'Opóźnienie',
+          showState: 'pokazuj', placeholders: '{s} = opóźnienie w sekundach, {buf} = sekundy w buforze.',
+          stageHint: 'Podgląd z przykładowymi wartościami (25 s opóźnienia, 12 s w buforze). Niezapisane zmiany widać tylko tutaj.', url: 'Adres źródła Przeglądarka:',
+          glass: 'Szkło', minimal: 'Minimalny', solid: 'Pełny kolor', neon: 'Neon', bar: 'Belka TV' },
+    de: { title: 'Overlay-Aussehen', save: 'Speichern', revert: 'Änderungen verwerfen', reset: 'Theme-Standard', saved: 'Gespeichert – das Overlay im Stream nutzt es schon.',
+          failed: 'Speichern fehlgeschlagen.', theme: 'Theme', layout: 'Layout', align: 'Ausrichtung', left: 'Links', center: 'Mitte', right: 'Rechts',
+          alignHint: 'Rechts: Die Box wächst nach links und passt so in eine rechte Ecke.', size: 'Größe', font: 'Schrift', radius: 'Ecken',
+          pill: 'Pille', rounded: 'Abgerundet', square: 'Eckig', opacity: 'Hintergrund', uppercase: 'GROSSBUCHSTABEN', dot: 'Statuslicht',
+          animate: 'Animationen', states: 'Zustände', live: 'Live', arming: 'Vorbereitung', armed: 'Bereit', delayed: 'Verzögert',
+          showState: 'anzeigen', placeholders: '{s} = Verzögerung in Sekunden, {buf} = Sekunden im Puffer.',
+          stageHint: 'Vorschau mit Beispielwerten (25 s Verzögerung, 12 s gepuffert). Ungespeicherte Änderungen nur hier.', url: 'Adresse der Browser-Quelle:',
+          glass: 'Glas', minimal: 'Minimal', solid: 'Vollfarbe', neon: 'Neon', bar: 'Bauchbinde' },
+    ru: { title: 'вид оверлея', save: 'Сохранить', revert: 'Отменить изменения', reset: 'По умолчанию', saved: 'Сохранено – оверлей в эфире уже использует это.',
+          failed: 'Не удалось сохранить.', theme: 'Тема', layout: 'Макет', align: 'Выравнивание', left: 'Слева', center: 'По центру', right: 'Справа',
+          alignHint: 'Справа: блок растёт влево и помещается в правый угол.', size: 'Размер', font: 'Шрифт', radius: 'Углы',
+          pill: 'Капсула', rounded: 'Скруглённые', square: 'Прямые', opacity: 'Фон', uppercase: 'ЗАГЛАВНЫЕ БУКВЫ', dot: 'Индикатор',
+          animate: 'Анимации', states: 'Состояния', live: 'Эфир', arming: 'Подготовка', armed: 'Готово', delayed: 'Задержка',
+          showState: 'показывать', placeholders: '{s} = задержка в секундах, {buf} = секунд в буфере.',
+          stageHint: 'Предпросмотр с примером (задержка 25 с, в буфере 12 с). Несохранённые изменения видны только здесь.', url: 'Адрес источника «Браузер»:',
+          glass: 'Стекло', minimal: 'Минимал', solid: 'Сплошной', neon: 'Неон', bar: 'Плашка ТВ' },
+  };
+  const q = new URLSearchParams(location.search);
+  const lang = (q.get('lang') || navigator.language || 'en').slice(0, 2);
+  const L = I18N[lang] || I18N.en;
+  document.querySelectorAll('[data-t]').forEach(el => el.textContent = L[el.dataset.t]);
+  document.getElementById('url').textContent = location.origin + '/overlay';
+
+  const KINDS = ['live', 'arming', 'armed', 'delayed'];
+  const THEMES = {
+    glass: { opacity: .78, radius: 'pill', uppercase: false, dot: true, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffbf3c', delayed: '#ff5a4f' } },
+    minimal: { opacity: 0, radius: 'pill', uppercase: false, dot: true, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffbf3c', delayed: '#ff5a4f' } },
+    solid: { opacity: .95, radius: 'rounded', uppercase: true, dot: true, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffd166', delayed: '#ff5a4f' } },
+    neon: { opacity: .7, radius: 'rounded', uppercase: true, dot: true, colors: { live: '#39ff88', arming: '#ffd23f', armed: '#ffd23f', delayed: '#ff3b6b' } },
+    bar: { opacity: .88, radius: 'square', uppercase: true, dot: false, colors: { live: '#3ddc84', arming: '#ffbf3c', armed: '#ffbf3c', delayed: '#ff5a4f' } },
+  };
+
+  let saved = null, cfg = null;
+  const preview = document.getElementById('preview');
+  const send = () => preview.contentWindow && preview.contentWindow.postMessage({ type: 'ld-config', config: cfg }, location.origin);
+
+  function buildThemes() {
+    const box = document.getElementById('themes');
+    box.innerHTML = '';
+    for (const name of Object.keys(THEMES)) {
+      const card = document.createElement('div');
+      card.className = 'theme' + (cfg.theme === name ? ' on' : '');
+      const f = document.createElement('iframe');
+      f.src = '/overlay?preview&thumb&only=delayed&size=18&theme=' + name;
+      f.loading = 'lazy';
+      const label = document.createElement('span');
+      label.textContent = L[name];
+      card.append(f, label);
+      card.onclick = () => { Object.assign(cfg, JSON.parse(JSON.stringify(THEMES[name])), { theme: name }); sync(); };
+      // Thumbnails show each theme with its own colours, not the current draft.
+      f.onload = () => f.contentWindow.postMessage({ type: 'ld-config', config: { ...cfg, ...THEMES[name], theme: name, size: 18, align: 'left' } }, location.origin);
+      box.appendChild(card);
+    }
+  }
+
+  function buildStates() {
+    const box = document.getElementById('states');
+    box.innerHTML = '';
+    for (const k of KINDS) {
+      const row = document.createElement('div');
+      row.className = 'state';
+      row.innerHTML = '<input type="checkbox" title="' + L.showState + '"><input type="text"><input type="color"><small>' + L[k] + '</small>';
+      const [show, text, color] = row.querySelectorAll('input');
+      show.checked = cfg.show[k] !== false;
+      text.value = cfg.texts[k] || '';
+      color.value = cfg.colors[k] || '#3ddc84';
+      show.onchange = () => { cfg.show[k] = show.checked; text.disabled = !show.checked; send(); };
+      text.disabled = !show.checked;
+      text.oninput = () => { cfg.texts[k] = text.value; send(); };
+      color.oninput = () => { cfg.colors[k] = color.value; send(); };
+      box.appendChild(row);
+    }
+  }
+
+  function seg(id, key) {
+    document.querySelectorAll('#' + id + ' button').forEach(b => {
+      b.classList.toggle('on', cfg[key] === b.dataset.v);
+      b.onclick = () => { cfg[key] = b.dataset.v; sync(); };
+    });
+  }
+
+  function sync() {
+    seg('align', 'align');
+    seg('radius', 'radius');
+    const size = document.getElementById('size'), op = document.getElementById('opacity'), font = document.getElementById('font');
+    size.value = cfg.size; size.oninput = () => { cfg.size = +size.value; send(); };
+    op.value = cfg.opacity; op.oninput = () => { cfg.opacity = +op.value; send(); };
+    if (![...font.options].some(o => o.value === cfg.font)) font.add(new Option(cfg.font));
+    font.value = cfg.font; font.onchange = () => { cfg.font = font.value; send(); };
+    for (const k of ['uppercase', 'dot', 'animate']) {
+      const el = document.getElementById(k);
+      el.checked = cfg[k] !== false && !!cfg[k];
+      el.onchange = () => { cfg[k] = el.checked; send(); };
+    }
+    buildThemes();
+    buildStates();
+    send();
+  }
+
+  function toast(text, ok) {
+    const t = document.getElementById('toast');
+    t.textContent = text; t.style.color = ok ? '#3ddc84' : '#ff5a4f';
+    t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 3500);
+  }
+
+  async function load() {
+    saved = await (await fetch('/overlay/config', { cache: 'no-store' })).json();
+    cfg = JSON.parse(JSON.stringify(saved));
+    cfg.colors = cfg.colors || {}; cfg.texts = cfg.texts || {}; cfg.show = cfg.show || {};
+    sync();
+  }
+  preview.onload = send;
+  document.getElementById('save').onclick = async () => {
+    const r = await fetch('/overlay/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
+    if (r.ok) { saved = JSON.parse(JSON.stringify(cfg)); toast(L.saved, true); } else toast(L.failed, false);
+  };
+  document.getElementById('revert').onclick = () => { cfg = JSON.parse(JSON.stringify(saved)); sync(); };
+  document.getElementById('reset').onclick = () => { Object.assign(cfg, JSON.parse(JSON.stringify(THEMES[cfg.theme] || THEMES.glass))); sync(); };
+  load();
+</script>
+</body>
+</html>

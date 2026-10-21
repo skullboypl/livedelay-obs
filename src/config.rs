@@ -73,11 +73,13 @@ pub struct Config {
     /// (action, key combo) pairs for global hotkeys.
     pub hotkeys: Vec<(&'static str, String)>,
     pub overlay: Overlay,
+    /// overlay.json next to the ini; empty when the config came from a string.
+    pub overlay_file: std::path::PathBuf,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { listen: "127.0.0.1:1935".into(), api: "127.0.0.1:7799".into(), delay_s: 15.0, max_buffer_mb: 512, dests: vec![], hotkeys: vec![], overlay: Overlay::default() }
+        Self { listen: "127.0.0.1:1935".into(), api: "127.0.0.1:7799".into(), delay_s: 15.0, max_buffer_mb: 512, dests: vec![], hotkeys: vec![], overlay: Overlay::default(), overlay_file: Default::default() }
     }
 }
 
@@ -146,7 +148,9 @@ pub fn load(path: &Path) -> Result<Config, String> {
         std::fs::write(path, EXAMPLE).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     }
     let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    parse(&text)
+    let mut c = parse(&text)?;
+    c.overlay_file = path.with_file_name("overlay.json");
+    Ok(c)
 }
 
 #[cfg(test)]

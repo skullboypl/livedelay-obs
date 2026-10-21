@@ -38,11 +38,9 @@ Requires OBS Studio 31 or newer on Windows 10/11 x64.
 
 Add a Browser source with `http://127.0.0.1:7799/overlay` (or click **Add to scene** in the settings). Open `http://127.0.0.1:7799/overlay?preview` to see every state at once.
 
-| In the settings | Placeholders |
-|---|---|
-| Live, Arming, Armed, Delayed texts | `{s}` delay in seconds, `{buf}` seconds already buffered |
+**Look editor:** `http://127.0.0.1:7799/edit-theme` (button in the settings) with five themes (Glass, Minimal, Solid, Neon, Lower third), alignment left / center / right (right-aligned boxes grow to the left), size, font, corners, background, colours per state, capitals, status light and animations, all with a live preview. Saving applies to the overlay on stream immediately.
 
-An empty text hides the overlay in that state. Per-source options in the address: `?size=60` (font size in px), `?live=&delayed=ON%20DELAY%20{s}s`. Restyle it with the Browser source's Custom CSS (`#tag`, `.live`, `.arming`, `.armed`, `.delayed`).
+In the settings each state (Live, Arming, Armed, Delayed) has an on/off switch, its text and a small preview. `{s}` is the delay in seconds, `{buf}` the seconds already buffered. Per-source options in the address: `?size=60`, `?theme=neon`, `?align=right`, `?live=&delayed=ON%20DELAY%20{s}s`. The look is stored in `overlay.json` next to `livedelay.ini`; changing it never restarts the stream.
 
 ## Live preview
 

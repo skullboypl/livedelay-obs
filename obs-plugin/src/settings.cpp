@@ -2,6 +2,7 @@
 #include "dock.hpp"
 #include "i18n.hpp"
 #include "services.hpp"
+#include "client.hpp"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -17,6 +18,8 @@
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -148,9 +151,7 @@ std::string Settings::Text() const
 	std::ostringstream o;
 	o << "# LiveDelay settings (edited from OBS: Tools -> LiveDelay)\n\n"
 	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb << "\nlanguage = " << language
-	  << "\n\n# Overlay: {s} = delay in seconds, {buf} = how much is buffered\n"
-	  << "overlay_live = " << overlay_live << "\noverlay_arming = " << overlay_arming
-	  << "\noverlay_armed = " << overlay_armed << "\noverlay_delayed = " << overlay_delayed << "\n";
+	  << "\n";
 	for (const Destination &d : dests)
 		o << "\n[dest " << d.name << "]\nservice = " << d.service << "\nurl = " << d.url << "\nkey = " << d.key
 		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\nautostart = " << (d.autostart ? "yes" : "no") << "\n";
@@ -400,21 +401,45 @@ public:
 		auto *preview = new QPushButton(T("Settings.Preview"));
 		preview->setToolTip(T("Settings.PreviewTip"));
 		auto *toScene = new QPushButton(T("Settings.AddToScene"));
+		auto *editor = new QPushButton(T("Settings.ThemeEditor"));
+		editor->setToolTip(T("Settings.ThemeEditorTip"));
 		auto *urlRow = new QHBoxLayout;
 		urlRow->addWidget(urlLine, 1);
 		urlRow->addWidget(copy);
 		urlRow->addWidget(preview);
 		urlRow->addWidget(toScene);
-		auto *ovLive = new QLineEdit(Q(s_.overlay_live));
-		auto *ovArming = new QLineEdit(Q(s_.overlay_arming));
-		auto *ovArmed = new QLineEdit(Q(s_.overlay_armed));
-		auto *ovDelayed = new QLineEdit(Q(s_.overlay_delayed));
+		// Per state: show it or not, its text, and how it will look.
+		overlay_ = QJsonDocument::fromJson(QByteArray::fromStdString(Request("GET", "/overlay/config"))).object();
+		const QJsonObject texts = overlay_.value("texts").toObject(), showMap = overlay_.value("show").toObject(),
+				  colors = overlay_.value("colors").toObject();
 		auto *ovForm = new QFormLayout;
 		ovForm->addRow(T("Settings.Address"), urlRow);
-		ovForm->addRow(T("Settings.Live"), ovLive);
-		ovForm->addRow(T("Settings.Arming"), ovArming);
-		ovForm->addRow(T("Settings.Armed"), ovArmed);
-		ovForm->addRow(T("Settings.Delayed"), ovDelayed);
+		const char *kinds[] = {"live", "arming", "armed", "delayed"};
+		const char *labels[] = {"Settings.Live", "Settings.Arming", "Settings.Armed", "Settings.Delayed"};
+		for (int i = 0; i < 4; i++) {
+			OverlayRow &r = rows_[i];
+			r.kind = kinds[i];
+			r.color = colors.value(r.kind).toString("#3ddc84");
+			r.show = new QCheckBox;
+			r.show->setToolTip(T("Settings.ShowState"));
+			r.show->setChecked(showMap.value(r.kind).toBool(true));
+			r.text = new QLineEdit(texts.value(r.kind).toString());
+			r.preview = new QLabel;
+			r.preview->setMinimumWidth(150);
+			auto *line = new QHBoxLayout;
+			line->addWidget(r.show);
+			line->addWidget(r.text, 1);
+			line->addWidget(r.preview);
+			ovForm->addRow(T(labels[i]), line);
+			auto update = [this, i] { UpdateOverlayPreview(rows_[i]); };
+			connect(r.show, &QCheckBox::toggled, this, update);
+			connect(r.text, &QLineEdit::textChanged, this, update);
+			UpdateOverlayPreview(r);
+		}
+		auto *editorRow = new QHBoxLayout;
+		editorRow->addWidget(Hint(T("Settings.ThemeEditorAbout")), 1);
+		editorRow->addWidget(editor);
+		ovForm->addRow(QString(), editorRow);
 		auto *ovBox = new QGroupBox(T("Settings.Overlay"));
 		auto *ovLayout = new QVBoxLayout(ovBox);
 		ovLayout->addWidget(Hint(T("Settings.OverlayAbout")));
@@ -493,6 +518,11 @@ public:
 		connect(preview, &QPushButton::clicked, this,
 			[] { QDesktopServices::openUrl(QUrl(Q(OverlayUrl() + "?preview"))); });
 		connect(toScene, &QPushButton::clicked, this, [this] { AddOverlayToScene(this); });
+		connect(editor, &QPushButton::clicked, this, [] {
+			const char *locale = obs_get_locale();
+			QDesktopServices::openUrl(QUrl(Q(OverlayUrl().substr(0, OverlayUrl().size() - 8) + "/edit-theme?lang=" +
+						      std::string(locale ? locale : "en").substr(0, 2))));
+		});
 		connect(support, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(kSupportUrl)); });
 		connect(wizard, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(kSmoothWizardUrl)); });
 		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
@@ -500,10 +530,7 @@ public:
 			Store();
 			s_.delay = delay->value();
 			s_.max_buffer_mb = buffer->value();
-			s_.overlay_live = S(ovLive->text());
-			s_.overlay_arming = S(ovArming->text());
-			s_.overlay_armed = S(ovArmed->text());
-			s_.overlay_delayed = S(ovDelayed->text());
+			SaveOverlay();
 			s_.language = S(language_->currentData().toString());
 			SaveAndRestart();
 		});
@@ -513,6 +540,48 @@ public:
 	}
 
 private:
+	struct OverlayRow {
+		QString kind, color;
+		QCheckBox *show = nullptr;
+		QLineEdit *text = nullptr;
+		QLabel *preview = nullptr;
+	};
+
+	// A rough stand-in for the overlay pill, with the sample values the preview page uses.
+	void UpdateOverlayPreview(OverlayRow &r)
+	{
+		QString t = r.text->text();
+		t.replace("{s}", "25").replace("{buf}", "12");
+		const bool on = r.show->isChecked() && !t.trimmed().isEmpty();
+		r.text->setEnabled(r.show->isChecked());
+		r.preview->setTextFormat(Qt::RichText);
+		r.preview->setText(on ? QString("<span style='color:%1'>&#9679;</span>&nbsp;%2").arg(r.color, t.toHtmlEscaped())
+				      : T("Settings.StateHidden"));
+		r.preview->setStyleSheet(on ? "background: rgba(20,22,29,.9); color: #f3f4f7; border-radius: 10px; padding: 3px 10px; font-weight: 600;"
+					    : "color: palette(placeholder-text); padding: 3px 10px; font-style: italic;");
+	}
+
+	// Texts and on/off go straight to the running overlay; no restart needed.
+	void SaveOverlay()
+	{
+		if (overlay_.isEmpty())
+			return;
+		QJsonObject texts = overlay_.value("texts").toObject(), show = overlay_.value("show").toObject();
+		for (const OverlayRow &r : rows_) {
+			texts[r.kind] = r.text->text().trimmed();
+			show[r.kind] = r.show->isChecked();
+		}
+		QJsonObject next = overlay_;
+		next["texts"] = texts;
+		next["show"] = show;
+		if (next == overlay_)
+			return;
+		int status = 0;
+		Request("POST", "/overlay/config", QJsonDocument(next).toJson(QJsonDocument::Compact).toStdString(), &status);
+		if (status != 200)
+			QMessageBox::warning(this, "LiveDelay", T("Settings.SaveFailed"));
+	}
+
 	// Lists the servers (regions) of `service`, selecting the one matching `url`.
 	void FillServers(const QString &service, const QString &url)
 	{
@@ -623,6 +692,8 @@ private:
 
 	Settings s_;
 	Settings original_;
+	QJsonObject overlay_;
+	OverlayRow rows_[4];
 	QComboBox *language_;
 	int current_ = -1;
 	QListWidget *list_;

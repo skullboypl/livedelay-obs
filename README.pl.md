@@ -38,7 +38,9 @@ Wymaga OBS Studio 31 lub nowszego, Windows 10/11 x64.
 
 Dodaj źródło Przeglądarka z adresem `http://127.0.0.1:7799/overlay` (albo kliknij **Dodaj do sceny** w ustawieniach). `http://127.0.0.1:7799/overlay?preview` pokazuje wszystkie stany naraz.
 
-W ustawieniach zmienisz teksty dla stanów Na żywo, Uzbrajanie, Uzbrojone i Opóźnienie. `{s}` to opóźnienie w sekundach, `{buf}` to ile sekund jest już w buforze. Pusty tekst ukrywa overlay w danym stanie. Opcje dla jednego źródła w adresie: `?size=60` (rozmiar czcionki w px), `?live=&delayed=OPÓŹNIENIE%20{s}s`. Wygląd zmienisz polem „Własny CSS” w źródle (`#tag`, `.live`, `.arming`, `.armed`, `.delayed`).
+**Edytor wyglądu:** `http://127.0.0.1:7799/edit-theme` (przycisk w ustawieniach) z pięcioma motywami (Szkło, Minimalny, Pełny kolor, Neon, Belka TV), wyrównaniem lewo / środek / prawo (przy prawym pudełko rośnie w lewo), rozmiarem, czcionką, rogami, tłem, kolorami stanów, wielkimi literami, lampką i animacjami, wszystko z podglądem na żywo. Zapis od razu działa na overlayu na streamie.
+
+W ustawieniach każdy stan (Na żywo, Uzbrajanie, Uzbrojone, Opóźnienie) ma przełącznik wł./wył., tekst i mały podgląd. `{s}` to opóźnienie w sekundach, `{buf}` ile sekund jest już w buforze. Opcje dla jednego źródła w adresie: `?size=60`, `?theme=neon`, `?align=right`, `?live=&delayed=OPÓŹNIENIE%20{s}s`. Wygląd jest zapisany w `overlay.json` obok `livedelay.ini`; jego zmiana nigdy nie restartuje streamu.
 
 ## Podgląd na żywo
 

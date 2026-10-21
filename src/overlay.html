@@ -4,34 +4,27 @@
 <meta charset="utf-8">
 <title>LiveDelay overlay</title>
 <style>
-  /* Restyle with the Browser source's "Custom CSS": #tag, .live, .arming, .armed, .delayed */
-  :root { --size: 30px; --green: #3ddc84; --amber: #ffbf3c; --red: #ff5a4f; --ink: #f3f4f7; }
+  /* Look comes from /overlay/config (edit it at /edit-theme). The Browser source's
+     Custom CSS can still override anything: #tag, .live, .arming, .armed, .delayed */
+  :root { --size: 30px; --font: "Segoe UI"; --radius: 999px; --alpha: .78; --accent: #3ddc84; --ink: #f3f4f7; }
   html, body { margin: 0; background: transparent; overflow: hidden; }
-  body { font: 650 var(--size)/1 "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
-         letter-spacing: .03em; padding: .5em; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  body { display: flex; padding: .5em; box-sizing: border-box; width: 100vw;
+         font: 650 var(--size)/1 var(--font), "Segoe UI", system-ui, sans-serif; letter-spacing: .03em;
+         color: var(--ink); -webkit-font-smoothing: antialiased; }
+  body.align-left { justify-content: flex-start; }
+  body.align-center { justify-content: center; }
+  body.align-right { justify-content: flex-end; }
+  body.upper #text { text-transform: uppercase; letter-spacing: .07em; }
 
   #tag {
-    --accent: var(--green);
-    position: relative; display: inline-flex; align-items: center; gap: .55em;
-    padding: .48em .95em .48em .7em; border-radius: 999px; overflow: hidden;
-    background: linear-gradient(180deg, rgba(28, 31, 40, .78), rgba(14, 16, 22, .78));
-    border: 1px solid rgba(255, 255, 255, .09);
-    box-shadow: 0 .25em .9em rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .06);
-    transition: opacity .45s ease, transform .45s cubic-bezier(.2, .9, .25, 1.15),
-                background .6s ease, border-color .6s ease;
-    will-change: transform, opacity;
+    position: relative; display: inline-flex; align-items: center; gap: .55em; flex: none;
+    padding: .48em .95em .48em .7em; border-radius: var(--radius); overflow: hidden;
+    transition: opacity .45s ease, transform .45s cubic-bezier(.2, .9, .25, 1.15), background .6s, border-color .6s, color .6s, box-shadow .6s;
   }
   #tag.hidden { opacity: 0; transform: translateY(-.35em) scale(.92); }
-  #tag.arming, #tag.armed { --accent: var(--amber); }
-  #tag.delayed {
-    --accent: var(--red);
-    background: linear-gradient(180deg, rgba(70, 22, 24, .82), rgba(38, 12, 14, .82));
-    border-color: rgba(255, 90, 79, .35);
-  }
-
-  /* Status light: a dot with a soft ring that breathes. */
   #dot { position: relative; width: .52em; height: .52em; flex: none; border-radius: 50%;
          background: var(--accent); box-shadow: 0 0 .5em var(--accent); transition: background .6s, box-shadow .6s; }
+  body.nodot #dot { display: none; }
   #dot::after { content: ""; position: absolute; inset: -.32em; border-radius: 50%;
                 border: .09em solid var(--accent); opacity: 0; animation: ring 2.4s ease-out infinite; }
   .arming #dot::after { animation-duration: 1.1s; }
@@ -39,51 +32,101 @@
   .delayed #dot { animation: beat 1.6s ease-in-out infinite; }
   @keyframes ring { 0% { transform: scale(.55); opacity: .75; } 100% { transform: scale(1.35); opacity: 0; } }
   @keyframes beat { 50% { transform: scale(.82); box-shadow: 0 0 .9em var(--accent); } }
-
-  /* Text swaps with a short slide instead of a hard cut. */
   #text { position: relative; white-space: nowrap; }
   #text span { display: inline-block; animation: swap .42s cubic-bezier(.2, .9, .25, 1) both; }
   @keyframes swap { from { opacity: 0; transform: translateY(.45em); filter: blur(2px); } }
-
-  /* Buffer fill while arming: a thin line along the bottom edge. */
   #fill { position: absolute; left: 0; bottom: 0; height: .09em; width: 0; background: var(--accent);
-          opacity: 0; transition: width .9s linear, opacity .4s; border-radius: 0 2px 2px 0; }
+          opacity: 0; transition: width .9s linear, opacity .4s; }
   .arming #fill { opacity: .9; }
+  body.still *, body.still *::after { animation: none !important; transition: none !important; }
 
-  /* Preview page only. */
-  body.preview { overflow: auto; min-height: 100vh; box-sizing: border-box; padding: 28px;
+  /* Themes */
+  [data-theme="glass"] #tag {
+    background: linear-gradient(180deg, rgba(28, 31, 40, var(--alpha)), rgba(14, 16, 22, var(--alpha)));
+    border: 1px solid rgba(255, 255, 255, .09);
+    box-shadow: 0 .25em .9em rgba(0, 0, 0, .35), inset 0 1px 0 rgba(255, 255, 255, .06);
+  }
+  [data-theme="glass"] #tag.delayed {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 28%, rgba(20, 12, 14, var(--alpha))), rgba(30, 10, 12, var(--alpha)));
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+  [data-theme="minimal"] #tag { padding-left: .2em; padding-right: .2em; text-shadow: 0 .06em .25em rgba(0, 0, 0, .85), 0 0 .08em rgba(0, 0, 0, .9); }
+  [data-theme="solid"] #tag { background: color-mix(in srgb, var(--accent) calc(var(--alpha) * 100%), transparent); color: #101216;
+                              box-shadow: 0 .2em .8em rgba(0, 0, 0, .3); font-weight: 800; }
+  [data-theme="solid"] #dot { background: #101216; box-shadow: none; }
+  [data-theme="solid"] #dot::after { border-color: #101216; }
+  [data-theme="solid"] #fill { background: #101216; opacity: .55; }
+  [data-theme="neon"] #tag { background: rgba(6, 7, 12, var(--alpha)); border: .07em solid var(--accent); color: var(--accent);
+                             box-shadow: 0 0 .6em color-mix(in srgb, var(--accent) 55%, transparent), inset 0 0 .5em color-mix(in srgb, var(--accent) 25%, transparent);
+                             text-shadow: 0 0 .35em color-mix(in srgb, var(--accent) 80%, transparent); }
+  [data-theme="bar"] #tag { padding-left: 1em; background: rgba(12, 14, 19, var(--alpha)); box-shadow: 0 .2em .8em rgba(0, 0, 0, .35); }
+  [data-theme="bar"] #tag::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: .28em; background: var(--accent); transition: background .6s; }
+  [data-theme="bar"] #dot { display: none; }
+
+  /* Preview page */
+  body.preview { display: block; overflow: auto; min-height: 100vh; padding: 28px;
     background: repeating-conic-gradient(#272a31 0 25%, #1d1f25 0 50%) 0 0 / 24px 24px; }
+  body.preview.align-center .row { justify-content: center; }
+  body.preview.align-right .row { justify-content: flex-end; }
   .row { display: flex; align-items: center; gap: 18px; margin-bottom: 20px; }
   .row code { font: 500 13px/1.2 ui-monospace, Consolas, monospace; color: #b8bcc6; }
-  .row #tag.empty { opacity: .4; font-style: italic; }
+  .row #tag.empty { opacity: .35; font-style: italic; }
+  body.preview.thumb { padding: 14px 12px; overflow: hidden; }
+  body.thumb .row { margin: 0; justify-content: flex-start !important; }
+  body.thumb .row code { display: none; }
 </style>
 </head>
-<body>
+<body data-theme="glass" class="align-left">
 <div id="tag" class="hidden"><span id="dot"></span><span id="text"></span><span id="fill"></span></div>
 <script>
-  // Texts come from LiveDelay's settings; ?live=…&arming=…&armed=…&delayed=… overrides them
-  // per source, ?size=40 sets the font size in px.
-  const texts = __TEXTS__;
   const q = new URLSearchParams(location.search);
-  for (const k of Object.keys(texts)) if (q.has(k)) texts[k] = q.get(k);
-  if (q.has('size')) document.documentElement.style.setProperty('--size', q.get('size') + 'px');
+  const preview = q.has('preview');
+  const KINDS = ['live', 'arming', 'armed', 'delayed'];
+  const RADIUS = { pill: '999px', rounded: '.35em', square: '0' };
+  let cfg = { theme: 'glass', align: 'left', size: 30, font: 'Segoe UI', uppercase: false, dot: true, animate: true,
+              radius: 'pill', opacity: .78, colors: {}, texts: {}, show: {} };
 
-  function describe(s) {
+  // ?live=…&size=40&theme=neon&align=right override the saved look for one source.
+  function effective(c) {
+    const e = JSON.parse(JSON.stringify(c));
+    e.texts = e.texts || {}; e.show = e.show || {}; e.colors = e.colors || {};
+    for (const k of KINDS) if (q.has(k)) { e.texts[k] = q.get(k); e.show[k] = q.get(k) !== ''; }
+    for (const k of ['theme', 'align', 'font']) if (q.has(k)) e[k] = q.get(k);
+    if (q.has('size')) e.size = +q.get('size');
+    return e;
+  }
+
+  function applyLook(c) {
+    const b = document.body, r = document.documentElement.style;
+    b.dataset.theme = c.theme || 'glass';
+    b.classList.remove('align-left', 'align-center', 'align-right');
+    b.classList.add('align-' + (c.align || 'left'));
+    b.classList.toggle('upper', !!c.uppercase);
+    b.classList.toggle('nodot', c.dot === false);
+    b.classList.toggle('still', c.animate === false);
+    r.setProperty('--size', (c.size || 30) + 'px');
+    r.setProperty('--font', '"' + String(c.font || 'Segoe UI').replace(/"/g, '') + '"');
+    r.setProperty('--radius', RADIUS[c.radius] || RADIUS.pill);
+    r.setProperty('--alpha', c.opacity ?? .78);
+  }
+
+  function describe(s, c) {
     let kind = 'live', secs = 0;
     if (s.mode === 'delayed') { kind = 'delayed'; secs = s.delay; }
     else if (s.arm_delay !== null && s.armed) { kind = 'armed'; secs = s.arm_delay; }
     else if (s.arm_delay !== null) { kind = 'arming'; secs = s.arm_delay; }
+    const shown = c.show[kind] !== false;
     const buf = Math.min(Math.floor(s.buffer_s), Math.round(secs));
-    const text = (texts[kind] || '').replaceAll('{s}', Math.round(secs)).replaceAll('{buf}', buf);
+    const text = shown ? (c.texts[kind] || '').replaceAll('{s}', Math.round(secs)).replaceAll('{buf}', buf) : '';
     return { kind, text, fill: kind === 'arming' && secs ? Math.min(1, s.buffer_s / secs) : 0 };
   }
 
-  function render(tag, d, animate) {
+  function render(tag, d, c, animate) {
     const text = tag.querySelector('#text');
-    // Slide the text in only when the state changes, not on every buffer tick.
+    tag.style.setProperty('--accent', c.colors[d.kind] || '#3ddc84');
     const newKind = tag.dataset.kind !== d.kind;
     tag.dataset.kind = d.kind;
-    if (text.textContent !== d.text) {
+    if (text.textContent !== d.text || !text.firstChild) {
       if (newKind || !text.firstChild) {
         text.innerHTML = '';
         const span = document.createElement('span');
@@ -96,34 +139,62 @@
     tag.className = d.text ? d.kind : 'hidden ' + d.kind;
   }
 
+  const SAMPLES = {
+    live: { mode: 'live', arm_delay: null, armed: false, delay: 0, buffer_s: 0 },
+    arming: { mode: 'live', arm_delay: 25, armed: false, delay: 0, buffer_s: 12 },
+    armed: { mode: 'live', arm_delay: 25, armed: true, delay: 0, buffer_s: 25 },
+    delayed: { mode: 'delayed', arm_delay: 25, armed: true, delay: 25, buffer_s: 30 },
+  };
   const tag = document.getElementById('tag');
-  if (q.has('preview')) {
-    // Every state at once with sample values (25 s delay, 12 s buffered).
-    document.body.classList.add('preview');
-    const samples = [
-      ['live', { mode: 'live', arm_delay: null, armed: false, delay: 0, buffer_s: 0 }],
-      ['arming', { mode: 'live', arm_delay: 25, armed: false, delay: 0, buffer_s: 12 }],
-      ['armed', { mode: 'live', arm_delay: 25, armed: true, delay: 0, buffer_s: 25 }],
-      ['delayed', { mode: 'delayed', arm_delay: 25, armed: true, delay: 25, buffer_s: 30 }],
-    ];
-    tag.remove();
-    for (const [name, s] of samples) {
+
+  function drawPreview(c) {
+    document.querySelectorAll('.row').forEach(r => r.remove());
+    for (const name of KINDS) {
+      if (q.get('only') && q.get('only') !== name) continue;
       const row = document.createElement('div');
       row.className = 'row';
       const t = tag.cloneNode(true);
       const code = document.createElement('code');
-      code.textContent = name;
+      code.textContent = name + (c.show[name] === false ? ' · off' : '');
       row.append(t, code);
       document.body.appendChild(row);
-      const d = describe(s);
-      if (!d.text) d.text = '(hidden)';
-      render(t, d, false);
-      if (d.text === '(hidden)') t.className = name + ' empty';
+      const d = describe(SAMPLES[name], { ...c, show: { ...c.show, [name]: true } });
+      const hidden = c.show[name] === false || !d.text;
+      if (!d.text) d.text = '(empty)';
+      render(t, d, c, false);
+      if (hidden) t.className = name + ' empty';
     }
-  } else {
-    let first = true;
+  }
+
+  let current = cfg, lastState = null, first = true, rev = -1;
+  function refresh() {
+    applyLook(current);
+    if (preview) drawPreview(current);
+    else if (lastState) { render(tag, describe(lastState, current), current, !first); first = false; }
+  }
+  async function loadConfig() {
+    try { cfg = await (await fetch('/overlay/config', { cache: 'no-store' })).json(); } catch (e) {}
+    current = effective(cfg);
+    refresh();
+  }
+
+  if (preview) {
+    document.body.classList.add('preview');
+    document.body.classList.toggle('thumb', q.has('thumb'));
+    tag.remove();
+    // The theme editor sends unsaved drafts here for a live preview.
+    addEventListener('message', (e) => {
+      if (e.origin === location.origin && e.data && e.data.type === 'ld-config') { current = effective(e.data.config); refresh(); }
+    });
+  }
+  loadConfig();
+  if (!preview) {
     const es = new EventSource('/events');
-    es.onmessage = (e) => { render(tag, describe(JSON.parse(e.data)), !first); first = false; };
+    es.onmessage = (e) => {
+      const s = JSON.parse(e.data);
+      lastState = s;
+      if (s.overlay_rev !== rev) { rev = s.overlay_rev; loadConfig(); } else refresh();
+    };
     es.onerror = () => { tag.className = 'hidden'; first = true; };
   }
 </script>
