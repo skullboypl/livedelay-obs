@@ -1,14 +1,12 @@
-# LiveDelay installer for end users (Windows x64).
-# Run from the unzipped release folder (next to obs-plugins\ and data\), or from this repo.
-# Prefer ProgramData (no admin). Portable OBS: pick the folder that contains obs64.exe / bin\64bit.
+﻿# LiveDelay installer for end users (Windows x64).
+# Run from the unzipped release (next to obs-plugins\ and data\), or from this repo.
+# Prefer ProgramData (no admin). Portable: -IntoObsFolder -ObsRoot "D:\obs-studio"
+# ASCII-only on purpose: Windows PowerShell 5.1 breaks UTF-8 scripts without BOM.
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-	# OBS root (folder with bin\64bit\obs64.exe) or empty = auto / pick
 	[string]$ObsRoot = '',
-	# Force Program Files layout into $ObsRoot (needs write access / often admin)
 	[switch]$IntoObsFolder,
-	# Skip GUI folder picker when auto-detect fails
 	[switch]$NoPrompt
 )
 
@@ -29,14 +27,15 @@ function Find-ReleasePayload {
 	foreach ($c in $candidates) {
 		if ((Test-Path -LiteralPath $c.Dll) -and (Test-Path -LiteralPath $c.Data)) { return $c }
 	}
-	throw "Nie znaleziono livedelay-obs.dll + data. Uruchom skrypt z rozpakowanego zipa LiveDelay (obok folderow obs-plugins i data)."
+	throw "livedelay-obs.dll + data not found. Run this script from the unzipped LiveDelay zip (next to obs-plugins and data)."
 }
 
 function Get-ObsVersion([string]$obsExe) {
 	try {
-		$v = [version](Get-Item -LiteralPath $obsExe).VersionInfo.FileVersion
-		return $v
-	} catch { return $null }
+		return [version](Get-Item -LiteralPath $obsExe).VersionInfo.FileVersion
+	} catch {
+		return $null
+	}
 }
 
 function Find-ObsRoots {
@@ -50,44 +49,36 @@ function Find-ObsRoots {
 	}
 	& $add 'C:\Program Files\obs-studio'
 	& $add 'C:\Program Files (x86)\obs-studio'
-	# Installer registry
-	foreach ($key in @(
-		'HKLM:\SOFTWARE\OBS Studio',
-		'HKLM:\SOFTWARE\WOW6432Node\OBS Studio'
-	)) {
+	foreach ($key in @('HKLM:\SOFTWARE\OBS Studio', 'HKLM:\SOFTWARE\WOW6432Node\OBS Studio')) {
 		if (Test-Path $key) {
 			$val = (Get-ItemProperty $key -ErrorAction SilentlyContinue).'(default)'
 			if (-not $val) { $val = (Get-ItemProperty $key -ErrorAction SilentlyContinue).InstallPath }
 			& $add $val
 		}
 	}
-	# Uninstall entry
 	Get-ChildItem 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue |
 		ForEach-Object {
 			$p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
 			if ($p.DisplayName -match 'OBS Studio' -and $p.InstallLocation) { & $add $p.InstallLocation }
 		}
-	# Steam
-	$steamLibs = @(
+	foreach ($s in @(
 		'C:\Program Files (x86)\Steam\steamapps\common\OBS Studio',
 		'C:\Program Files\Steam\steamapps\common\OBS Studio'
-	)
-	foreach ($s in $steamLibs) { & $add $s }
+	)) { & $add $s }
 	return $list | Select-Object -Unique
 }
 
 function Pick-ObsRoot {
 	$dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-	$dlg.Description = "Wybierz folder OBS (ten z bin\64bit\obs64.exe) albo folder portable."
+	$dlg.Description = 'Select OBS folder (the one with bin\64bit\obs64.exe) or portable root.'
 	$dlg.ShowNewFolderButton = $false
 	if ($dlg.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
 	$root = $dlg.SelectedPath.TrimEnd('\')
 	if (Test-Path -LiteralPath (Join-Path $root 'bin\64bit\obs64.exe')) { return $root }
 	if (Test-Path -LiteralPath (Join-Path $root 'obs64.exe')) {
-		# User picked bin\64bit
 		return (Split-Path (Split-Path $root -Parent) -Parent)
 	}
-	Write-Warn "W wybranym folderze nie ma bin\64bit\obs64.exe."
+	Write-Warn 'Selected folder has no bin\64bit\obs64.exe.'
 	return $null
 }
 
@@ -97,15 +88,14 @@ function Install-ToProgramData([string]$dllSrc, [string]$dataSrc, [version]$obsV
 	$legacyBin = Join-Path $root 'bin\64bit'
 	New-Item -ItemType Directory -Force -Path $dataDst, $legacyBin | Out-Null
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $legacyBin 'livedelay-obs.dll') -Force
-	# OBS 33+: flat layout (DLL next to data). Harmless on older OBS (ignored).
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $root 'livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force
-	Write-Ok "Zainstalowano do ProgramData (bez admina):"
+	Write-Ok "Installed to ProgramData (no admin):"
 	Write-Host "  $root"
 	if ($obsVer -and $obsVer.Major -ge 33) {
-		Write-Info "OBS $($obsVer.Major)+ -> uklad nowy (DLL w folderze wtyczki) + legacy bin\64bit."
+		Write-Info "OBS $($obsVer.Major)+ -> flat DLL + legacy bin\64bit."
 	} else {
-		Write-Info "OBS laduje: …\livedelay-obs\bin\64bit\livedelay-obs.dll"
+		Write-Info "OBS loads: ...\livedelay-obs\bin\64bit\livedelay-obs.dll"
 	}
 	return $root
 }
@@ -116,23 +106,21 @@ function Install-IntoObsTree([string]$obsRoot, [string]$dllSrc, [string]$dataSrc
 	New-Item -ItemType Directory -Force -Path (Split-Path $dllDst), $dataDst | Out-Null
 	Copy-Item -LiteralPath $dllSrc -Destination $dllDst -Force
 	Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force
-	# Portable OBS 33+ also reads <root>\plugins\livedelay-obs\
 	$portable = Join-Path $obsRoot 'plugins\livedelay-obs'
 	New-Item -ItemType Directory -Force -Path (Join-Path $portable 'data'), (Join-Path $portable 'bin\64bit') | Out-Null
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $portable 'livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $portable 'bin\64bit\livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination (Join-Path $portable 'data') -Recurse -Force
-	Write-Ok "Skopiowano do folderu OBS: $obsRoot"
-	Write-Warn "Uklad obs-plugins\64bit jest legacy (OBS 34 moze go pominac). ProgramData jest zalecany."
+	Write-Ok "Copied into OBS folder: $obsRoot"
+	Write-Warn "obs-plugins\64bit is legacy (OBS 34 may skip it). ProgramData is preferred."
 }
 
-# --- main ---
 Write-Host ""
-Write-Host " LiveDelay - instalator wtyczki OBS" -ForegroundColor White
-Write-Host " ==================================" -ForegroundColor DarkGray
+Write-Host " LiveDelay - OBS plugin installer" -ForegroundColor White
+Write-Host " ================================" -ForegroundColor DarkGray
 
 if (Get-Process obs64, obs32 -ErrorAction SilentlyContinue) {
-	Write-Err "Zamknij OBS i uruchom instalator ponownie."
+	Write-Err "Close OBS and run the installer again."
 	exit 1
 }
 
@@ -148,20 +136,21 @@ if (-not $obsRoot) {
 	if ($obsRoots.Count -eq 1) {
 		$obsRoot = $obsRoots[0]
 	} elseif ($obsRoots.Count -gt 1) {
-		Write-Info "Znalezione instalacje OBS:"
+		Write-Info "Found OBS installs:"
 		for ($i = 0; $i -lt $obsRoots.Count; $i++) {
 			$v = Get-ObsVersion (Join-Path $obsRoots[$i] 'bin\64bit\obs64.exe')
-			Write-Host ("  [{0}] {1}  (v{2})" -f ($i + 1), $obsRoots[$i], $(if ($v) { $v } else { '?' }))
+			$label = if ($v) { $v } else { '?' }
+			Write-Host ("  [{0}] {1}  (v{2})" -f ($i + 1), $obsRoots[$i], $label)
 		}
 		if (-not $NoPrompt) {
-			$pick = Read-Host "Numer instalacji (Enter = ProgramData bez wskazywania OBS)"
+			$pick = Read-Host "Install number (Enter = ProgramData only)"
 			if ($pick -match '^\d+$') {
 				$n = [int]$pick - 1
 				if ($n -ge 0 -and $n -lt $obsRoots.Count) { $obsRoot = $obsRoots[$n] }
 			}
 		}
 	} elseif (-not $NoPrompt) {
-		Write-Warn "Nie znaleziono OBS automatycznie."
+		Write-Warn "OBS not found automatically."
 		$obsRoot = Pick-ObsRoot
 	}
 }
@@ -169,54 +158,52 @@ if (-not $obsRoot) {
 if ($obsRoot) {
 	$obsExe = Join-Path $obsRoot 'bin\64bit\obs64.exe'
 	if (-not (Test-Path -LiteralPath $obsExe)) {
-		Write-Err "Brak obs64.exe w: $obsRoot"
+		Write-Err "obs64.exe missing in: $obsRoot"
 		exit 1
 	}
 }
 
 $ver = if ($obsExe) { Get-ObsVersion $obsExe } else { $null }
 if ($ver) {
-	Write-Info "OBS: $obsRoot (wersja pliku $ver)"
+	Write-Info "OBS: $obsRoot (file version $ver)"
 	if ($ver.Major -lt 31) {
-		Write-Err "LiveDelay wymaga OBS Studio 31+. Masz $ver — zaktualizuj OBS."
+		Write-Err "LiveDelay needs OBS Studio 31+. You have $ver - update OBS."
 		exit 1
 	}
 }
 
-# Default: ProgramData (works for normal installs; portable ignores ProgramData)
 Install-ToProgramData -dllSrc $payload.Dll -dataSrc $payload.Data -obsVer $ver | Out-Null
 
 $portableHint = $false
 if ($obsRoot) {
-	# Heuristic: no Program Files / Steam "common" still can be portable if portable_mode file exists
-	if (Test-Path -LiteralPath (Join-Path $obsRoot 'portable_mode') -or
-		Test-Path -LiteralPath (Join-Path $obsRoot 'portable_mode.txt')) {
+	if ((Test-Path -LiteralPath (Join-Path $obsRoot 'portable_mode')) -or
+		(Test-Path -LiteralPath (Join-Path $obsRoot 'portable_mode.txt'))) {
 		$portableHint = $true
 	}
 }
 
 if ($IntoObsFolder -or $portableHint) {
 	if (-not $obsRoot) {
-		Write-Err "Tryb IntoObsFolder / portable wymaga wskazania folderu OBS."
+		Write-Err "IntoObsFolder / portable needs -ObsRoot."
 		exit 1
 	}
 	try {
 		Install-IntoObsTree -obsRoot $obsRoot -dllSrc $payload.Dll -dataSrc $payload.Data
 	} catch {
-		Write-Err "Nie udalo sie zapisac do folderu OBS (brak uprawnien?). Uruchom PowerShell jako administrator albo uzyj samego ProgramData."
+		Write-Err "Could not write into OBS folder (permissions?). Run as admin or use ProgramData only."
 		Write-Err "$_"
 		exit 1
 	}
 } elseif ($obsRoot -and -not $NoPrompt) {
 	Write-Host ""
-	Write-Info "Domyslnie wgrano do ProgramData (zalecane, bez admina)."
-	Write-Info "Jesli uzywasz OBS portable — uruchom ponownie z: -IntoObsFolder -ObsRoot `"$obsRoot`""
+	Write-Info "Default install is ProgramData (recommended, no admin)."
+	Write-Info "Portable OBS: re-run with -IntoObsFolder -ObsRoot `"$obsRoot`""
 }
 
 Write-Host ""
-Write-Ok "Gotowe. Uruchom OBS -> Panele -> LiveDelay / Narzedzia -> LiveDelay."
-Write-Host "Jesli nadal 'wtyczki nie zaladowaly sie':"
-Write-Host "  1) %AppData%\obs-studio\logs\  -> ostatni log, szukaj [livedelay] albo LoadLibrary"
-Write-Host "  2) Zainstaluj VC++ Redistributable x64 (Visual Studio 2015-2022)"
-Write-Host "  3) OBS 31+ x64 (nie 32-bit / nie zbyt stary Steam build)"
+Write-Ok "Done. Start OBS -> Docks -> LiveDelay / Tools -> LiveDelay."
+Write-Host "If plugins still fail to load:"
+Write-Host "  1) %AppData%\obs-studio\logs\  -> last log, search livedelay or LoadLibrary"
+Write-Host "  2) Install VC++ Redistributable x64 (VS 2015-2022)"
+Write-Host "  3) OBS 31+ x64 (not 32-bit / not an ancient Steam build)"
 Write-Host ""
