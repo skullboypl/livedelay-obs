@@ -12,6 +12,7 @@ struct Destination {
 	std::string name, url, key;
 	bool enabled = true;
 	bool autostart = true;
+	std::string service; // name from OBS's service list, empty = custom server
 };
 
 struct Settings {

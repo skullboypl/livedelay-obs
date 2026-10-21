@@ -1,6 +1,7 @@
 #include "settings.hpp"
 #include "dock.hpp"
 #include "i18n.hpp"
+#include "services.hpp"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -64,18 +65,6 @@ std::string S(const QString &s)
 	return s.trimmed().toStdString();
 }
 
-struct Preset {
-	const char *name;
-	const char *url;
-};
-
-const Preset kPresets[] = {
-	{"Twitch", "rtmp://live.twitch.tv/app"},
-	{"YouTube", "rtmp://a.rtmp.youtube.com/live2"},
-	{"Kick", "rtmps://fa723fc1b171.global-contribute.live-video.net/app"},
-	{"Facebook", "rtmps://live-api-s.facebook.com:443/rtmp"},
-};
-
 } // namespace
 
 Settings Settings::Load(const std::string &path)
@@ -105,6 +94,8 @@ Settings Settings::Load(const std::string &path)
 		if (dest) {
 			if (k == "url")
 				dest->url = v;
+			else if (k == "service")
+				dest->service = v;
 			else if (k == "key")
 				dest->key = v;
 			else if (k == "enabled")
@@ -146,7 +137,7 @@ bool Settings::Save(const std::string &path) const
 	  << "overlay_live = " << overlay_live << "\noverlay_arming = " << overlay_arming
 	  << "\noverlay_armed = " << overlay_armed << "\noverlay_delayed = " << overlay_delayed << "\n";
 	for (const Destination &d : dests)
-		o << "\n[dest " << d.name << "]\nurl = " << d.url << "\nkey = " << d.key
+		o << "\n[dest " << d.name << "]\nservice = " << d.service << "\nurl = " << d.url << "\nkey = " << d.key
 		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\nautostart = " << (d.autostart ? "yes" : "no") << "\n";
 	std::string tmp = path + ".tmp";
 	{
@@ -252,11 +243,11 @@ bool CurrentObsTarget(Destination &out, bool &already_livedelay, int port)
 	out.key = key ? key : "";
 	out.name = name.empty() ? "Platform" : name;
 	out.enabled = true;
+	out.service = name;
 	already_livedelay = out.url.find("127.0.0.1:" + std::to_string(port)) != std::string::npos;
 	if (out.url.empty() || out.url == "auto") {
-		for (const Preset &p : kPresets)
-			if (name == p.name)
-				out.url = p.url;
+		const Service *svcInfo = FindService(Q(name));
+		out.url = svcInfo ? S(svcInfo->servers.front().url) : "";
 	}
 	return !out.url.empty() && !out.key.empty();
 }
@@ -318,10 +309,13 @@ public:
 		list_ = new QListWidget;
 		list_->setMaximumWidth(170);
 		name_ = new QLineEdit;
-		preset_ = new QComboBox;
-		preset_->addItem(T("Settings.ChoosePlatform"));
-		for (const Preset &p : kPresets)
-			preset_->addItem(p.name, QString(p.url));
+		service_ = new QComboBox;
+		service_->addItem(T("Settings.CustomService"));
+		for (const Service &sv : Services())
+			service_->addItem(sv.name);
+		server_ = new QComboBox;
+		keyLink_ = new QLabel;
+		keyLink_->setOpenExternalLinks(true);
 		url_ = new QLineEdit;
 		url_->setPlaceholderText(T("Settings.ServerPlaceholder"));
 		key_ = new QLineEdit;
@@ -335,9 +329,11 @@ public:
 		keyRow->addWidget(show);
 		auto *form = new QFormLayout;
 		form->addRow(T("Settings.Name"), name_);
-		form->addRow(T("Settings.Template"), preset_);
+		form->addRow(T("Settings.Service"), service_);
+		form->addRow(T("Settings.ServerRegion"), server_);
 		form->addRow(T("Settings.Server"), url_);
 		form->addRow(T("Settings.Key"), keyRow);
+		form->addRow(QString(), keyLink_);
 		form->addRow(QString(), enabled_);
 		form->addRow(QString(), autostart_);
 		fields_ = new QWidget;
@@ -426,16 +422,18 @@ public:
 		connect(list_, &QListWidget::currentRowChanged, this, [this](int row) { Select(row); });
 		connect(show, &QCheckBox::toggled, this,
 			[this](bool on) { key_->setEchoMode(on ? QLineEdit::Normal : QLineEdit::Password); });
-		connect(preset_, &QComboBox::activated, this, [this](int i) {
-			if (i <= 0)
-				return;
-			url_->setText(preset_->itemData(i).toString());
-			if (name_->text().trimmed().isEmpty() || name_->text() == T("Settings.NewPlatform"))
-				name_->setText(preset_->itemText(i));
-			if (current_ >= 0)
-				list_->item(current_)->setText(name_->text());
-			preset_->setCurrentIndex(0);
+		connect(service_, &QComboBox::activated, this, [this](int i) {
+			FillServers(i > 0 ? service_->itemText(i) : QString(), QString());
+			if (i > 0 && server_->count() > 0)
+				url_->setText(server_->itemData(0).toString());
+			if (i > 0 && (name_->text().trimmed().isEmpty() || name_->text() == T("Settings.NewPlatform"))) {
+				name_->setText(service_->itemText(i).section(" - ", 0, 0));
+				if (current_ >= 0)
+					list_->item(current_)->setText(name_->text());
+			}
 		});
+		connect(server_, &QComboBox::activated, this,
+			[this](int i) { url_->setText(server_->itemData(i).toString()); });
 		connect(add, &QPushButton::clicked, this, [this] {
 			s_.dests.push_back({S(T("Settings.NewPlatform")), "", "", true});
 			list_->addItem(T("Settings.NewPlatform"));
@@ -483,6 +481,33 @@ public:
 	}
 
 private:
+	// Lists the servers (regions) of `service`, selecting the one matching `url`.
+	void FillServers(const QString &service, const QString &url)
+	{
+		server_->clear();
+		const Service *sv = service.isEmpty() ? nullptr : FindService(service);
+		server_->setEnabled(sv != nullptr);
+		url_->setReadOnly(false);
+		keyLink_->setVisible(sv && !sv->key_link.isEmpty());
+		if (!sv) {
+			server_->addItem(T("Settings.CustomServer"));
+			return;
+		}
+		if (!sv->key_link.isEmpty())
+			keyLink_->setText(QString("<a href=\"%1\">%2</a>").arg(sv->key_link, T("Settings.GetKey")));
+		int match = -1;
+		for (const Server &srv : sv->servers) {
+			if (srv.url == url)
+				match = server_->count();
+			server_->addItem(srv.name, srv.url);
+		}
+		if (match < 0 && !url.isEmpty()) {
+			server_->insertItem(0, T("Settings.CustomServer"), url);
+			match = 0;
+		}
+		server_->setCurrentIndex(match < 0 ? 0 : match);
+	}
+
 	void Store()
 	{
 		if (current_ < 0 || current_ >= int(s_.dests.size()))
@@ -491,6 +516,7 @@ private:
 		d.name = S(name_->text()).empty() ? "Platform" : S(name_->text());
 		d.url = S(url_->text());
 		d.key = S(key_->text());
+		d.service = service_->currentIndex() > 0 ? S(service_->currentText()) : "";
 		d.enabled = enabled_->isChecked();
 		d.autostart = autostart_->isChecked();
 	}
@@ -504,6 +530,13 @@ private:
 		const Destination &d = row >= 0 ? s_.dests[row] : empty;
 		name_->setText(Q(d.name));
 		url_->setText(Q(d.url));
+		QString svc = Q(d.service);
+		if (svc.isEmpty())
+			if (const Service *found = ServiceForUrl(Q(d.url)))
+				svc = found->name;
+		int idx = svc.isEmpty() ? 0 : service_->findText(svc);
+		service_->setCurrentIndex(idx < 0 ? 0 : idx);
+		FillServers(idx > 0 ? svc : QString(), Q(d.url));
 		key_->setText(Q(d.key));
 		enabled_->setChecked(d.enabled);
 		autostart_->setChecked(d.autostart);
@@ -525,7 +558,7 @@ private:
 			list_->addItem(T("Settings.NewPlatform"));
 			list_->setCurrentRow(list_->count() - 1);
 			QMessageBox::information(this, "LiveDelay", T("Settings.RoutedNoTarget"));
-			preset_->setFocus();
+			service_->setFocus();
 			return;
 		}
 		PointObsAtLiveDelay(s_.RtmpPort());
@@ -552,7 +585,9 @@ private:
 	QListWidget *list_;
 	QWidget *fields_;
 	QLineEdit *name_, *url_, *key_;
-	QComboBox *preset_;
+	QComboBox *service_;
+	QComboBox *server_;
+	QLabel *keyLink_;
 	QCheckBox *enabled_;
 	QCheckBox *autostart_;
 };

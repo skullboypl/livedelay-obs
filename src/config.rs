@@ -106,6 +106,8 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 "key" => d.key = v.into(),
                 "enabled" => d.enabled = yes(v),
                 "autostart" => d.autostart = yes(v),
+                // Which OBS service the URL came from; only the settings window uses it.
+                "service" => {}
                 _ => return Err(err(&format!("unknown key {k}"))),
             }
             continue;
