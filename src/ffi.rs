@@ -44,7 +44,7 @@ pub unsafe extern "C" fn ld_start(config_path: *const c_char) -> c_int {
             return 1;
         }
     };
-    log!("ustawienia: {path}");
+    log!("settings: {path}");
     let proxy = Proxy::start(&cfg, set_error, |_| {});
     *PROXY.lock().unwrap_or_else(|p| p.into_inner()) = Some(proxy);
     0
@@ -56,7 +56,7 @@ pub extern "C" fn ld_stop() {
     let p = PROXY.lock().unwrap_or_else(|p| p.into_inner()).take();
     if let Some(p) = p {
         p.stop();
-        log!("zatrzymano");
+        log!("stopped");
     }
 }
 

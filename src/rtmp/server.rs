@@ -15,7 +15,7 @@ const STREAM_ID: u32 = 1;
 
 pub async fn run(addr: String, shared: Arc<Shared>) -> io::Result<()> {
     let listener = TcpListener::bind(&addr).await?;
-    log!("RTMP: czekam na OBS na rtmp://{addr}/live");
+    log!("RTMP: waiting for OBS on rtmp://{addr}/live");
     let busy = Arc::new(AtomicBool::new(false));
     loop {
         let (sock, peer) = listener.accept().await?;
@@ -24,8 +24,8 @@ pub async fn run(addr: String, shared: Arc<Shared>) -> io::Result<()> {
         let busy = busy.clone();
         tokio::spawn(async move {
             match handle(sock, &shared, &busy).await {
-                Ok(()) => log!("RTMP: {peer} rozłączony"),
-                Err(e) => log!("RTMP: {peer} rozłączony: {e}"),
+                Ok(()) => log!("RTMP: {peer} disconnected"),
+                Err(e) => log!("RTMP: {peer} disconnected: {e}"),
             }
         });
     }
@@ -56,7 +56,7 @@ impl Drop for PublishGuard<'_> {
     fn drop(&mut self) {
         self.shared.with(|e| e.end_session());
         self.busy.store(false, Ordering::SeqCst);
-        log!("RTMP: OBS przestał nadawać");
+        log!("RTMP: OBS stopped streaming");
     }
 }
 
@@ -120,11 +120,11 @@ async fn handle(mut sock: TcpStream, shared: &Shared, busy: &AtomicBool) -> io::
                         if guard.is_some() || busy.swap(true, Ordering::SeqCst) {
                             ses.send(CS_COMMAND, command(m.stream_id, &[s("onStatus"), Amf::Number(0.0), Amf::Null, status("NetStream.Publish.BadName", "Already publishing")]));
                             wr.write_all(&ses.out).await?;
-                            return Err(io::Error::other("drugi nadawca odrzucony"));
+                            return Err(io::Error::other("second publisher refused"));
                         }
                         shared.with(|e| e.begin_session());
                         guard = Some(PublishGuard { busy, shared });
-                        log!("RTMP: OBS nadaje");
+                        log!("RTMP: OBS is streaming");
                         ses.send(CS_CONTROL, user_control(0, &STREAM_ID.to_be_bytes()));
                         ses.send(CS_COMMAND, command(m.stream_id, &[s("onStatus"), Amf::Number(0.0), Amf::Null, status("NetStream.Publish.Start", "Publishing")]));
                     }

@@ -30,15 +30,15 @@ pub fn parse_url(url: &str, key: &str) -> Result<Target, String> {
     } else if let Some(r) = url.strip_prefix("rtmp://") {
         (false, r)
     } else {
-        return Err(format!("adres musi zaczynać się od rtmp:// lub rtmps://: {url}"));
+        return Err(format!("the address must start with rtmp:// or rtmps://: {url}"));
     };
     let (hostport, app) = rest.split_once('/').unwrap_or((rest, ""));
     let (host, port) = match hostport.rsplit_once(':') {
-        Some((h, p)) => (h, p.parse().map_err(|_| format!("zły port w {url}"))?),
+        Some((h, p)) => (h, p.parse().map_err(|_| format!("bad port in {url}"))?),
         None => (hostport, if tls { 443 } else { 1935 }),
     };
     if host.is_empty() {
-        return Err(format!("brak hosta w {url}"));
+        return Err(format!("no host in {url}"));
     }
     Ok(Target {
         tls,
@@ -61,7 +61,7 @@ pub struct DestStatus {
 async fn open(t: &Target) -> io::Result<Box<dyn Io>> {
     let tcp = tokio::time::timeout(Duration::from_secs(10), TcpStream::connect((t.host.as_str(), t.port)))
         .await
-        .map_err(|_| io::Error::other("przekroczony czas połączenia"))??;
+        .map_err(|_| io::Error::other("connection timed out"))??;
     tcp.set_nodelay(true)?;
     if !t.tls {
         return Ok(Box::new(tcp));
@@ -201,7 +201,7 @@ async fn stream(c: Conn, sid: u32, rx: &mut broadcast::Receiver<OutMsg>, shared:
                         out.clear();
                         continue;
                     }
-                    None => break Ended::Error(io::Error::other("serwer zamknął połączenie")),
+                    None => break Ended::Error(io::Error::other("server closed the connection")),
                 }
             }
         };
@@ -264,13 +264,13 @@ pub async fn run(name: String, target: Target, shared: Arc<Shared>, status: Arc<
         let mut s = status.lock().unwrap();
         s.state = state;
         s.error = error;
-        if state != "nadaje" {
+        if state != "live" {
             s.kbps = 0.0;
         }
         drop(s);
         shared.state.send_modify(|v| *v += 1);
     };
-    set("czeka", String::new());
+    set("waiting", String::new());
     let mut rx = shared.out.subscribe();
     let mut backoff = Duration::from_secs(2);
     loop {
@@ -282,27 +282,27 @@ pub async fn run(name: String, target: Target, shared: Arc<Shared>, status: Arc<
                 Err(broadcast::error::RecvError::Closed) => return,
             }
         }
-        set("łączy", String::new());
+        set("connecting", String::new());
         match publish(&target).await {
             Ok((conn, sid)) => {
-                log!("{name}: połączono");
-                set("nadaje", String::new());
+                log!("{name}: connected");
+                set("live", String::new());
                 backoff = Duration::from_secs(2);
                 match stream(conn, sid, &mut rx, &shared, &status).await {
                     Ended::StreamEnd => {
-                        log!("{name}: koniec streamu");
-                        set("czeka", String::new());
+                        log!("{name}: stream ended");
+                        set("waiting", String::new());
                         continue;
                     }
                     Ended::Error(e) => {
-                        log!("{name}: zerwane: {e}");
-                        set("błąd", e.to_string());
+                        log!("{name}: dropped: {e}");
+                        set("error", e.to_string());
                     }
                 }
             }
             Err(e) => {
-                log!("{name}: nie udało się połączyć: {e}");
-                set("błąd", e.to_string());
+                log!("{name}: could not connect: {e}");
+                set("error", e.to_string());
             }
         }
         tokio::time::sleep(backoff).await;

@@ -1,5 +1,6 @@
 #include "settings.hpp"
 #include "dock.hpp"
+#include "i18n.hpp"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -10,8 +11,11 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
+#include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QFrame>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -20,6 +24,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <cstdio>
@@ -133,9 +138,9 @@ Settings Settings::Load(const std::string &path)
 bool Settings::Save(const std::string &path) const
 {
 	std::ostringstream o;
-	o << "# LiveDelay - ustawienia (edytowane z OBS: Narzędzia -> LiveDelay)\n\n"
+	o << "# LiveDelay settings (edited from OBS: Tools -> LiveDelay)\n\n"
 	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb
-	  << "\n\n# Overlay: {s} = opóźnienie w sekundach, {buf} = ile bufora już jest\n"
+	  << "\n\n# Overlay: {s} = delay in seconds, {buf} = how much is buffered\n"
 	  << "overlay_live = " << overlay_live << "\noverlay_arming = " << overlay_arming
 	  << "\noverlay_armed = " << overlay_armed << "\noverlay_delayed = " << overlay_delayed << "\n";
 	for (const Destination &d : dests)
@@ -209,10 +214,10 @@ void AddOverlayToScene(QWidget *parent)
 		obs_scene_add(scene, src);
 		obs_source_release(src);
 		QMessageBox::information(parent, "LiveDelay",
-					 QString::fromUtf8("Dodano źródło „LiveDelay overlay” do bieżącej sceny."));
+					 T("Settings.OverlayAdded"));
 	} else {
 		QMessageBox::warning(parent, "LiveDelay",
-				     QString::fromUtf8("Nie udało się utworzyć źródła Przeglądarka (czy jest zainstalowane?)."));
+				     T("Settings.OverlayFailed"));
 	}
 	obs_data_release(bs);
 	obs_source_release(scene_src);
@@ -233,7 +238,7 @@ bool CurrentObsTarget(Destination &out, bool &already_livedelay, int port)
 	obs_data_release(st);
 	out.url = url ? url : "";
 	out.key = key ? key : "";
-	out.name = name.empty() ? "Platforma" : name;
+	out.name = name.empty() ? "Platform" : name;
 	out.enabled = true;
 	already_livedelay = out.url.find("127.0.0.1:" + std::to_string(port)) != std::string::npos;
 	if (out.url.empty() || out.url == "auto") {
@@ -257,12 +262,25 @@ void PointObsAtLiveDelay(int port)
 	obs_data_release(s);
 }
 
+// Links shown in the settings window only, never on stream.
+constexpr const char *kSupportUrl = "https://donate.skullmedia.pl";
+constexpr const char *kSmoothWizardUrl = "https://smoothwizard.com/?utm_source=livedelay-obs";
+
+QLabel *Hint(const QString &text)
+{
+	auto *l = new QLabel(text);
+	l->setWordWrap(true);
+	l->setTextFormat(Qt::RichText);
+	l->setStyleSheet("color: palette(placeholder-text);");
+	return l;
+}
+
 class SettingsDialog : public QDialog {
 public:
 	explicit SettingsDialog(QWidget *parent) : QDialog(parent), s_(Settings::Load(ConfigPath()))
 	{
-		setWindowTitle(QString::fromUtf8("LiveDelay – ustawienia"));
-		setMinimumWidth(620);
+		setWindowTitle(T("Settings.Title"));
+		setMinimumWidth(660);
 
 		auto *delay = new QSpinBox;
 		delay->setRange(1, 3600);
@@ -272,38 +290,38 @@ public:
 		buffer->setRange(16, 16384);
 		buffer->setSuffix(" MB");
 		buffer->setValue(s_.max_buffer_mb);
-		buffer->setToolTip(QString::fromUtf8("Ile RAM może zająć bufor. 60 s przy 8 Mb/s to ok. 60 MB."));
+		buffer->setToolTip(T("Settings.BufferTip"));
 		auto *general = new QFormLayout;
-		general->addRow(QString::fromUtf8("Domyślne opóźnienie"), delay);
-		general->addRow(QString::fromUtf8("Limit pamięci bufora"), buffer);
+		general->addRow(T("Settings.DefaultDelay"), delay);
+		general->addRow(T("Settings.BufferLimit"), buffer);
 
-		// Destinations: list on the left, the selected one's fields on the right.
+		// Platforms: list on the left, the selected one's fields on the right.
 		list_ = new QListWidget;
 		list_->setMaximumWidth(170);
 		name_ = new QLineEdit;
 		preset_ = new QComboBox;
-		preset_->addItem(QString::fromUtf8("Wybierz platformę…"));
+		preset_->addItem(T("Settings.ChoosePlatform"));
 		for (const Preset &p : kPresets)
 			preset_->addItem(p.name, QString(p.url));
 		url_ = new QLineEdit;
-		url_->setPlaceholderText("rtmp://… lub rtmps://…");
+		url_->setPlaceholderText(T("Settings.ServerPlaceholder"));
 		key_ = new QLineEdit;
 		key_->setEchoMode(QLineEdit::Password);
-		auto *show = new QCheckBox(QString::fromUtf8("pokaż"));
-		enabled_ = new QCheckBox(QString::fromUtf8("Wysyłaj na tę platformę"));
+		auto *show = new QCheckBox(T("Settings.Show"));
+		enabled_ = new QCheckBox(T("Settings.SendHere"));
 		auto *keyRow = new QHBoxLayout;
 		keyRow->addWidget(key_, 1);
 		keyRow->addWidget(show);
 		auto *form = new QFormLayout;
-		form->addRow(QString::fromUtf8("Nazwa"), name_);
-		form->addRow(QString::fromUtf8("Szablon"), preset_);
-		form->addRow(QString::fromUtf8("Adres serwera"), url_);
-		form->addRow(QString::fromUtf8("Klucz streamu"), keyRow);
+		form->addRow(T("Settings.Name"), name_);
+		form->addRow(T("Settings.Template"), preset_);
+		form->addRow(T("Settings.Server"), url_);
+		form->addRow(T("Settings.Key"), keyRow);
 		form->addRow(QString(), enabled_);
 		fields_ = new QWidget;
 		fields_->setLayout(form);
-		auto *add = new QPushButton(QString::fromUtf8("Dodaj"));
-		auto *remove = new QPushButton(QString::fromUtf8("Usuń"));
+		auto *add = new QPushButton(T("Settings.Add"));
+		auto *remove = new QPushButton(T("Settings.Remove"));
 		auto *listCol = new QVBoxLayout;
 		listCol->addWidget(list_, 1);
 		auto *listBtns = new QHBoxLayout;
@@ -313,46 +331,63 @@ public:
 		auto *destRow = new QHBoxLayout;
 		destRow->addLayout(listCol);
 		destRow->addWidget(fields_, 1);
-		auto *importBtn = new QPushButton(QString::fromUtf8("Przełącz OBS na LiveDelay (przenieś obecny serwer i klucz tutaj)"));
-		auto *destBox = new QGroupBox(QString::fromUtf8("Platformy"));
+		auto *importBtn = new QPushButton(T("Settings.SwitchObs"));
+		auto *destBox = new QGroupBox(T("Settings.Platforms"));
 		auto *destLayout = new QVBoxLayout(destBox);
+		destLayout->addWidget(Hint(T("Settings.PlatformsAbout")));
 		destLayout->addLayout(destRow);
 		destLayout->addWidget(importBtn);
 
 		// Overlay for a Browser source.
 		auto *urlLine = new QLineEdit(Q(OverlayUrl()));
 		urlLine->setReadOnly(true);
-		auto *copy = new QPushButton(QString::fromUtf8("Kopiuj"));
-		auto *toScene = new QPushButton(QString::fromUtf8("Dodaj do sceny"));
+		auto *copy = new QPushButton(T("Settings.Copy"));
+		auto *preview = new QPushButton(T("Settings.Preview"));
+		preview->setToolTip(T("Settings.PreviewTip"));
+		auto *toScene = new QPushButton(T("Settings.AddToScene"));
 		auto *urlRow = new QHBoxLayout;
 		urlRow->addWidget(urlLine, 1);
 		urlRow->addWidget(copy);
+		urlRow->addWidget(preview);
 		urlRow->addWidget(toScene);
 		auto *ovLive = new QLineEdit(Q(s_.overlay_live));
 		auto *ovArming = new QLineEdit(Q(s_.overlay_arming));
 		auto *ovArmed = new QLineEdit(Q(s_.overlay_armed));
 		auto *ovDelayed = new QLineEdit(Q(s_.overlay_delayed));
 		auto *ovForm = new QFormLayout;
-		ovForm->addRow(QString::fromUtf8("Adres"), urlRow);
-		ovForm->addRow(QString::fromUtf8("Na żywo"), ovLive);
-		ovForm->addRow(QString::fromUtf8("Uzbrajanie"), ovArming);
-		ovForm->addRow(QString::fromUtf8("Uzbrojone"), ovArmed);
-		ovForm->addRow(QString::fromUtf8("Opóźnienie"), ovDelayed);
-		auto *hint = new QLabel(QString::fromUtf8(
-			"{s} = sekundy opóźnienia, {buf} = ile bufora już jest. Puste pole = overlay znika w tym stanie."));
-		hint->setWordWrap(true);
-		ovForm->addRow(QString(), hint);
-		auto *ovBox = new QGroupBox(QString::fromUtf8("Overlay (źródło Przeglądarka)"));
-		ovBox->setLayout(ovForm);
+		ovForm->addRow(T("Settings.Address"), urlRow);
+		ovForm->addRow(T("Settings.Live"), ovLive);
+		ovForm->addRow(T("Settings.Arming"), ovArming);
+		ovForm->addRow(T("Settings.Armed"), ovArmed);
+		ovForm->addRow(T("Settings.Delayed"), ovDelayed);
+		auto *ovBox = new QGroupBox(T("Settings.Overlay"));
+		auto *ovLayout = new QVBoxLayout(ovBox);
+		ovLayout->addWidget(Hint(T("Settings.OverlayAbout")));
+		ovLayout->addLayout(ovForm);
+		ovLayout->addWidget(Hint(T("Settings.OverlayTips")));
+
+		// Support and the author's other app: a quiet footer, not part of any output.
+		auto *support = new QPushButton(T("Settings.SupportButton"));
+		auto *wizard = new QPushButton(T("Settings.SmoothWizardButton"));
+		auto *footer = new QFrame;
+		footer->setObjectName("livedelayFooter");
+		footer->setStyleSheet("#livedelayFooter { border: 1px solid palette(mid); border-radius: 6px; }");
+		auto *footerLayout = new QGridLayout(footer);
+		footerLayout->addWidget(Hint(T("Settings.SupportText")), 0, 0);
+		footerLayout->addWidget(support, 0, 1);
+		footerLayout->addWidget(Hint(T("Settings.SmoothWizardText")), 1, 0);
+		footerLayout->addWidget(wizard, 1, 1);
+		footerLayout->setColumnStretch(0, 1);
 
 		auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
-		buttons->button(QDialogButtonBox::Save)->setText(QString::fromUtf8("Zapisz"));
-		buttons->button(QDialogButtonBox::Cancel)->setText(QString::fromUtf8("Anuluj"));
+		buttons->button(QDialogButtonBox::Save)->setText(T("Settings.Save"));
+		buttons->button(QDialogButtonBox::Cancel)->setText(T("Settings.Cancel"));
 
 		auto *layout = new QVBoxLayout(this);
 		layout->addLayout(general);
 		layout->addWidget(destBox);
 		layout->addWidget(ovBox);
+		layout->addWidget(footer);
 		layout->addWidget(buttons);
 
 		for (const Destination &d : s_.dests)
@@ -364,13 +399,15 @@ public:
 			if (i <= 0)
 				return;
 			url_->setText(preset_->itemData(i).toString());
-			if (name_->text().trimmed().isEmpty() || name_->text() == QString::fromUtf8("Nowa platforma"))
+			if (name_->text().trimmed().isEmpty() || name_->text() == T("Settings.NewPlatform"))
 				name_->setText(preset_->itemText(i));
+			if (current_ >= 0)
+				list_->item(current_)->setText(name_->text());
 			preset_->setCurrentIndex(0);
 		});
 		connect(add, &QPushButton::clicked, this, [this] {
-			s_.dests.push_back({"Nowa platforma", "", "", true});
-			list_->addItem(QString::fromUtf8("Nowa platforma"));
+			s_.dests.push_back({S(T("Settings.NewPlatform")), "", "", true});
+			list_->addItem(T("Settings.NewPlatform"));
 			list_->setCurrentRow(list_->count() - 1);
 			name_->setFocus();
 		});
@@ -390,19 +427,22 @@ public:
 		connect(importBtn, &QPushButton::clicked, this, [this] { Import(); });
 		connect(copy, &QPushButton::clicked, this,
 			[urlLine] { QApplication::clipboard()->setText(urlLine->text()); });
+		connect(preview, &QPushButton::clicked, this,
+			[] { QDesktopServices::openUrl(QUrl(Q(OverlayUrl() + "?preview"))); });
 		connect(toScene, &QPushButton::clicked, this, [this] { AddOverlayToScene(this); });
+		connect(support, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(kSupportUrl)); });
+		connect(wizard, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(kSmoothWizardUrl)); });
 		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-		connect(buttons, &QDialogButtonBox::accepted, this,
-			[=] {
-				Store();
-				s_.delay = delay->value();
-				s_.max_buffer_mb = buffer->value();
-				s_.overlay_live = S(ovLive->text());
-				s_.overlay_arming = S(ovArming->text());
-				s_.overlay_armed = S(ovArmed->text());
-				s_.overlay_delayed = S(ovDelayed->text());
-				SaveAndRestart();
-			});
+		connect(buttons, &QDialogButtonBox::accepted, this, [=] {
+			Store();
+			s_.delay = delay->value();
+			s_.max_buffer_mb = buffer->value();
+			s_.overlay_live = S(ovLive->text());
+			s_.overlay_arming = S(ovArming->text());
+			s_.overlay_armed = S(ovArmed->text());
+			s_.overlay_delayed = S(ovDelayed->text());
+			SaveAndRestart();
+		});
 
 		list_->setCurrentRow(s_.dests.empty() ? -1 : 0);
 		Select(list_->currentRow());
@@ -414,7 +454,7 @@ private:
 		if (current_ < 0 || current_ >= int(s_.dests.size()))
 			return;
 		Destination &d = s_.dests[current_];
-		d.name = S(name_->text()).empty() ? "Platforma" : S(name_->text());
+		d.name = S(name_->text()).empty() ? "Platform" : S(name_->text());
 		d.url = S(url_->text());
 		d.key = S(key_->text());
 		d.enabled = enabled_->isChecked();
@@ -443,25 +483,20 @@ private:
 			list_->addItem(Q(d.name));
 			list_->setCurrentRow(list_->count() - 1);
 		} else if (!already) {
-			QMessageBox::warning(this, "LiveDelay",
-					     QString::fromUtf8("Nie udało się odczytać serwera z ustawień transmisji OBS."));
+			QMessageBox::warning(this, "LiveDelay", T("Settings.ReadObsFailed"));
 			return;
 		}
 		PointObsAtLiveDelay(s_.RtmpPort());
-		QMessageBox::information(this, "LiveDelay",
-					 QString::fromUtf8(already ? "OBS już nadaje przez LiveDelay."
-								   : "OBS nadaje teraz przez LiveDelay, a Twój serwer i klucz są na liście platform. Kliknij Zapisz."));
+		QMessageBox::information(this, "LiveDelay", already ? T("Settings.AlreadyRouted") : T("Settings.Routed"));
 	}
 
 	void SaveAndRestart()
 	{
 		if (obs_frontend_streaming_active() &&
-		    QMessageBox::question(this, "LiveDelay",
-					  QString::fromUtf8("Zapis uruchomi LiveDelay ponownie i przerwie stream na kilka sekund. Kontynuować?")) !=
-			    QMessageBox::Yes)
+		    QMessageBox::question(this, "LiveDelay", T("Settings.RestartWarning")) != QMessageBox::Yes)
 			return;
 		if (!s_.Save(ConfigPath())) {
-			QMessageBox::warning(this, "LiveDelay", QString::fromUtf8("Nie udało się zapisać ustawień."));
+			QMessageBox::warning(this, "LiveDelay", T("Settings.SaveFailed"));
 			return;
 		}
 		std::string err = StartProxy();

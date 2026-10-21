@@ -85,7 +85,7 @@ impl Proxy {
             }
         }
         if dests.is_empty() {
-            log!("brak włączonych platform - stream nie wyjdzie dalej");
+            log!("no enabled platforms - the stream will not go anywhere");
         }
         let ctx = Arc::new(api::Ctx {
             shared: shared.clone(),
@@ -116,7 +116,7 @@ impl Proxy {
                         r = api => format!("API: {r:?}"),
                         r = ingest => format!("RTMP: {r:?}"),
                     };
-                    on_fatal(format!("LiveDelay nie może działać ({err}). Czy port nie jest zajęty, np. przez drugą kopię programu?"));
+                    on_fatal(format!("LiveDelay cannot run ({err}). Is the port already in use, e.g. by another copy?"));
                 });
                 // Dropping the runtime here closes every socket and task.
             })

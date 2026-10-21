@@ -79,7 +79,7 @@ pub fn act(ctx: &Ctx, action: &str, delay: Option<f64>) -> Result<(), String> {
         "arm" => {
             let d = delay.map(Duration::from_secs_f64).unwrap_or(ctx.default_delay);
             if d.is_zero() || d > Duration::from_secs(3600) {
-                return Err("opóźnienie musi mieć od 1 s do 1 h".to_string());
+                return Err("delay_range".to_string());
             }
             e.arm(d);
             Ok(())
@@ -97,11 +97,11 @@ pub fn act(ctx: &Ctx, action: &str, delay: Option<f64>) -> Result<(), String> {
             e.disarm();
             Ok(())
         }
-        _ => Err("nieznana akcja".to_string()),
+        _ => Err("unknown_action".to_string()),
     });
     match &r {
-        Ok(()) => log!("akcja: {action}"),
-        Err(e) => log!("akcja {action} odrzucona: {e}"),
+        Ok(()) => log!("action: {action}"),
+        Err(e) => log!("action {action} refused: {e}"),
     }
     r
 }

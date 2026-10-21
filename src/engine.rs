@@ -375,7 +375,7 @@ impl Engine {
     }
 
     pub fn activate(&mut self, now: Instant) -> Result<(), &'static str> {
-        let d = self.arm_delay.ok_or("najpierw Arm")?;
+        let d = self.arm_delay.ok_or("need_arm")?;
         if !self.output_active {
             self.mode = Mode::Delayed;
             self.delay = d;
@@ -383,9 +383,9 @@ impl Engine {
             return Ok(());
         }
         if !self.is_armed(now) {
-            return Err("bufor jeszcze się wypełnia");
+            return Err("buffer_filling");
         }
-        let kf = self.keyframe_before(now - d).ok_or("brak klatki kluczowej w buforze")?.clone();
+        let kf = self.keyframe_before(now - d).ok_or("no_keyframe")?.clone();
         self.jump_to(&kf, d, now);
         self.mode = Mode::Delayed;
         self.cut_after_seq = None;

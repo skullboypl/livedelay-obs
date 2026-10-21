@@ -3,34 +3,32 @@
 use std::path::Path;
 
 pub const EXAMPLE: &str = "\
-# LiveDelay - ustawienia
-# W OBS: Ustawienia -> Transmisja -> Usługa: Własna, Serwer: rtmp://127.0.0.1:1935/live, Klucz: dowolny
+# LiveDelay settings (in OBS: Tools -> LiveDelay)
 
 listen = 127.0.0.1:1935
 api = 127.0.0.1:7799
-# opóźnienie w sekundach używane przez Arm
+# delay in seconds used by Arm
 delay = 15
-# limit pamięci na bufor (MB). 15 s przy 8 Mb/s to ok. 15 MB.
+# memory limit for the buffer (MB). 15 s at 8 Mb/s is about 15 MB.
 max_buffer_mb = 512
 
-# Teksty overlayu (źródło Przeglądarka: http://127.0.0.1:7799/overlay).
-# {s} = opóźnienie w sekundach, {buf} = ile bufora już jest. Pusty tekst = nic nie pokazuj.
+# Overlay texts (Browser source: http://127.0.0.1:7799/overlay).
+# {s} = delay in seconds, {buf} = how much is buffered. Empty = show nothing.
 overlay_live = LIVE
 overlay_arming = ARMING… {buf}/{s}s
 overlay_armed = ARMED {s}s
 overlay_delayed = DELAY {s}s
 
-# Globalne skróty (działają też poza OBS), np. Ctrl+Alt+Num1, F13, Shift+F5.
-# Puste = wyłączone. Skróty w samym OBS ustawisz we wtyczce.
+# Global hotkeys for the standalone tray app, e.g. Ctrl+Alt+Num1, F13, Shift+F5.
 hotkey_arm =
 hotkey_activate =
 hotkey_cut =
 hotkey_cut_after =
 
-# Jeden blok na platformę. enabled = no wyłącza cel bez kasowania.
+# One block per platform. enabled = no turns it off without deleting it.
 [dest Twitch]
-url = rtmp://waw.contribute.live-video.net/app
-key = TU_WKLEJ_KLUCZ
+url = rtmp://live.twitch.tv/app
+key = PASTE_YOUR_KEY
 enabled = no
 ";
 
@@ -90,9 +88,9 @@ pub fn parse(text: &str) -> Result<Config, String> {
         if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
             continue;
         }
-        let err = |m: &str| format!("livedelay.ini, linia {}: {m}", n + 1);
+        let err = |m: &str| format!("livedelay.ini, line {}: {m}", n + 1);
         if let Some(sec) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-            let name = sec.trim().strip_prefix("dest").map(str::trim).ok_or_else(|| err("sekcja musi wyglądać tak: [dest Nazwa]"))?;
+            let name = sec.trim().strip_prefix("dest").map(str::trim).ok_or_else(|| err("a section must look like [dest Name]"))?;
             c.dests.push(Dest { name: name.to_string(), url: String::new(), key: String::new(), enabled: true });
             continue;
         }
@@ -103,15 +101,15 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 "url" => d.url = v.into(),
                 "key" => d.key = v.into(),
                 "enabled" => d.enabled = yes(v),
-                _ => return Err(err(&format!("nieznane pole {k}"))),
+                _ => return Err(err(&format!("unknown key {k}"))),
             }
             continue;
         }
         match k {
             "listen" => c.listen = v.into(),
             "api" => c.api = v.into(),
-            "delay" => c.delay_s = v.parse().map_err(|_| err("delay musi być liczbą"))?,
-            "max_buffer_mb" => c.max_buffer_mb = v.parse().map_err(|_| err("max_buffer_mb musi być liczbą"))?,
+            "delay" => c.delay_s = v.parse().map_err(|_| err("delay must be a number"))?,
+            "max_buffer_mb" => c.max_buffer_mb = v.parse().map_err(|_| err("max_buffer_mb must be a number"))?,
             "overlay_live" => c.overlay.live = v.into(),
             "overlay_arming" => c.overlay.arming = v.into(),
             "overlay_armed" => c.overlay.armed = v.into(),
@@ -127,7 +125,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
                     c.hotkeys.push((action, v.to_string()));
                 }
             }
-            _ => return Err(err(&format!("nieznane pole {k}"))),
+            _ => return Err(err(&format!("unknown key {k}"))),
         }
     }
     Ok(c)
@@ -136,9 +134,9 @@ pub fn parse(text: &str) -> Result<Config, String> {
 /// Loads the config, writing the commented example on first run.
 pub fn load(path: &Path) -> Result<Config, String> {
     if !path.exists() {
-        std::fs::write(path, EXAMPLE).map_err(|e| format!("nie mogę zapisać {}: {e}", path.display()))?;
+        std::fs::write(path, EXAMPLE).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     }
-    let text = std::fs::read_to_string(path).map_err(|e| format!("nie mogę odczytać {}: {e}", path.display()))?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     parse(&text)
 }
 
@@ -156,6 +154,6 @@ mod tests {
 
     #[test]
     fn reports_line_numbers() {
-        assert!(parse("delay = x").unwrap_err().contains("linia 1"));
+        assert!(parse("delay = x").unwrap_err().contains("line 1"));
     }
 }

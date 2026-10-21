@@ -1,5 +1,6 @@
 #include "dock.hpp"
 #include "client.hpp"
+#include "i18n.hpp"
 #include "settings.hpp"
 
 #include <QHBoxLayout>
@@ -17,8 +18,8 @@ namespace livedelay {
 
 static QPushButton *Button(const char *text, const char *tip)
 {
-	auto *b = new QPushButton(QString::fromUtf8(text));
-	b->setToolTip(QString::fromUtf8(tip));
+	auto *b = new QPushButton(T(text));
+	b->setToolTip(T(tip));
 	b->setMinimumHeight(30);
 	return b;
 }
@@ -40,14 +41,14 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	delay_->setRange(1, 3600);
 	delay_->setValue(15);
 	delay_->setSuffix(" s");
-	delay_->setToolTip(QString::fromUtf8("Opóźnienie, jakie ustawi Arm"));
-	arm_ = Button("Arm", "Zacznij trzymać bufor na wybrane opóźnienie");
-	activate_ = Button("Activate", "Włącz opóźnienie: widzowie cofną się do klatki sprzed N s");
-	cut_ = Button("Cut", "Wróć na żywo teraz");
-	cut_after_ = Button("Cut po wyemitowaniu", "Wróć na żywo, gdy obecna chwila dotrze do widzów");
-	disarm_ = Button("Rozbrój", "Przestań trzymać bufor");
-	start_ = Button("Uruchom ponownie", "Uruchom LiveDelay ponownie");
-	auto *settings = Button("Ustawienia", "Opóźnienie, platformy i klucze, overlay");
+	delay_->setToolTip(T("Dock.DelayTip"));
+	arm_ = Button("Dock.Arm", "Dock.ArmTip");
+	activate_ = Button("Dock.Activate", "Dock.ActivateTip");
+	cut_ = Button("Dock.Cut", "Dock.CutTip");
+	cut_after_ = Button("Dock.CutAfter", "Dock.CutAfterTip");
+	disarm_ = Button("Dock.Disarm", "Dock.DisarmTip");
+	start_ = Button("Dock.Restart", "Dock.RestartTip");
+	auto *settings = Button("Dock.Settings", "Dock.SettingsTip");
 	fill_ = new QProgressBar;
 	fill_->setTextVisible(false);
 	fill_->setMaximumHeight(6);
@@ -104,13 +105,15 @@ void Dock::Act(const std::string &action)
 	std::thread([self, action] {
 		int status = 0;
 		std::string body = Request("POST", "/" + action, &status);
-		QString msg;
-		if (status == 0)
-			msg = QString::fromUtf8("LiveDelay nie odpowiada.");
-		else if (status != 200)
-			msg = QString::fromStdString(JsonString(body, "error"));
+		// Error codes from the proxy are translated on the UI thread.
+		std::string code = status == 0 ? "no_response" : status != 200 ? JsonString(body, "error") : "";
 		QMetaObject::invokeMethod(
-			self, [self, msg] { if (self) self->ShowError(msg); }, Qt::QueuedConnection);
+			self,
+			[self, code] {
+				if (self)
+					self->ShowError(code.empty() ? QString() : T(("Err." + code).c_str()));
+			},
+			Qt::QueuedConnection);
 	}).detach();
 }
 
@@ -133,8 +136,8 @@ static void Pill(QLabel *l, const QString &text, const char *bg)
 
 void Dock::ShowOffline()
 {
-	Pill(status_, QString::fromUtf8("LiveDelay nie działa"), "#5a5f6b");
-	detail_->setText(LastError().empty() ? QString::fromUtf8("Uruchamianie…") : QString::fromStdString(LastError()));
+	Pill(status_, T("Dock.Offline"), "#5a5f6b");
+	detail_->setText(LastError().empty() ? T("Dock.Starting") : QString::fromStdString(LastError()));
 	fill_->hide();
 	for (QPushButton *b : {arm_, activate_, cut_, cut_after_, disarm_})
 		b->setEnabled(false);
@@ -158,13 +161,13 @@ void Dock::ShowState(const std::string &j)
 	}
 
 	if (delayed)
-		Pill(status_, QString::fromUtf8("OPÓŹNIENIE %1 s").arg(delay, 0, 'f', 0), "#c62828");
+		Pill(status_, T("Dock.StateDelayed").arg(delay, 0, 'f', 0), "#c62828");
 	else if (armed)
-		Pill(status_, QString::fromUtf8("NA ŻYWO · uzbrojone %1 s").arg(arm_delay, 0, 'f', 0), "#b26a00");
+		Pill(status_, T("Dock.StateArmed").arg(arm_delay, 0, 'f', 0), "#b26a00");
 	else if (arm_delay > 0)
-		Pill(status_, QString::fromUtf8("NA ŻYWO · bufor %1/%2 s").arg(buffer, 0, 'f', 0).arg(arm_delay, 0, 'f', 0), "#b26a00");
+		Pill(status_, T("Dock.StateArming").arg(buffer, 0, 'f', 0).arg(arm_delay, 0, 'f', 0), "#b26a00");
 	else
-		Pill(status_, QString::fromUtf8("NA ŻYWO"), "#2e7d32");
+		Pill(status_, T("Dock.StateLive"), "#2e7d32");
 
 	const bool filling = !delayed && arm_delay > 0 && !armed;
 	fill_->setVisible(filling);
@@ -173,9 +176,9 @@ void Dock::ShowState(const std::string &j)
 		fill_->setValue(int(buffer * 10));
 	}
 
-	QString d = input ? QString() : QString::fromUtf8("Brak sygnału z OBS. ");
+	QString d = input ? QString() : T("Dock.NoInput") + " ";
 	if (cut_pending)
-		d += QString::fromUtf8("Cut czeka, aż ta chwila dotrze do widzów. ");
+		d += T("Dock.CutPending") + " ";
 	size_t p = 0;
 	int dests = 0;
 	while ((p = j.find("\"name\":\"", p)) != std::string::npos) {
@@ -185,7 +188,7 @@ void Dock::ShowState(const std::string &j)
 		size_t k = j.find("\"kbps\":", p);
 		if (k != std::string::npos)
 			kbps = std::strtod(j.c_str() + k + 7, nullptr);
-		d += QString::fromStdString(name) + ": " + QString::fromStdString(state);
+		d += QString::fromStdString(name) + ": " + T(("Dest." + state).c_str());
 		if (kbps > 0)
 			d += QString(" %1 kb/s").arg(kbps, 0, 'f', 0);
 		d += "   ";
@@ -193,7 +196,7 @@ void Dock::ShowState(const std::string &j)
 		dests++;
 	}
 	if (dests == 0)
-		d += QString::fromUtf8("Brak platform: dodaj je w Ustawieniach.");
+		d += T("Dock.NoPlatforms");
 	detail_->setText(d.trimmed());
 
 	arm_->setEnabled(!delayed);

@@ -20,6 +20,7 @@ void ld_stop(void);
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_AUTHOR("skullboypl")
+OBS_MODULE_USE_DEFAULT_LOCALE("livedelay-obs", "en-US")
 
 namespace {
 
@@ -31,10 +32,10 @@ struct Hotkey {
 };
 
 Hotkey hotkeys[] = {
-	{"livedelay.arm", "LiveDelay: Arm", "arm", OBS_INVALID_HOTKEY_ID},
-	{"livedelay.activate", "LiveDelay: Activate (włącz opóźnienie)", "activate", OBS_INVALID_HOTKEY_ID},
-	{"livedelay.cut", "LiveDelay: Cut (wróć na żywo)", "cut", OBS_INVALID_HOTKEY_ID},
-	{"livedelay.cut_after", "LiveDelay: Cut po wyemitowaniu", "cut-after", OBS_INVALID_HOTKEY_ID},
+	{"livedelay.arm", "Hotkey.Arm", "arm", OBS_INVALID_HOTKEY_ID},
+	{"livedelay.activate", "Hotkey.Activate", "activate", OBS_INVALID_HOTKEY_ID},
+	{"livedelay.cut", "Hotkey.Cut", "cut", OBS_INVALID_HOTKEY_ID},
+	{"livedelay.cut_after", "Hotkey.CutAfter", "cut-after", OBS_INVALID_HOTKEY_ID},
 };
 
 livedelay::Dock *dock = nullptr;
@@ -79,7 +80,7 @@ bool obs_module_load(void)
 		blog(LOG_WARNING, "[livedelay] %s", err.c_str());
 
 	for (Hotkey &h : hotkeys)
-		h.id = obs_hotkey_register_frontend(h.name, h.description, OnHotkey, &h);
+		h.id = obs_hotkey_register_frontend(h.name, obs_module_text(h.description), OnHotkey, &h);
 
 	auto *main = static_cast<QMainWindow *>(obs_frontend_get_main_window());
 	dock = new livedelay::Dock(main);
@@ -114,5 +115,5 @@ const char *obs_module_name(void)
 
 const char *obs_module_description(void)
 {
-	return "Przełączane opóźnienie streamu: panel, skróty, overlay.";
+	return obs_module_text("Plugin.Description");
 }

@@ -1,43 +1,85 @@
-# LiveDelay
+# LiveDelay for OBS
 
-Lekki przełącznik opóźnienia streamu dla OBS na Windows. OBS wysyła stream do LiveDelay, a LiveDelay przesyła go dalej na platformy: na żywo albo z opóźnieniem, przełączane bez zrywania połączenia.
+<sub>**English** · [Polski](README.pl.md)</sub>
 
-Wszystko jest w jednej wtyczce OBS (`livedelay-obs.dll`, C++/Qt z wkompilowanym proxy w Ruście):
-- **Panel** (Panele → LiveDelay): stan, opóźnienie, Arm / Activate / Cut / Cut po wyemitowaniu.
-- **Ustawienia** (Narzędzia → LiveDelay albo przycisk w panelu): domyślne opóźnienie, limit pamięci, platformy z kluczami, teksty overlayu. Przycisk „Przełącz OBS na LiveDelay” przenosi obecny serwer i klucz z OBS na listę platform i ustawia OBS na `rtmp://127.0.0.1:1935/live`.
-- **Skróty** w Ustawienia → Skróty klawiszowe („LiveDelay: …”), np. pod numpad.
-- **Overlay**: źródło Przeglądarka z adresem `http://127.0.0.1:7799/overlay` (przycisk „Dodaj do sceny”). Pokazuje LIVE / ARMING… / ARMED / DELAY N s; teksty zmienisz w ustawieniach albo w adresie, np. `?delayed=OPÓŹNIENIE {s}s&live=&size=60`.
+Turn a stream delay on and off while you are live, without reconnecting. LiveDelay sits between OBS and your platforms inside OBS itself: hit **Arm**, then **Activate**, and viewers are N seconds behind. Hit **Cut** and they are back to live.
 
-Stream Deck: akcja „Hotkey” ze skrótem z OBS albo akcja „Website” z adresem `http://127.0.0.1:7799/cut` itp.
+- **One plugin, no extra program.** The delay proxy runs inside OBS (Rust core, about 0.1% CPU and 30 MB RAM for a 15 s delay at 6 Mb/s).
+- **Native dock.** A Qt panel, not a browser dock, so it costs next to nothing.
+- **Hotkeys.** Arm, Activate, Cut and "Cut after it airs" in Settings → Hotkeys. Bind them to the numpad or a Stream Deck.
+- **Several platforms at once.** Twitch, YouTube, Kick, Facebook or any RTMP/RTMPS server.
+- **Overlay.** A Browser source that tells viewers what is going on: LIVE, ARMING…, ARMED, DELAY 25s.
+- **English, Polski, Deutsch, Русский.**
 
-## Instalacja
+![Overlay states](docs/overlay-preview.png)
 
-1. Zbuduj: `obs-pluginuild.bat` (buduje Rusta i wtyczkę).
-2. Uruchom `install.ps1`: kopiuje DLL do `%ProgramData%\obs-studio\plugins\livedelay-obsin4bit` (bez admina).
-3. W OBS: Narzędzia → LiveDelay → „Przełącz OBS na LiveDelay”, Zapisz.
+## How it works
 
-Ustawienia leżą w `%APPDATA%\obs-studio\plugin_config\livedelay-obs\livedelay.ini`.
+OBS streams to LiveDelay on `rtmp://127.0.0.1:1935/live`. LiveDelay keeps the last few seconds in RAM and sends the stream on to your platforms.
 
-Jest też samodzielna wersja z ikoną w trayu (`cargo build --release` → `targetelease\livedelay.exe`) do użycia bez wtyczki.
+- **Arm** starts keeping a buffer for the delay you set.
+- **Activate** jumps viewers back to the keyframe at least N seconds old. Timestamps keep counting up, so players see one continuous stream.
+- **Cut** jumps forward to the newest keyframe: back to live.
+- **Cut after it airs** marks this moment and cuts once it has reached viewers. Handy after a match ends.
 
-## Sterowanie (HTTP, tylko 127.0.0.1:7799)
+## Install
 
-| Akcja | Co robi |
+1. Close OBS.
+2. Unzip `livedelay-obs-<version>-windows-x64.zip` into your OBS folder (usually `C:\Program Files\obs-studio`) and confirm merging.
+3. Start OBS and open **Tools → LiveDelay**.
+4. Click **Route OBS through LiveDelay**. It moves your current server and stream key onto the platform list and points OBS at LiveDelay. Click **Save**.
+5. Show the panel with **Docks → LiveDelay**.
+
+Requires OBS Studio 31 or newer on Windows 10/11 x64.
+
+## Overlay
+
+Add a Browser source with `http://127.0.0.1:7799/overlay` (or click **Add to scene** in the settings). Open `http://127.0.0.1:7799/overlay?preview` to see every state at once.
+
+| In the settings | Placeholders |
 |---|---|
-| `POST /arm?delay=15` | zaczyna trzymać bufor (domyślne opóźnienie z ini) |
-| `POST /activate` | przełącza na opóźnienie, widzowie cofają się do klatki kluczowej sprzed N s |
-| `POST /cut` | wraca na żywo, skok do najnowszej klatki kluczowej |
-| `POST /cut-after` | wraca na żywo, gdy obecna chwila dotrze do widzów |
-| `POST /disarm` | zwalnia bufor |
-| `GET /state`, `GET /events` | stan jako JSON / strumień zdarzeń (SSE) |
+| Live, Arming, Armed, Delayed texts | `{s}` delay in seconds, `{buf}` seconds already buffered |
 
-GET też działa dla akcji (np. akcja „Website” w Stream Decku).
+An empty text hides the overlay in that state. Per-source options in the address: `?size=60` (font size in px), `?live=&delayed=ON%20DELAY%20{s}s`. Restyle it with the Browser source's Custom CSS (`#tag`, `.live`, `.arming`, `.armed`, `.delayed`).
 
-## Budowanie
+## Stream Deck and scripts
+
+Use the **Hotkey** action with the OBS hotkeys, or call the local API (127.0.0.1 only):
+
+| Request | Does |
+|---|---|
+| `POST /arm?delay=15` | start buffering for a 15 s delay |
+| `POST /activate` | turn the delay on |
+| `POST /cut` | back to live now |
+| `POST /cut-after` | back to live once this moment has aired |
+| `POST /disarm` | drop the buffer |
+| `GET /state`, `GET /events` | state as JSON, or pushed as server-sent events |
+
+GET works for the actions too, so the Stream Deck **Website** action can call them. Requests coming from other websites are refused, so a web page cannot cut your stream.
+
+## Known limits
+
+- No Twitch Enhanced Broadcasting (multitrack). **Route OBS through LiveDelay** switches OBS to a custom server, which turns it off.
+- Closing OBS while delayed ends the stream right away: the last N seconds never air.
+- Saving the settings while live restarts LiveDelay and drops the stream for a few seconds. The dialog asks first.
+
+## Build
+
+Needs Visual Studio 2022 (C++), Rust (stable, MSVC) and, in `../deps`: obs-studio 31.0.3 sources, Qt 6.6.3 from obs-deps 2024-09-12, and import libraries made from your installed OBS.
 
 ```
+obs-plugin\make-import-libs.ps1
+obs-plugin\build.bat
 cargo test
-obs-pluginuild.bat
+package.ps1
 ```
 
-Wtyczka potrzebuje w `../deps`: źródeł obs-studio 31.0.3 (nagłówki), Qt 6.6.3 z obs-deps 2024-09-12 i bibliotek importu `obs.lib`/`obs-frontend-api.lib` z zainstalowanego OBS (`obs-plugin/make-import-libs.ps1` tworzy je w `deps/obslibs`).
+`install.ps1` installs a build for the current machine without admin rights (`%ProgramData%\obs-studio\plugins`). A standalone tray app with the same core is in `src/main.rs` (`cargo build --release`).
+
+## Support
+
+LiveDelay is free. If it saves your stream one day: [support the author](https://donate.skullmedia.pl). From the same author: [SmoothWizard](https://smoothwizard.com), an FPS booster for Windows.
+
+## License
+
+GPL-2.0-or-later. See [LICENSE](LICENSE).

@@ -21,6 +21,11 @@
   .delayed { background: rgba(198, 40, 40, .88) !important; }
   .delayed #dot { color: #fff; }
   @keyframes pulse { 50% { opacity: .25; } }
+  body.preview { overflow: auto; min-height: 100vh; box-sizing: border-box; padding: 24px;
+    background: repeating-conic-gradient(#2a2d34 0 25%, #1f2127 0 50%) 0 0 / 24px 24px; }
+  .row { display: flex; align-items: center; gap: 16px; margin-bottom: 18px; }
+  .row code { font: 500 14px/1.2 ui-monospace, Consolas, monospace; color: #c9ccd3; }
+  #tag.empty { opacity: .35; font-style: italic; }
 </style>
 </head>
 <body>
@@ -46,9 +51,35 @@
     text.textContent = t;
     tag.className = t ? kind : 'hidden';
   }
-  const es = new EventSource('/events');
-  es.onmessage = (e) => show(JSON.parse(e.data));
-  es.onerror = () => { tag.className = 'hidden'; };
+  if (q.has('preview')) {
+    // Every state at once with sample values (25 s delay, 12 s buffered), on a
+    // checkerboard so the transparent background is visible.
+    document.body.classList.add('preview');
+    const samples = [
+      ['live', {mode: 'live', arm_delay: null, armed: false, delay: 0, buffer_s: 0}],
+      ['arming', {mode: 'live', arm_delay: 25, armed: false, delay: 0, buffer_s: 12}],
+      ['armed', {mode: 'live', arm_delay: 25, armed: true, delay: 0, buffer_s: 25}],
+      ['delayed', {mode: 'delayed', arm_delay: 25, armed: true, delay: 25, buffer_s: 30}],
+    ];
+    tag.parentNode.removeChild(tag);
+    for (const [name, s] of samples) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = '<code>' + name + '</code>';
+      const t = tag.cloneNode(true);
+      row.prepend(t);
+      document.body.appendChild(row);
+      const tt = t.querySelector('#text');
+      let kind = name, secs = s.mode === 'delayed' ? s.delay : (s.arm_delay || 0);
+      const txt = (texts[kind] || '').replaceAll('{s}', secs).replaceAll('{buf}', Math.min(s.buffer_s, secs));
+      tt.textContent = txt || '(hidden)';
+      t.className = txt ? kind : kind + ' empty';
+    }
+  } else {
+    const es = new EventSource('/events');
+    es.onmessage = (e) => show(JSON.parse(e.data));
+    es.onerror = () => { tag.className = 'hidden'; };
+  }
 </script>
 </body>
 </html>

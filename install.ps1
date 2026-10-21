@@ -1,11 +1,14 @@
-﻿# Instaluje wtyczkę LiveDelay dla OBS na tym komputerze (bez uprawnień administratora).
-# Najpierw zbuduj: obs-plugin\build.bat
+﻿# Installs the LiveDelay OBS plugin for this computer (no administrator rights needed).
+# Build first: obs-plugin\build.bat. Close OBS before installing.
 $ErrorActionPreference = 'Stop'
-$dst = Join-Path $env:ProgramData 'obs-studio\plugins\livedelay-obs\bin\64bit'
-New-Item -ItemType Directory -Force $dst | Out-Null
-Copy-Item "$PSScriptRoot\obs-plugin\build\Release\livedelay-obs.dll" $dst -Force
-# Starsza wersja miała osobny program; teraz wszystko jest w DLL.
-$old = Join-Path $dst 'livedelay.exe'
+$root = Join-Path $env:ProgramData 'obs-studio\plugins\livedelay-obs'
+$bin = Join-Path $root 'bin\64bit'
+$data = Join-Path $root 'data'
+New-Item -ItemType Directory -Force $bin, $data | Out-Null
+Copy-Item "$PSScriptRoot\obs-plugin\build\Release\livedelay-obs.dll" $bin -Force
+Copy-Item "$PSScriptRoot\obs-plugin\data\*" $data -Recurse -Force
+# Older builds shipped a separate program; everything lives in the DLL now.
+$old = Join-Path $bin 'livedelay.exe'
 if (Test-Path $old) { Remove-Item $old }
-Write-Host "Zainstalowano do $dst"
-Write-Host "W OBS: Panele -> LiveDelay oraz Narzędzia -> LiveDelay (ustawienia)."
+Write-Host "Installed to $root"
+Write-Host "In OBS: Docks -> LiveDelay, and Tools -> LiveDelay for settings."

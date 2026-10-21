@@ -38,7 +38,7 @@ fn main() {
     let path = config_path();
     livedelay::set_log_file(&path.with_file_name("livedelay.log"));
     let cfg = config::load(&path).unwrap_or_else(|e| fatal(&e));
-    log!("ustawienia: {}", path.display());
+    log!("settings: {}", path.display());
 
     let proxy = Proxy::start(&cfg, |e| fatal(&e), |_shared| {
         #[cfg(windows)]
