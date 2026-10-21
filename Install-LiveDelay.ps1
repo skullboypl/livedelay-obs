@@ -420,11 +420,21 @@ function Find-LivedelayLogErrors([string]$text) {
 	if (-not $text) { return @() }
 	$hits = New-Object System.Collections.Generic.List[string]
 	foreach ($line in ($text -split "`r?`n")) {
-		if ($line -match 'livedelay' -and ($line -match '(?i)fail|error|LoadLibrary|cannot|unable|exception|crash|\(4551\)')) {
+		# Benign OBS warning when locale ini is missing/late - plugin can still be loaded.
+		# Example: Failed to load 'en-US' text for module: 'livedelay-obs.dll'
+		if ($line -match "(?i)Failed to load '.+' text for module") { continue }
+		if ($line -match '(?i)livedelay' -and $line -match '(?i)locale|translation' -and $line -notmatch '(?i)LoadLibrary|not loaded') { continue }
+
+		# Real failures only
+		if ($line -match "(?i)LoadLibrary failed for.*livedelay") {
 			[void]$hits.Add($line.Trim())
-		} elseif ($line -match "(?i)Failed to load module.*livedelay|LoadLibrary failed for.*livedelay") {
+		} elseif ($line -match "(?i)Module '.*livedelay.*' not loaded") {
+			[void]$hits.Add($line.Trim())
+		} elseif ($line -match "(?i)Failed to load module.*livedelay") {
 			[void]$hits.Add($line.Trim())
 		} elseif ($line -match 'livedelay' -and $line -match '\(4551\)') {
+			[void]$hits.Add($line.Trim())
+		} elseif ($line -match 'livedelay' -and ($line -match '(?i)LoadLibrary|exception|crash') -and ($line -match '(?i)fail|error|cannot|unable')) {
 			[void]$hits.Add($line.Trim())
 		}
 	}
