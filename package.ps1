@@ -1,4 +1,4 @@
-﻿# Builds the release zip for the OBS Resources page / GitHub releases.
+# Builds the release zip for the OBS Resources page / GitHub releases.
 # Layout matches the OBS install folder, so users can unzip it straight into
 # C:\Program Files\obs-studio. Build first: obs-plugin\build.bat
 $ErrorActionPreference = 'Stop'
@@ -12,6 +12,9 @@ Copy-Item "$PSScriptRoot\obs-plugin\build\Release\livedelay-obs.dll" "$stage\obs
 Copy-Item "$PSScriptRoot\obs-plugin\data\*" "$stage\data\obs-plugins\livedelay-obs" -Recurse
 Copy-Item "$PSScriptRoot\LICENSE" "$stage\LICENSE.txt"
 Copy-Item "$PSScriptRoot\Install-LiveDelay.ps1" "$stage\Install-LiveDelay.ps1"
+# BOM for Windows PowerShell 5.1 -File. Do NOT put BOM on web/public/install.ps1 (breaks irm|iex).
+$utf8bom = New-Object System.Text.UTF8Encoding $true
+[System.IO.File]::WriteAllText("$stage\Install-LiveDelay.ps1", [System.IO.File]::ReadAllText("$stage\Install-LiveDelay.ps1"), $utf8bom)
 @"
 LiveDelay $version for OBS Studio 31+ (Windows x64)
 

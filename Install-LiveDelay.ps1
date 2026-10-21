@@ -1,7 +1,7 @@
 ﻿# LiveDelay installer for end users (Windows x64).
 # Run from the unzipped release (next to obs-plugins\ and data\), or from this repo.
 # Prefer ProgramData (no admin). Portable: -IntoObsFolder -ObsRoot "D:\obs-studio"
-# ASCII-only on purpose: Windows PowerShell 5.1 breaks UTF-8 scripts without BOM.
+# ASCII-only. UTF-8 BOM OK for -File; do not serve via irm|iex.
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
