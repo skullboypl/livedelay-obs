@@ -35,4 +35,4 @@ cargo test
 obs-pluginuild.bat
 ```
 
-Wtyczka potrzebuje w `../deps`: źródeł obs-studio 31.0.3 (nagłówki), Qt 6.6.3 z obs-deps 2024-09-12 i bibliotek importu `obs.lib`/`obs-frontend-api.lib` wygenerowanych z zainstalowanego OBS (`deps/obslibs`).
+Wtyczka potrzebuje w `../deps`: źródeł obs-studio 31.0.3 (nagłówki), Qt 6.6.3 z obs-deps 2024-09-12 i bibliotek importu `obs.lib`/`obs-frontend-api.lib` z zainstalowanego OBS (`obs-pluginmake-import-libs.ps1` tworzy je w `deps/obslibs`).
