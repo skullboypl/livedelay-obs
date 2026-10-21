@@ -293,6 +293,23 @@ public static class LiveDelayNativeLoad {
 	}
 }
 
+function Unblock-PluginFiles([string]$root) {
+	# Zip downloads often carry Mark-of-the-Web; Smart App Control (Win32 4551) may block the DLL.
+	if (-not $root -or -not (Test-Path -LiteralPath $root)) { return }
+	try {
+		Get-ChildItem -LiteralPath $root -Recurse -Filter '*.dll' -ErrorAction SilentlyContinue | ForEach-Object {
+			try { Unblock-File -LiteralPath $_.FullName -ErrorAction SilentlyContinue } catch { }
+			try {
+				$ads = $_.FullName + ':Zone.Identifier'
+				if (Test-Path -LiteralPath $ads) { Remove-Item -LiteralPath $ads -Force -ErrorAction SilentlyContinue }
+			} catch { }
+		}
+		Write-Info "Unblocked plugin DLLs (Zone.Identifier / Mark-of-the-Web)."
+	} catch {
+		Write-Warn "Unblock-File skipped: $_"
+	}
+}
+
 function Install-ToProgramData([string]$dllSrc, [string]$dataSrc, [version]$obsVer) {
 	$root = Join-Path $env:ProgramData 'obs-studio\plugins\livedelay-obs'
 	$dataDst = Join-Path $root 'data'
@@ -301,6 +318,7 @@ function Install-ToProgramData([string]$dllSrc, [string]$dataSrc, [version]$obsV
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $legacyBin 'livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $root 'livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force
+	Unblock-PluginFiles -root $root
 	Write-Ok "Installed to ProgramData (no admin):"
 	Write-Host "  $root"
 	if ($obsVer -and $obsVer.Major -ge 33) {
@@ -322,6 +340,8 @@ function Install-IntoObsTree([string]$obsRoot, [string]$dllSrc, [string]$dataSrc
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $portable 'livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $portable 'bin\64bit\livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination (Join-Path $portable 'data') -Recurse -Force
+	try { Unblock-File -LiteralPath $dllDst -ErrorAction SilentlyContinue } catch { }
+	Unblock-PluginFiles -root $portable
 	Write-Ok "Copied into OBS folder: $obsRoot"
 	Write-Warn "obs-plugins\64bit is legacy (OBS 34 may skip it). ProgramData is preferred."
 }
@@ -359,13 +379,201 @@ function Find-LivedelayLogErrors([string]$text) {
 	if (-not $text) { return @() }
 	$hits = New-Object System.Collections.Generic.List[string]
 	foreach ($line in ($text -split "`r?`n")) {
-		if ($line -match 'livedelay' -and ($line -match '(?i)fail|error|LoadLibrary|cannot|unable|exception|crash')) {
+		if ($line -match 'livedelay' -and ($line -match '(?i)fail|error|LoadLibrary|cannot|unable|exception|crash|\(4551\)')) {
 			[void]$hits.Add($line.Trim())
 		} elseif ($line -match "(?i)Failed to load module.*livedelay|LoadLibrary failed for.*livedelay") {
+			[void]$hits.Add($line.Trim())
+		} elseif ($line -match 'livedelay' -and $line -match '\(4551\)') {
 			[void]$hits.Add($line.Trim())
 		}
 	}
 	return @($hits | Select-Object -Unique)
+}
+
+function Get-LoadFailureHint([string]$detail) {
+	$d = [string]$detail
+	if ($d -match '\(4551\)' -or $d -match '\b4551\b') {
+		return @(
+			'Windows error 4551 = Smart App Control / Application Control blocked the DLL.',
+			'This is NOT a missing VC++ issue - Windows refused to load the file.',
+			'Fix (Windows 11):',
+			'  1) Windows Security -> App and browser control -> Smart App Control -> Off',
+			'  2) Or add an exclusion for C:\ProgramData\obs-studio\plugins\livedelay-obs\',
+			'  3) Reboot, then re-run: irm https://livedelay.vxh.pl/install.ps1 | iex',
+			'Work PC: ask IT to allow livedelay-obs.dll (WDAC / App Control for Business).'
+		) -join "`n"
+	}
+	if ($d -match '\(126\)' -or $d -match 'module could not be found') {
+		return 'Win32 126 = missing dependency. Install VC++ Redistributable x64 (VS 2015-2022) and retry.'
+	}
+	if ($d -match '\(193\)') {
+		return 'Win32 193 = bad image / wrong architecture. Need OBS 64-bit + livedelay x64 build.'
+	}
+	return 'Also try: VC++ x64, delete leftover OBS\obs-plugins\64bit\livedelay-obs.dll, OBS 31+ x64.'
+}
+
+function Ask-YesNo([string]$Title, [string]$Message) {
+	try {
+		$r = [System.Windows.Forms.MessageBox]::Show(
+			$Message,
+			$Title,
+			[System.Windows.Forms.MessageBoxButtons]::YesNo,
+			[System.Windows.Forms.MessageBoxIcon]::Question
+		)
+		return ($r -eq [System.Windows.Forms.DialogResult]::Yes)
+	} catch {
+		try {
+			$a = Read-Host "$Message  [Y/N]"
+			return ($a -match '^(y|yes)$')
+		} catch {
+			return $false
+		}
+	}
+}
+
+function New-SupportDiagnosticReport {
+	param(
+		[string]$LogPath,
+		[string]$ErrorText,
+		[string]$Detail,
+		[string]$ObsRoot,
+		[version]$ObsVer,
+		[bool]$VcOk
+	)
+	$sb = New-Object System.Text.StringBuilder
+	[void]$sb.AppendLine('LiveDelay OBS plugin diagnostics')
+	[void]$sb.AppendLine(('Generated: {0:yyyy-MM-dd HH:mm:ss}' -f (Get-Date)))
+	[void]$sb.AppendLine(('Computer: {0}' -f $env:COMPUTERNAME))
+	[void]$sb.AppendLine(('User: {0}' -f $env:USERNAME))
+	try {
+		$os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+		if ($os) {
+			[void]$sb.AppendLine(('OS: {0} ({1})' -f $os.Caption, $os.Version))
+		}
+	} catch { }
+	[void]$sb.AppendLine(('OBS root: {0}' -f $ObsRoot))
+	[void]$sb.AppendLine(('OBS version: {0}' -f $ObsVer))
+	[void]$sb.AppendLine(('VC++ OK: {0}' -f $VcOk))
+	$pd = Join-Path $env:ProgramData 'obs-studio\plugins\livedelay-obs'
+	[void]$sb.AppendLine(('ProgramData plugin: {0}' -f $pd))
+	foreach ($rel in @('livedelay-obs.dll', 'bin\64bit\livedelay-obs.dll')) {
+		$p = Join-Path $pd $rel
+		if (Test-Path -LiteralPath $p) {
+			$i = Get-Item -LiteralPath $p
+			[void]$sb.AppendLine(('  {0}  size={1}  sha256={2}' -f $rel, $i.Length, (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash))
+		} else {
+			[void]$sb.AppendLine(('  missing: {0}' -f $rel))
+		}
+	}
+	[void]$sb.AppendLine('')
+	[void]$sb.AppendLine('--- installer error ---')
+	[void]$sb.AppendLine([string]$ErrorText)
+	[void]$sb.AppendLine('')
+	[void]$sb.AppendLine('--- log detail ---')
+	[void]$sb.AppendLine([string]$Detail)
+	[void]$sb.AppendLine('')
+	[void]$sb.AppendLine(('--- OBS log path: {0} ---' -f $LogPath))
+	if ($LogPath -and (Test-Path -LiteralPath $LogPath)) {
+		try {
+			$full = Read-ObsLogText $LogPath
+			# Keep mail/desktop file reasonable; attach hint if huge
+			if ($full.Length -gt 200000) {
+				[void]$sb.AppendLine($full.Substring($full.Length - 200000))
+				[void]$sb.AppendLine('')
+				[void]$sb.AppendLine('(truncated: last 200KB of log)')
+			} else {
+				[void]$sb.AppendLine($full)
+			}
+		} catch {
+			[void]$sb.AppendLine("Could not read log: $_")
+		}
+	} else {
+		[void]$sb.AppendLine('(no log file)')
+	}
+	return $sb.ToString()
+}
+
+function Offer-SendSupportEmail {
+	param(
+		[string]$LogPath,
+		[string]$ErrorText,
+		[string]$Detail,
+		[string]$ObsRoot,
+		[version]$ObsVer,
+		[bool]$VcOk
+	)
+	$support = 'github@skullmedia.pl'
+	$hint = Get-LoadFailureHint -detail ($Detail + "`n" + $ErrorText)
+	$ask = @(
+		'LiveDelay failed to load in OBS.',
+		'',
+		$hint,
+		'',
+		"Send diagnostic log to $support now?",
+		'(Opens your email app + saves a report on the Desktop to attach.)'
+	) -join "`n"
+
+	if (-not (Ask-YesNo -Title 'LiveDelay - send log to support?' -Message $ask)) {
+		Write-Warn "Support email skipped. You can still mail logs to $support"
+		Write-Warn "Log: $LogPath"
+		return
+	}
+
+	try {
+		$report = New-SupportDiagnosticReport -LogPath $LogPath -ErrorText $ErrorText -Detail $Detail -ObsRoot $ObsRoot -ObsVer $ObsVer -VcOk $VcOk
+		$desk = [Environment]::GetFolderPath('Desktop')
+		if (-not $desk) { $desk = $env:USERPROFILE }
+		$deskFile = Join-Path $desk 'LiveDelay-OBS-diagnostics.txt'
+		$utf8 = New-Object System.Text.UTF8Encoding $false
+		[System.IO.File]::WriteAllText($deskFile, $report, $utf8)
+		Write-Ok "Diagnostic saved: $deskFile"
+
+		$subj = 'LiveDelay OBS plugin load failure'
+		$bodyLines = @(
+			'Hello,',
+			'',
+			'LiveDelay failed to load. Diagnostic report is attached (or on Desktop):',
+			$deskFile,
+			'',
+			'Summary:',
+			$ErrorText,
+			'',
+			$Detail,
+			'',
+			$hint,
+			'',
+			'Please investigate.',
+			''
+		)
+		$body = $bodyLines -join "`r`n"
+		# mailto body length limits - keep short, rely on Desktop attachment
+		if ($body.Length -gt 1200) {
+			$body = @(
+				'Hello,',
+				'',
+				'LiveDelay failed to load. Please see attached file from my Desktop:',
+				'LiveDelay-OBS-diagnostics.txt',
+				'',
+				'Full path:',
+				$deskFile,
+				'',
+				'Key error:',
+				$Detail,
+				''
+			) -join "`r`n"
+		}
+		$mailto = 'mailto:{0}?subject={1}&body={2}' -f $support, [uri]::EscapeDataString($subj), [uri]::EscapeDataString($body)
+		try {
+			Start-Process $mailto | Out-Null
+		} catch {
+			Write-Warn "Could not open mail app: $_"
+			Write-Warn "Send manually to $support and attach: $deskFile"
+		}
+		Show-UserMessage -Title 'Attach the diagnostic file' -Message ("Email draft opened for $support.`n`nPlease ATTACH this file from your Desktop:`n$deskFile") -Kind Info
+	} catch {
+		Write-Warn "Could not prepare support email: $_"
+		Write-Warn "Manual: mail $support and attach OBS log from %AppData%\obs-studio\logs\"
+	}
 }
 
 function Start-ObsAndVerify {
@@ -467,13 +675,26 @@ function Finish-Installer {
 	param(
 		[int]$Code,
 		[string]$ErrorText,
-		[switch]$KeepOpen
+		[switch]$KeepOpen,
+		[switch]$OfferEmail,
+		[string]$LogPath,
+		[string]$Detail
 	)
 	$script:ExitCode = $Code
 	if ($Code -ne 0 -and $ErrorText) {
 		$script:FatalMessage = $ErrorText
-		Write-Err $ErrorText
-		Show-UserMessage -Title 'LiveDelay install problem' -Message $ErrorText -Kind Error
+		$hint = Get-LoadFailureHint -detail ($Detail + "`n" + $ErrorText)
+		$full = $ErrorText
+		if ($hint) { $full = $ErrorText + "`n`n" + $hint }
+		Write-Err $full
+		Show-UserMessage -Title 'LiveDelay install problem' -Message $full -Kind Error
+		if ($OfferEmail) {
+			try {
+				Offer-SendSupportEmail -LogPath $LogPath -ErrorText $ErrorText -Detail $Detail -ObsRoot $script:LastObsRoot -ObsVer $script:LastObsVer -VcOk ([bool]$script:LastVcOk)
+			} catch {
+				Write-Warn "Support email offer failed: $_"
+			}
+		}
 		if (-not $NoPrompt -or $KeepOpen) {
 			try { [void](Read-Host 'Press Enter to close') } catch { }
 		}
@@ -500,6 +721,7 @@ try {
 
 	$vcOk = $false
 	try { $vcOk = Ensure-VcRedist -Skip:$SkipVcRedist } catch { Write-Warn "VC++ step: $_"; $vcOk = $false }
+	$script:LastVcOk = $vcOk
 
 	$obsRoots = @()
 	try { $obsRoots = @(Find-ObsRoots) } catch { Write-Warn "OBS detect: $_"; $obsRoots = @() }
@@ -560,6 +782,8 @@ try {
 	}
 
 	$ver = if ($obsExe) { Get-ObsVersion $obsExe } else { $null }
+	$script:LastObsRoot = $obsRoot
+	$script:LastObsVer = $ver
 	if ($ver) {
 		Write-Info "OBS: $obsRoot (file version $ver)"
 		if ($ver.Major -lt 31) {
@@ -648,9 +872,7 @@ try {
 		$msg += $(if ($verify.Error) { $verify.Error } else { 'OBS plugin verify failed.' })
 		if ($verify.Detail) { $msg += ''; $msg += 'Log details:'; $msg += $verify.Detail }
 		if ($verify.Log) { $msg += ''; $msg += "Log file: $($verify.Log)" }
-		$msg += ''
-		$msg += 'Try: VC++ x64 redistributable, delete OBS\obs-plugins\64bit\livedelay-obs.dll leftovers, OBS 31+ x64.'
-		Finish-Installer -Code 1 -ErrorText ($msg -join "`n") -KeepOpen
+		Finish-Installer -Code 1 -ErrorText ($msg -join "`n") -KeepOpen -OfferEmail -LogPath $verify.Log -Detail ([string]$verify.Detail)
 	}
 
 	if ($verify.Warning) { Write-Warn $verify.Warning }
