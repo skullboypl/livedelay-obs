@@ -2,6 +2,8 @@
 
 <sub>**English** · [Polski](README.pl.md)</sub>
 
+**Website:** [livedelay.vxh.pl](https://livedelay.vxh.pl/) · [English](https://livedelay.vxh.pl/en/) · [Download](https://github.com/skullboypl/livedelay-obs/releases/latest) · [VXH hub](https://vxh.pl/livedelay/)
+
 Turn a stream delay on and off while you are live, without reconnecting. LiveDelay sits between OBS and your platforms inside OBS itself: hit **Arm**, then **Activate**, and viewers are N seconds behind. Hit **Cut** and they are back to live.
 
 - **One plugin, no extra program.** The delay proxy runs inside OBS (Rust core, about 0.1% CPU and 30 MB RAM for a 15 s delay at 6 Mb/s).
@@ -14,6 +16,16 @@ Turn a stream delay on and off while you are live, without reconnecting. LiveDel
 - **English, Polski, Deutsch, Русский.**
 
 ![Overlay states](docs/overlay-preview.png)
+
+### Screenshots (OBS)
+
+| Dock | Settings · General | Settings · Platforms |
+|:---:|:---:|:---:|
+| ![Dock](docs/screenshots/dock.png) | ![General](docs/screenshots/settings-general.png) | ![Platforms](docs/screenshots/settings-platforms.png) |
+
+| Settings · Overlay | Overlay appearance editor |
+|:---:|:---:|
+| ![Overlay settings](docs/screenshots/settings-overlay.png) | ![Theme editor](docs/screenshots/overlay-editor.png) |
 
 ## How it works
 

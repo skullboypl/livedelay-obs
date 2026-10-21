@@ -2,6 +2,8 @@
 
 <sub>[English](README.md) · **Polski**</sub>
 
+**Strona:** [livedelay.vxh.pl](https://livedelay.vxh.pl/) · [EN](https://livedelay.vxh.pl/en/) · [Pobierz](https://github.com/skullboypl/livedelay-obs/releases/latest) · [Hub VXH](https://vxh.pl/livedelay/)
+
 Włączasz i wyłączasz opóźnienie streamu w trakcie nadawania, bez zrywania połączenia. LiveDelay siedzi w OBS między OBS a platformami: **Arm**, potem **Activate**, i widzowie są N sekund z tyłu. **Cut** i są z powrotem na żywo.
 
 - **Jedna wtyczka, bez dodatkowego programu.** Proxy opóźnienia działa w środku OBS (rdzeń w Ruście, ok. 0,1% CPU i 30 MB RAM przy 15 s opóźnienia i 6 Mb/s).
@@ -14,6 +16,16 @@ Włączasz i wyłączasz opóźnienie streamu w trakcie nadawania, bez zrywania 
 - **Polski, English, Deutsch, Русский.**
 
 ![Stany overlayu](docs/overlay-preview.png)
+
+### Zrzuty z OBS
+
+| Dock | Ustawienia · Ogólne | Ustawienia · Platformy |
+|:---:|:---:|:---:|
+| ![Dock](docs/screenshots/dock.png) | ![Ogólne](docs/screenshots/settings-general.png) | ![Platformy](docs/screenshots/settings-platforms.png) |
+
+| Ustawienia · Overlay | Edytor wyglądu overlayu |
+|:---:|:---:|
+| ![Overlay](docs/screenshots/settings-overlay.png) | ![Edytor](docs/screenshots/overlay-editor.png) |
 
 ## Jak to działa
 
