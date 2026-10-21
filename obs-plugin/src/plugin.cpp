@@ -75,6 +75,14 @@ void LogFromProxy(const char *msg)
 bool obs_module_load(void)
 {
 	ld_set_logger(LogFromProxy);
+	// A language picked in LiveDelay's settings wins over OBS's.
+	const std::string language = livedelay::Settings::Load(livedelay::ConfigPath()).language;
+	if (language != "auto")
+		livedelay::ApplyLanguage(language);
+	livedelay::OnLanguageChanged = [] {
+		if (dock)
+			dock->Retranslate();
+	};
 	std::string err = livedelay::StartProxy();
 	if (!err.empty())
 		blog(LOG_WARNING, "[livedelay] %s", err.c_str());

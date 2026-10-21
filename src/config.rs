@@ -117,6 +117,8 @@ pub fn parse(text: &str) -> Result<Config, String> {
             "api" => c.api = v.into(),
             "delay" => c.delay_s = v.parse().map_err(|_| err("delay must be a number"))?,
             "max_buffer_mb" => c.max_buffer_mb = v.parse().map_err(|_| err("max_buffer_mb must be a number"))?,
+            // Plugin UI language; the proxy itself has no texts to translate.
+            "language" => {}
             "overlay_live" => c.overlay.live = v.into(),
             "overlay_arming" => c.overlay.arming = v.into(),
             "overlay_armed" => c.overlay.armed = v.into(),

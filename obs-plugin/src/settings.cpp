@@ -112,6 +112,8 @@ Settings Settings::Load(const std::string &path)
 			s.delay = std::atoi(v.c_str());
 		else if (k == "max_buffer_mb")
 			s.max_buffer_mb = std::atoi(v.c_str());
+		else if (k == "language")
+			s.language = v.empty() ? "auto" : v;
 		else if (k == "overlay_live")
 			s.overlay_live = v;
 		else if (k == "overlay_arming")
@@ -130,23 +132,39 @@ Settings Settings::Load(const std::string &path)
 
 bool Settings::Save(const std::string &path) const
 {
+	std::string text = Text();
+	std::string tmp = path + ".tmp";
+	{
+		std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+		out << text;
+		if (!out)
+			return false;
+	}
+	return os_rename(tmp.c_str(), path.c_str()) == 0;
+}
+
+std::string Settings::Text() const
+{
 	std::ostringstream o;
 	o << "# LiveDelay settings (edited from OBS: Tools -> LiveDelay)\n\n"
-	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb
+	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb << "\nlanguage = " << language
 	  << "\n\n# Overlay: {s} = delay in seconds, {buf} = how much is buffered\n"
 	  << "overlay_live = " << overlay_live << "\noverlay_arming = " << overlay_arming
 	  << "\noverlay_armed = " << overlay_armed << "\noverlay_delayed = " << overlay_delayed << "\n";
 	for (const Destination &d : dests)
 		o << "\n[dest " << d.name << "]\nservice = " << d.service << "\nurl = " << d.url << "\nkey = " << d.key
 		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\nautostart = " << (d.autostart ? "yes" : "no") << "\n";
-	std::string tmp = path + ".tmp";
-	{
-		std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-		out << o.str();
-		if (!out)
-			return false;
-	}
-	return os_rename(tmp.c_str(), path.c_str()) == 0;
+	return o.str();
+}
+
+void (*OnLanguageChanged)() = nullptr;
+
+void ApplyLanguage(const std::string &language)
+{
+	const char *obs = obs_get_locale();
+	obs_module_set_locale(language == "auto" || language.empty() ? (obs ? obs : "en-US") : language.c_str());
+	if (OnLanguageChanged)
+		OnLanguageChanged();
 }
 
 int Settings::RtmpPort() const
@@ -301,9 +319,22 @@ public:
 		buffer->setSuffix(" MB");
 		buffer->setValue(s_.max_buffer_mb);
 		buffer->setToolTip(T("Settings.BufferTip"));
+		language_ = new QComboBox;
+		const char *obsLocale = obs_get_locale();
+		language_->addItem(T("Settings.LanguageAuto").arg(obsLocale ? obsLocale : "en-US"), "auto");
+		language_->addItem("English", "en-US");
+		language_->addItem("Polski", "pl-PL");
+		language_->addItem("Deutsch", "de-DE");
+		language_->addItem(QString::fromUtf8("Русский"), "ru-RU");
+		{
+			int i = language_->findData(Q(s_.language));
+			language_->setCurrentIndex(i < 0 ? 0 : i);
+		}
+		original_ = s_;
 		auto *general = new QFormLayout;
 		general->addRow(T("Settings.DefaultDelay"), delay);
 		general->addRow(T("Settings.BufferLimit"), buffer);
+		general->addRow(T("Settings.Language"), language_);
 
 		// Platforms: list on the left, the selected one's fields on the right.
 		list_ = new QListWidget;
@@ -473,6 +504,7 @@ public:
 			s_.overlay_arming = S(ovArming->text());
 			s_.overlay_armed = S(ovArmed->text());
 			s_.overlay_delayed = S(ovDelayed->text());
+			s_.language = S(language_->currentData().toString());
 			SaveAndRestart();
 		});
 
@@ -567,20 +599,31 @@ private:
 
 	void SaveAndRestart()
 	{
-		if (obs_frontend_streaming_active() &&
+		// Only a change the proxy cares about needs a restart; the language doesn't.
+		Settings cmp = original_;
+		cmp.language = s_.language;
+		const bool proxyChanged = cmp.Text() != s_.Text();
+		const bool languageChanged = original_.language != s_.language;
+		if (proxyChanged && obs_frontend_streaming_active() &&
 		    QMessageBox::question(this, "LiveDelay", T("Settings.RestartWarning")) != QMessageBox::Yes)
 			return;
 		if (!s_.Save(ConfigPath())) {
 			QMessageBox::warning(this, "LiveDelay", T("Settings.SaveFailed"));
 			return;
 		}
-		std::string err = StartProxy();
-		if (!err.empty())
-			QMessageBox::warning(this, "LiveDelay", Q(err));
+		if (proxyChanged) {
+			std::string err = StartProxy();
+			if (!err.empty())
+				QMessageBox::warning(this, "LiveDelay", Q(err));
+		}
+		if (languageChanged)
+			ApplyLanguage(s_.language);
 		accept();
 	}
 
 	Settings s_;
+	Settings original_;
+	QComboBox *language_;
 	int current_ = -1;
 	QListWidget *list_;
 	QWidget *fields_;

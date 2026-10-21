@@ -31,6 +31,8 @@ public:
 	void Act(const std::string &action);
 	// Arm takes the delay set in the panel; other actions go straight through.
 	void Hotkey(const std::string &action);
+	// Re-reads every text after the language changed.
+	void Retranslate();
 
 private:
 	void ShowState(const std::string &json);
@@ -54,6 +56,7 @@ private:
 	QPushButton *disarm_;
 	QPushButton *start_;
 	bool delay_set_ = false;
+	std::string last_; // last state JSON, empty while offline
 	std::map<std::string, std::deque<double>> history_;
 	std::chrono::steady_clock::time_point lastSample_{};
 	std::unique_ptr<EventStream> events_;

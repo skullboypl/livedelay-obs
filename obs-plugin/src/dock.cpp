@@ -1,6 +1,7 @@
 #include "dock.hpp"
 #include "client.hpp"
 #include "i18n.hpp"
+#include "icons.hpp"
 #include "settings.hpp"
 
 #include <QDesktopServices>
@@ -57,12 +58,56 @@ private:
 	QColor color_;
 };
 
-static QPushButton *Button(const char *text, const char *tip)
+// Buttons remember their text keys so Retranslate() can switch language live.
+static QPushButton *Button(const char *text, const char *tip, Icon icon, const char *accent = nullptr)
 {
 	auto *b = new QPushButton(T(text));
 	b->setToolTip(T(tip));
-	b->setMinimumHeight(30);
+	b->setProperty("ldText", text);
+	b->setProperty("ldTip", tip);
+	b->setIcon(MakeIcon(icon, QColor(accent ? accent : "#c9ccd3")));
+	b->setIconSize(QSize(16, 16));
+	b->setMinimumHeight(32);
+	b->setCursor(Qt::PointingHandCursor);
+	if (accent) {
+		// A tint of the action's colour that works on light and dark OBS themes.
+		QColor c(accent);
+		b->setStyleSheet(QString("QPushButton { background: rgba(%1,%2,%3,.14); border: 1px solid rgba(%1,%2,%3,.45);"
+					 " border-radius: 6px; padding: 4px 10px; font-weight: 600; }"
+					 "QPushButton:hover { background: rgba(%1,%2,%3,.26); }"
+					 "QPushButton:pressed { background: rgba(%1,%2,%3,.36); }"
+					 "QPushButton:disabled { background: transparent; border-color: rgba(128,132,142,.35); }")
+					 .arg(c.red())
+					 .arg(c.green())
+					 .arg(c.blue()));
+	}
 	return b;
+}
+
+static QLabel *Label(const char *text)
+{
+	auto *l = new QLabel(T(text));
+	l->setProperty("ldText", text);
+	return l;
+}
+
+void Dock::Retranslate()
+{
+	for (QWidget *w : findChildren<QWidget *>()) {
+		const QByteArray text = w->property("ldText").toByteArray();
+		const QByteArray tip = w->property("ldTip").toByteArray();
+		if (auto *b = qobject_cast<QPushButton *>(w); b && !text.isEmpty())
+			b->setText(T(text.constData()));
+		else if (auto *l = qobject_cast<QLabel *>(w); l && !text.isEmpty())
+			l->setText(T(text.constData()));
+		if (!tip.isEmpty())
+			w->setToolTip(T(tip.constData()));
+	}
+	delay_->setToolTip(T("Dock.DelayTip"));
+	if (last_.empty())
+		ShowOffline();
+	else
+		ShowState(last_);
 }
 
 Dock::Dock(QWidget *parent) : QWidget(parent)
@@ -71,9 +116,9 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	banner_ = new QFrame;
 	banner_->setObjectName("ldBanner");
 	banner_->setStyleSheet("#ldBanner { background: rgba(255, 191, 60, .14); border: 1px solid rgba(255, 191, 60, .45); border-radius: 6px; }");
-	auto *bannerText = new QLabel(T("Dock.NotRouted"));
+	auto *bannerText = Label("Dock.NotRouted");
 	bannerText->setWordWrap(true);
-	auto *route = new QPushButton(T("Dock.Route"));
+	auto *route = Button("Dock.Route", "Dock.Route", Icon::Play, "#ffbf3c");
 	auto *bannerLayout = new QHBoxLayout(banner_);
 	bannerLayout->addWidget(bannerText, 1);
 	bannerLayout->addWidget(route);
@@ -95,15 +140,16 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	delay_->setValue(15);
 	delay_->setSuffix(" s");
 	delay_->setToolTip(T("Dock.DelayTip"));
-	arm_ = Button("Dock.Arm", "Dock.ArmTip");
-	activate_ = Button("Dock.Activate", "Dock.ActivateTip");
-	cut_ = Button("Dock.Cut", "Dock.CutTip");
-	cut_after_ = Button("Dock.CutAfter", "Dock.CutAfterTip");
-	disarm_ = Button("Dock.Disarm", "Dock.DisarmTip");
-	start_ = Button("Dock.Restart", "Dock.RestartTip");
-	auto *settings = Button("Dock.Settings", "Dock.SettingsTip");
-	auto *preview = Button("Dock.Preview", "Dock.PreviewTip");
-	auto *help = Button("Dock.Help", "Dock.HelpTip");
+	delay_->setMinimumHeight(32);
+	arm_ = Button("Dock.Arm", "Dock.ArmTip", Icon::Arm, "#ffbf3c");
+	activate_ = Button("Dock.Activate", "Dock.ActivateTip", Icon::Activate, "#ff5a4f");
+	cut_ = Button("Dock.Cut", "Dock.CutTip", Icon::Live, "#3ddc84");
+	cut_after_ = Button("Dock.CutAfter", "Dock.CutAfterTip", Icon::LiveAfter, "#3ddc84");
+	disarm_ = Button("Dock.Disarm", "Dock.DisarmTip", Icon::Disarm);
+	start_ = Button("Dock.Restart", "Dock.RestartTip", Icon::Restart, "#5ac8fa");
+	auto *settings = Button("Dock.Settings", "Dock.SettingsTip", Icon::Settings);
+	auto *preview = Button("Dock.Preview", "Dock.PreviewTip", Icon::Preview);
+	auto *help = Button("Dock.Help", "Dock.HelpTip", Icon::Help);
 	fill_ = new QProgressBar;
 	fill_->setTextVisible(false);
 	fill_->setMaximumHeight(6);
@@ -217,6 +263,7 @@ static void Pill(QLabel *l, const QString &text, const char *bg)
 
 void Dock::ShowOffline()
 {
+	last_.clear();
 	Pill(status_, T("Dock.Offline"), "#5a5f6b");
 	detail_->setText(LastError().empty() ? T("Dock.Starting") : QString::fromStdString(LastError()));
 	fill_->hide();
@@ -285,6 +332,9 @@ void Dock::ShowDestinations(const std::string &j)
 			stateLabel->setToolTip(QString::fromStdString(error));
 		auto *toggle = new QPushButton(on ? T("Dock.DestStop") : T("Dock.DestStart"));
 		toggle->setToolTip(on ? T("Dock.DestStopTip") : T("Dock.DestStartTip"));
+		toggle->setIcon(MakeIcon(on ? Icon::Stop : Icon::Play, QColor(on ? "#ff5a4f" : "#3ddc84")));
+		toggle->setIconSize(QSize(12, 12));
+		toggle->setCursor(Qt::PointingHandCursor);
 		const std::string path = std::string(on ? "dest/stop" : "dest/start") + "?i=" + std::to_string(index);
 		connect(toggle, &QPushButton::clicked, this, [this, path] { Act(path); });
 
@@ -307,6 +357,7 @@ void Dock::ShowDestinations(const std::string &j)
 
 void Dock::ShowState(const std::string &j)
 {
+	last_ = j;
 	start_->hide();
 	UpdateBanner();
 	const bool delayed = JsonString(j, "mode") == "delayed";

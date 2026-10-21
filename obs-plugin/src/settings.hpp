@@ -20,6 +20,7 @@ struct Settings {
 	std::string api = "127.0.0.1:7799";
 	int delay = 15;
 	int max_buffer_mb = 512;
+	std::string language = "auto"; // auto = follow OBS, or en-US / pl-PL / de-DE / ru-RU
 	std::string overlay_live = "LIVE";
 	std::string overlay_arming = "ARMING… {buf}/{s}s";
 	std::string overlay_armed = "ARMED {s}s";
@@ -28,6 +29,7 @@ struct Settings {
 
 	static Settings Load(const std::string &path);
 	bool Save(const std::string &path) const;
+	std::string Text() const; // the ini as written by Save()
 	int RtmpPort() const;
 };
 
@@ -46,5 +48,10 @@ void RouteObsThroughLiveDelay(QWidget *parent);
 void ShowHelp(QWidget *parent);
 void AddOverlayToScene(QWidget *parent);
 void ShowSettings(QWidget *parent);
+
+// Switches the plugin's texts to `language` ("auto" = OBS's language) and
+// tells the dock to redraw itself through OnLanguageChanged.
+void ApplyLanguage(const std::string &language);
+extern void (*OnLanguageChanged)();
 
 } // namespace livedelay
