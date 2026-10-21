@@ -49,6 +49,31 @@ bool IsRtmp(const QString &url)
 	return url.startsWith("rtmp://") || url.startsWith("rtmps://");
 }
 
+// Replaces the static server list with OBS's cached ingest list (sorted by priority,
+// i.e. closest first). "Auto" uses the first entry, which is what OBS's Auto does.
+void UseIngestList(Service &s, const char *file)
+{
+	obs_module_t *mod = obs_get_module("rtmp-services");
+	char *path = mod ? obs_module_get_config_path(mod, file) : nullptr;
+	QJsonArray ingests = ReadJson(path).value("ingests").toArray();
+	bfree(path);
+	QVector<QPair<int, Server>> found;
+	for (const QJsonValue &v : ingests) {
+		QJsonObject o = v.toObject();
+		QString url = o.value("url_template").toString();
+		url.remove("/{stream_key}");
+		if (IsRtmp(url))
+			found.push_back({o.value("priority").toInt(), {o.value("name").toString(), url}});
+	}
+	if (found.isEmpty())
+		return; // no cache yet: keep the list from services.json
+	std::stable_sort(found.begin(), found.end(), [](const auto &a, const auto &b) { return a.first < b.first; });
+	s.servers.clear();
+	s.servers.push_back({T("Settings.AutoServer"), found.front().second.url});
+	for (const auto &f : found)
+		s.servers.push_back(f.second);
+}
+
 QVector<Service> Load()
 {
 	QVector<Service> list;
@@ -64,11 +89,14 @@ QVector<Service> Load()
 			if (IsRtmp(srv.url))
 				s.servers.push_back(srv);
 		}
+		// Twitch and Amazon IVS servers come from the ingest lists OBS downloads,
+		// already sorted closest first, exactly as Settings → Stream shows them.
+		if (s.name == "Twitch")
+			UseIngestList(s, "twitch_ingests.json");
+		else if (s.name == "Amazon IVS")
+			UseIngestList(s, "amazon_ivs_ingests.json");
 		if (s.name.isEmpty() || s.servers.isEmpty())
 			continue;
-		if (s.name == "Twitch")
-			// OBS picks the closest Twitch ingest itself ("Auto"); live.twitch.tv does the same by DNS.
-			s.servers.prepend({T("Settings.AutoServer"), "rtmp://live.twitch.tv/app"});
 		list.push_back(s);
 	}
 	auto has = [&](const char *n) {
