@@ -1,0 +1,17 @@
+[package]
+name = "livedelay"
+version = "0.1.0"
+edition = "2021"
+description = "Lekki przełącznik opóźnienia streamu dla OBS (proxy RTMP z buforem w RAM)."
+
+[dependencies]
+tokio = { version = "1", default-features = false, features = ["rt", "net", "io-util", "sync", "time", "macros"] }
+# TLS dla rtmps:// (Kick, YouTube). Używa systemowego schannel, więc nie dokłada własnego stosu TLS.
+tokio-native-tls = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
