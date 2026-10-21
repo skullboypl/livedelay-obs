@@ -366,7 +366,7 @@ public:
 		form->addRow(T("Settings.Server"), url_);
 		form->addRow(T("Settings.Key"), keyRow);
 		form->addRow(QString(), keyLink_);
-		form->addRow(QString(), enabled_);
+		enabled_->hide(); // superseded by autostart + Start/Stop in the panel
 		form->addRow(QString(), autostart_);
 		fields_ = new QWidget;
 		fields_->setLayout(form);
@@ -618,7 +618,7 @@ private:
 		d.url = S(url_->text());
 		d.key = S(key_->text());
 		d.service = service_->currentIndex() > 0 ? S(service_->currentText()) : "";
-		d.enabled = enabled_->isChecked();
+		d.enabled = true;
 		d.autostart = autostart_->isChecked();
 	}
 
@@ -640,7 +640,7 @@ private:
 		FillServers(idx > 0 ? svc : QString(), Q(d.url));
 		key_->setText(Q(d.key));
 		enabled_->setChecked(d.enabled);
-		autostart_->setChecked(d.autostart);
+		autostart_->setChecked(d.autostart && d.enabled);
 	}
 
 	void Import()

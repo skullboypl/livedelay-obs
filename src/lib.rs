@@ -76,10 +76,11 @@ impl Proxy {
         let shared = engine::Shared::new(cfg.max_buffer_mb * 1024 * 1024);
         let mut dests = Vec::new();
         let mut targets = Vec::new();
-        for d in cfg.dests.iter().filter(|d| d.enabled) {
+        // Every platform shows up in the panel; "enabled = no" (older versions) just means it does not autostart.
+        for d in cfg.dests.iter() {
             match rtmp::client::parse_url(&d.url, &d.key) {
                 Ok(t) => {
-                    let dest = rtmp::client::Dest::new(&d.name, d.autostart);
+                    let dest = rtmp::client::Dest::new(&d.name, d.autostart && d.enabled);
                     dests.push(dest.clone());
                     targets.push((t, dest));
                 }
