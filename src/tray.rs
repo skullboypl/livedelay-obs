@@ -143,7 +143,7 @@ fn show_menu(hwnd: HWND) {
     let Some(app) = APP.get() else { return };
     let st = app.ctx.hub.status(Instant::now());
     let (_, text) = summary(app);
-    let default = app.ctx.default_delay.as_secs_f64();
+    let default = app.ctx.default_delay.lock().unwrap_or_else(|e| e.into_inner()).as_secs_f64();
     unsafe {
         let m = CreatePopupMenu();
         let item = |id: usize, label: &str, enabled: bool| {

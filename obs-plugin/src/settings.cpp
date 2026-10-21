@@ -11,6 +11,7 @@
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
+#include <util/config-file.h>
 #include <util/platform.h>
 
 #include <QApplication>
@@ -30,7 +31,9 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMainWindow>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScreen>
@@ -45,6 +48,10 @@
 #include <cstdio>
 #include <fstream>
 #include <sstream>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 extern "C" {
 int ld_start(const char *config_path);
@@ -319,20 +326,47 @@ bool CurrentObsTarget(Destination &out, bool &already_livedelay, int port)
 	return !out.url.empty() && !out.key.empty();
 }
 
-void PointObsAtLiveDelay(int port)
+// OBS Multitrack / Enhanced Broadcasting needs a Twitch GoLive config URL. Custom
+// RTMP (LiveDelay) has none → "Brak adresu URL z konfiguracją…". Turn it off and
+// recreate the output handler so MultitrackVideoOutput is destroyed.
+void TryResetObsOutputs()
 {
-	obs_data_t *s = obs_data_create();
-	std::string server = "rtmp://127.0.0.1:" + std::to_string(port) + "/live";
-	obs_data_set_string(s, "server", server.c_str());
-	// Stock OBS encode is discarded by the proxy; real platforms use ld0… via plugin outputs.
-	obs_data_set_string(s, "key", "_idle");
-	obs_service_t *svc = obs_service_create("rtmp_custom", "default_service", s, nullptr);
-	obs_frontend_set_streaming_service(svc);
-	obs_frontend_save_streaming_service();
-	obs_service_release(svc);
-	obs_data_release(s);
-	// Do not change OBS → Output bitrates here: mode "obs" reads them as the
-	// template for each platform. Stock publish to _idle is discarded by the proxy.
+	QWidget *main = static_cast<QWidget *>(obs_frontend_get_main_window());
+	if (!main)
+		return;
+	if (QMetaObject::invokeMethod(main, "ResetOutputs", Qt::DirectConnection)) {
+		blog(LOG_INFO, "[livedelay] ResetOutputs via QMetaObject");
+		return;
+	}
+#ifdef _WIN32
+	// MSVC x64: OBSBasic::ResetOutputs() — this in RCX, same as void (*)(void*).
+	if (HMODULE mod = GetModuleHandleW(nullptr)) {
+		using ResetFn = void (*)(void *);
+		if (auto fn = reinterpret_cast<ResetFn>(GetProcAddress(mod, "?ResetOutputs@OBSBasic@@QEAAXXZ"))) {
+			fn(main);
+			blog(LOG_INFO, "[livedelay] ResetOutputs via GetProcAddress");
+			return;
+		}
+	}
+#endif
+	blog(LOG_WARNING,
+	     "[livedelay] could not ResetOutputs; restart OBS once if Enhanced Broadcasting was on");
+}
+
+bool DisableObsStockEnhancedBroadcasting()
+{
+	config_t *cfg = obs_frontend_get_profile_config();
+	if (!cfg)
+		return false;
+	const bool was_on = config_get_bool(cfg, "Stream1", "EnableMultitrackVideo");
+	if (!was_on && !config_has_user_value(cfg, "Stream1", "EnableMultitrackVideo"))
+		return false;
+	config_set_bool(cfg, "Stream1", "EnableMultitrackVideo", false);
+	config_save_safe(cfg, "tmp", nullptr);
+	TryResetObsOutputs();
+	if (was_on)
+		blog(LOG_INFO, "[livedelay] disabled OBS Stream1 EnableMultitrackVideo (stock Enhanced Broadcasting)");
+	return was_on;
 }
 
 bool RoutedTo(int port)
@@ -340,6 +374,28 @@ bool RoutedTo(int port)
 	obs_service_t *svc = obs_frontend_get_streaming_service();
 	const char *url = svc ? obs_service_get_connect_info(svc, OBS_SERVICE_CONNECT_INFO_SERVER_URL) : nullptr;
 	return url && std::string(url).find("127.0.0.1:" + std::to_string(port)) != std::string::npos;
+}
+
+// Returns true when stock Multitrack/EB was on and we turned it off.
+bool PointObsAtLiveDelay(int port)
+{
+	obs_data_t *s = obs_data_create();
+	std::string server = "rtmp://127.0.0.1:" + std::to_string(port) + "/live";
+	obs_data_set_string(s, "server", server.c_str());
+	// Stock OBS encode is discarded by the proxy; real platforms use ld0… via plugin outputs.
+	obs_data_set_string(s, "key", "_idle");
+	obs_data_set_bool(s, "use_auth", false);
+	obs_service_t *svc = obs_service_create("rtmp_custom", "default_service", s, nullptr);
+	obs_frontend_set_streaming_service(svc);
+	obs_frontend_save_streaming_service();
+	obs_service_release(svc);
+	obs_data_release(s);
+	// Stock Multitrack/EB cannot negotiate a config URL for Custom → LiveDelay.
+	const bool cleared_eb = DisableObsStockEnhancedBroadcasting();
+	OutputsEnsureCustomServerVodTrack();
+	// Do not change OBS → Output bitrates here: mode "obs" reads them as the
+	// template for each platform. Stock publish to _idle is discarded by the proxy.
+	return cleared_eb;
 }
 
 // Links shown in the settings window only, never on stream.
@@ -1042,26 +1098,78 @@ private:
 		QMessageBox::information(this, "LiveDelay", already ? T("Settings.AlreadyRouted") : T("Settings.Routed"));
 	}
 
+	// What parts of the running system a settings save must touch.
+	struct SaveImpact {
+		bool proxy = false;   // listen / api / dest URL·key·ingest → tear down RTMP
+		bool outputs = false; // encode / VOD / EB / dest add-remove → rebuild encoders
+		bool hot = false;     // delay / max_buffer_mb → POST /settings, no disconnect
+	};
+
+	static bool DestProxySame(const Destination &a, const Destination &b)
+	{
+		return a.name == b.name && a.url == b.url && a.key == b.key && a.ingest_key == b.ingest_key &&
+		       a.enabled == b.enabled && a.autostart == b.autostart && a.service == b.service;
+	}
+
+	static bool DestEncodeSame(const Destination &a, const Destination &b)
+	{
+		return a.encode_mode == b.encode_mode && a.video_kbps == b.video_kbps && a.audio_kbps == b.audio_kbps &&
+		       a.keyint_sec == b.keyint_sec && a.rate_control == b.rate_control && a.width == b.width &&
+		       a.height == b.height && a.vod_audio == b.vod_audio &&
+		       a.enhanced_broadcasting == b.enhanced_broadcasting;
+	}
+
+	SaveImpact ClassifySave() const
+	{
+		SaveImpact i;
+		if (original_.listen != s_.listen || original_.api != s_.api)
+			i.proxy = true;
+		if (original_.delay != s_.delay || original_.max_buffer_mb != s_.max_buffer_mb)
+			i.hot = true;
+		if (original_.dests.size() != s_.dests.size()) {
+			i.proxy = true;
+			i.outputs = true;
+		} else {
+			for (size_t n = 0; n < s_.dests.size(); ++n) {
+				if (!DestProxySame(original_.dests[n], s_.dests[n]))
+					i.proxy = true;
+				if (!DestEncodeSame(original_.dests[n], s_.dests[n]))
+					i.outputs = true;
+			}
+		}
+		return i;
+	}
+
 	void SaveAndRestart()
 	{
-		// Only a change the proxy cares about needs a restart; the language doesn't.
-		Settings cmp = original_;
-		cmp.language = s_.language;
-		const bool proxyChanged = cmp.Text() != s_.Text();
+		const SaveImpact impact = ClassifySave();
 		const bool languageChanged = original_.language != s_.language;
-		if (proxyChanged && obs_frontend_streaming_active() &&
+		const bool disruptive = impact.proxy || impact.outputs;
+		if (disruptive && obs_frontend_streaming_active() &&
 		    QMessageBox::question(this, "LiveDelay", T("Settings.RestartWarning")) != QMessageBox::Yes)
 			return;
 		if (!s_.Save(ConfigPath())) {
 			QMessageBox::warning(this, "LiveDelay", T("Settings.SaveFailed"));
 			return;
 		}
-		if (proxyChanged) {
+		if (impact.proxy) {
 			std::string err = StartProxy();
 			if (!err.empty())
 				QMessageBox::warning(this, "LiveDelay", Q(err));
+			// Fresh proxy has empty dest publishers — rebuild OBS outputs and restart live ones.
+			OutputsReloadConfig();
+		} else {
+			if (impact.hot) {
+				const std::string q = "settings?delay=" + std::to_string(s_.delay) +
+						      "&max_buffer_mb=" + std::to_string(s_.max_buffer_mb);
+				int status = 0;
+				Request("POST", "/" + q, &status);
+				if (status != 200)
+					blog(LOG_WARNING, "[livedelay] hot settings apply failed (HTTP %d)", status);
+			}
+			if (impact.outputs)
+				OutputsReloadConfig();
 		}
-		OutputsReloadConfig();
 		if (languageChanged)
 			ApplyLanguage(s_.language);
 		accept();
@@ -1107,6 +1215,15 @@ bool ObsRoutedToLiveDelay()
 	return RoutedTo(Settings::Load(ConfigPath()).RtmpPort());
 }
 
+void HardenObsForLiveDelay()
+{
+	const int port = Settings::Load(ConfigPath()).RtmpPort();
+	if (!RoutedTo(port))
+		return;
+	DisableObsStockEnhancedBroadcasting();
+	OutputsEnsureCustomServerVodTrack();
+}
+
 void RouteObsThroughLiveDelay(QWidget *parent)
 {
 	Settings s = Settings::Load(ConfigPath());
@@ -1114,8 +1231,11 @@ void RouteObsThroughLiveDelay(QWidget *parent)
 	bool already = false;
 	if (!CurrentObsTarget(d, already, s.RtmpPort()) && !already) {
 		// Nothing to move (OBS had no server or key): route OBS and open the platform list.
-		PointObsAtLiveDelay(s.RtmpPort());
-		QMessageBox::information(parent, "LiveDelay", T("Settings.RoutedNoTarget"));
+		const bool cleared_eb = PointObsAtLiveDelay(s.RtmpPort());
+		QString msg = T("Settings.RoutedNoTarget");
+		if (cleared_eb)
+			msg += "\n\n" + T("Settings.EbCleared");
+		QMessageBox::information(parent, "LiveDelay", msg);
 		ShowSettings(parent);
 		return;
 	}
@@ -1131,10 +1251,12 @@ void RouteObsThroughLiveDelay(QWidget *parent)
 		}
 		StartProxy();
 	}
-	PointObsAtLiveDelay(s.RtmpPort());
+	const bool cleared_eb = PointObsAtLiveDelay(s.RtmpPort());
 	OutputsReloadConfig();
 	const bool fitted = !EncodeProblems().isEmpty() && FitEncodeForObsMode();
 	QString msg = already ? T("Settings.AlreadyRouted") : T("Settings.RoutedSaved");
+	if (cleared_eb)
+		msg += "\n\n" + T("Settings.EbCleared");
 	if (fitted)
 		msg += "\n\n" + T("Limits.Fitted").arg(ReadObsOutput().video_kbps).arg(2);
 	QMessageBox::information(parent, "LiveDelay", msg);

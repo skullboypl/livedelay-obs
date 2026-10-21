@@ -159,6 +159,13 @@ impl Shared {
         self.wake.notify_one();
         r
     }
+
+    /// Live update of the RAM cap (settings save without proxy restart).
+    pub fn set_max_bytes(&self, max_bytes: usize) {
+        if let Ok(mut e) = self.eng.lock() {
+            e.max_bytes = max_bytes.max(1);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

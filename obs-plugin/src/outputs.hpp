@@ -8,6 +8,9 @@ namespace livedelay {
 void OutputsInit();
 void OutputsShutdown();
 
+// Lets Twitch VOD track work on Custom RTMP (user.ini EnableCustomServerVodTrack).
+void OutputsEnsureCustomServerVodTrack();
+
 // Start/stop all outputs that should follow OBS Start Streaming (autostart dests).
 void OutputsOnStreamingStarting();
 void OutputsOnStreamingStopping();

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.2 – 2026-10-21
+
+- **No more Twitch drop on Save:** changing overlay look, delay, buffer or language no longer restarts the proxy or kills RTMP outputs.
+- **Route OBS fix:** Custom RTMP URL + key set correctly; stock Enhanced Broadcasting (Multitrack) disabled so Start Streaming no longer shows “missing config URL”.
+- **VOD track:** EnableCustomServerVodTrack + AdvOut Vod Track when a Twitch dest asks for VOD audio.
+- Hot-apply `POST /settings?delay=&max_buffer_mb=` without tearing down destinations.
+
 ## 1.0.0 – 2026-10-21
 
 - **Buffer RAM helper:** Settings show estimated MB for delay × bitrate, status colours, and **Use recommended**.

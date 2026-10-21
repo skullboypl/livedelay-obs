@@ -57,6 +57,9 @@ std::string OverlayUrl();
 std::string LivePreviewUrl();
 // True when OBS's stream settings point at LiveDelay.
 bool ObsRoutedToLiveDelay();
+// If already routed: turn off stock OBS Enhanced Broadcasting (Multitrack) and
+// enable custom-server VOD track support. Safe to call on every OBS load.
+void HardenObsForLiveDelay();
 // Moves OBS's current server and key onto LiveDelay's platform list, saves,
 // restarts the proxy and points OBS at LiveDelay. Tells the user what happened.
 void RouteObsThroughLiveDelay(QWidget *parent);

@@ -99,7 +99,7 @@ impl Proxy {
         let ctx = Arc::new(api::Ctx {
             hub: hub.clone(),
             dests,
-            default_delay: Duration::from_secs_f64(cfg.delay_s),
+            default_delay: std::sync::Mutex::new(Duration::from_secs_f64(cfg.delay_s)),
             overlay: overlay::OverlayStore::load(cfg.overlay_file.clone(), &cfg.overlay),
         });
         let (listen, api_addr) = (cfg.listen.clone(), cfg.api.clone());

@@ -48,6 +48,38 @@ void EnableCustomServerVodTrack()
 	}
 }
 
+// When a dest wants VOD audio, also flip AdvOut VodTrack on (Advanced mode only).
+void EnsureAdvOutVodTrack()
+{
+	config_t *cfg = obs_frontend_get_profile_config();
+	if (!cfg)
+		return;
+	const char *mode = config_get_string(cfg, "Output", "Mode");
+	if (!(mode && std::string(mode) == "Advanced")) {
+		blog(LOG_WARNING, "[livedelay] VOD audio needs OBS Output mode Advanced + Vod Track");
+		return;
+	}
+	bool changed = false;
+	if (!config_get_bool(cfg, "AdvOut", "VodTrackEnabled")) {
+		config_set_bool(cfg, "AdvOut", "VodTrackEnabled", true);
+		changed = true;
+	}
+	int live = int(config_get_int(cfg, "AdvOut", "TrackIndex"));
+	int vod = int(config_get_int(cfg, "AdvOut", "VodTrackIndex"));
+	if (vod < 1 || vod > 6)
+		vod = 2;
+	if (vod == live) {
+		vod = live == 2 ? 1 : 2;
+		config_set_int(cfg, "AdvOut", "VodTrackIndex", vod);
+		changed = true;
+	}
+	if (changed) {
+		config_save_safe(cfg, "tmp", nullptr);
+		blog(LOG_INFO, "[livedelay] enabled AdvOut VodTrack (live=%d vod=%d)", live, vod);
+	}
+	EnableCustomServerVodTrack();
+}
+
 void ReleaseOne(DestOutput &o)
 {
 	if (o.output) {
@@ -270,6 +302,7 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index)
 	}
 
 	if (d.vod_audio) {
+		EnsureAdvOutVodTrack();
 		if (EnsureVodAudio(o, enc.audio_kbps))
 			obs_output_set_audio_encoder(o.output, o.vod_audio, 1);
 	}
@@ -280,9 +313,15 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index)
 	return true;
 }
 
-void Rebuild()
+bool StartIndex(size_t i);
+
+void Rebuild(bool restart_live)
 {
+	std::vector<bool> was_live;
+	was_live.reserve(g_outs.size());
 	for (DestOutput &o : g_outs) {
+		const bool live = o.want || (o.output && obs_output_active(o.output));
+		was_live.push_back(live);
 		if (o.output && obs_output_active(o.output))
 			obs_output_force_stop(o.output);
 	}
@@ -294,6 +333,12 @@ void Rebuild()
 		if (s.dests[i].ingest_key.empty())
 			s.dests[i].ingest_key = "ld" + std::to_string(i);
 		BuildOne(g_outs[i], s.dests[i], i);
+	}
+	if (restart_live) {
+		for (size_t i = 0; i < g_outs.size(); ++i) {
+			if (i < was_live.size() && was_live[i] && s.dests[i].enabled)
+				StartIndex(i);
+		}
 	}
 }
 
@@ -333,7 +378,9 @@ void StopIndex(size_t i)
 
 void OnFrontendEvent(enum obs_frontend_event event, void *)
 {
-	if (event == OBS_FRONTEND_EVENT_STREAMING_STARTING)
+	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING)
+		HardenObsForLiveDelay();
+	else if (event == OBS_FRONTEND_EVENT_STREAMING_STARTING)
 		OutputsOnStreamingStarting();
 	else if (event == OBS_FRONTEND_EVENT_STREAMING_STOPPING || event == OBS_FRONTEND_EVENT_STREAMING_STOPPED)
 		OutputsOnStreamingStopping();
@@ -343,13 +390,20 @@ void OnFrontendEvent(enum obs_frontend_event event, void *)
 
 } // namespace
 
+void OutputsEnsureCustomServerVodTrack()
+{
+	EnableCustomServerVodTrack();
+}
+
 void OutputsInit()
 {
 	if (g_inited)
 		return;
 	g_inited = true;
-	Rebuild();
+	Rebuild(false);
 	obs_frontend_add_event_callback(OnFrontendEvent, nullptr);
+	// Module may load after FINISHED_LOADING (rare); harden immediately too.
+	HardenObsForLiveDelay();
 }
 
 void OutputsShutdown()
@@ -364,7 +418,7 @@ void OutputsShutdown()
 void OutputsOnStreamingStarting()
 {
 	if (g_outs.empty())
-		Rebuild();
+		Rebuild(false);
 	Settings s = Settings::Load(ConfigPath());
 	for (size_t i = 0; i < s.dests.size() && i < g_outs.size(); ++i) {
 		if (s.dests[i].autostart && s.dests[i].enabled)
@@ -381,7 +435,7 @@ void OutputsOnStreamingStopping()
 bool OutputStartDest(size_t index)
 {
 	if (g_outs.empty())
-		Rebuild();
+		Rebuild(false);
 	return StartIndex(index);
 }
 
@@ -392,7 +446,8 @@ void OutputStopDest(size_t index)
 
 void OutputsReloadConfig()
 {
-	Rebuild();
+	// Encode / platform list changed: rebuild and put back whatever was live.
+	Rebuild(true);
 }
 
 } // namespace livedelay

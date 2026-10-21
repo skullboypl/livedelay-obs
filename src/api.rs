@@ -10,6 +10,7 @@
 //! GET  /overlay          status text for an OBS Browser source (?preview shows every state)
 //! GET  /live-preview     what OBS sends vs. what viewers get, side by side
 //! POST /dest/start?i=0   start / stop one destination (/dest/stop?i=0)
+//! POST /settings         hot-apply delay / max_buffer_mb without restarting
 //! GET  /overlay/config   overlay look and texts as JSON; POST replaces it
 //! GET  /edit-theme       visual editor for the overlay
 
@@ -26,7 +27,8 @@ use tokio::net::{TcpListener, TcpStream};
 pub struct Ctx {
     pub hub: Arc<Hub>,
     pub dests: Vec<Arc<Dest>>,
-    pub default_delay: Duration,
+    /// Updated live via POST /settings — Arm without ?delay= uses this.
+    pub default_delay: std::sync::Mutex<Duration>,
     pub overlay: crate::overlay::OverlayStore,
 }
 
@@ -63,7 +65,7 @@ pub fn state_json(ctx: &Ctx) -> String {
         st.cut_pending,
         st.in_kbps,
         ctx.overlay.rev(),
-        ctx.default_delay.as_secs_f64(),
+        ctx.default_delay.lock().unwrap_or_else(|e| e.into_inner()).as_secs_f64(),
     );
     for (i, dest) in ctx.dests.iter().enumerate() {
         let d = dest.status.lock().unwrap();
@@ -90,7 +92,9 @@ pub fn act(ctx: &Ctx, action: &str, delay: Option<f64>) -> Result<(), String> {
     let now = Instant::now();
     let r = match action {
         "arm" => {
-            let d = delay.map(Duration::from_secs_f64).unwrap_or(ctx.default_delay);
+            let d = delay.map(Duration::from_secs_f64).unwrap_or_else(|| {
+                *ctx.default_delay.lock().unwrap_or_else(|e| e.into_inner())
+            });
             if d.is_zero() || d > Duration::from_secs(3600) {
                 Err("delay_range".to_string())
             } else {
@@ -233,6 +237,33 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
             Ok(()) => respond(&mut sock, "200 OK", &state_json(ctx)).await,
             Err(e) => respond(&mut sock, "409 Conflict", &format!("{{\"error\":\"{}\"}}", esc(&e))).await,
         },
+        ("POST", "/settings") => {
+            // Hot-apply without tearing down RTMP: ?delay=15&max_buffer_mb=512
+            let new_delay = delay;
+            let new_buf: Option<usize> = query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("max_buffer_mb="))
+                .and_then(|v| v.parse().ok());
+            if let Some(d) = new_delay {
+                if d > 0.0 && d <= 3600.0 {
+                    *ctx.default_delay.lock().unwrap_or_else(|e| e.into_inner()) = Duration::from_secs_f64(d);
+                    log!("settings: default_delay={d:.0}s");
+                }
+            }
+            if let Some(mb) = new_buf {
+                if (64..=16384).contains(&mb) {
+                    let n = ctx.hub.slots.len().max(1);
+                    let per = (mb * 1024 * 1024) / n;
+                    for slot in &ctx.hub.slots {
+                        slot.shared.set_max_bytes(per);
+                    }
+                    log!("settings: max_buffer_mb={mb} ({per} bytes/slot)");
+                }
+            }
+            let _ = body; // unused; query carries the values
+            ctx.hub.bump();
+            respond(&mut sock, "200 OK", &state_json(ctx)).await
+        }
         _ => respond(&mut sock, "404 Not Found", "{\"error\":\"not found\"}").await,
     }
 }

@@ -150,14 +150,18 @@ bool NewerThan(const QString &remote, const QString &local)
 {
 	auto parts = [](QString v) {
 		v.remove(QChar('v'), Qt::CaseInsensitive);
-		const QStringList s = v.split('.');
+		const QStringList s = v.split('.', Qt::SkipEmptyParts);
 		std::vector<int> out;
-		for (int i = 0; i < 3; i++)
+		const int n = qMax(3, s.size());
+		for (int i = 0; i < n; i++)
 			out.push_back(i < s.size() ? s[i].toInt() : 0);
 		return out;
 	};
-	const auto a = parts(remote), b = parts(local);
-	for (int i = 0; i < 3; i++) {
+	auto a = parts(remote), b = parts(local);
+	const size_t n = qMax(a.size(), b.size());
+	a.resize(n, 0);
+	b.resize(n, 0);
+	for (size_t i = 0; i < n; i++) {
 		if (a[i] > b[i])
 			return true;
 		if (a[i] < b[i])
