@@ -20,12 +20,25 @@ static LOG_FILE: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 
 /// Logs to stderr and, since the release build has no console, to livedelay.log.
 pub fn log_line(args: std::fmt::Arguments) {
-    let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    let line = format!("[{:02}:{:02}:{:02}] {args}", s / 3600 % 24, s / 60 % 60, s % 60);
+    let (h, m, s) = local_time();
+    let line = format!("[{h:02}:{m:02}:{s:02}] {args}");
     eprintln!("{line}");
     if let Some(f) = LOG_FILE.get() {
         let _ = writeln!(f.lock().unwrap(), "{line}");
     }
+}
+
+#[cfg(windows)]
+fn local_time() -> (u16, u16, u16) {
+    let mut t = unsafe { std::mem::zeroed() };
+    unsafe { windows_sys::Win32::System::SystemInformation::GetLocalTime(&mut t) };
+    (t.wHour, t.wMinute, t.wSecond)
+}
+
+#[cfg(not(windows))]
+fn local_time() -> (u16, u16, u16) {
+    let s = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    ((s / 3600 % 24) as u16, (s / 60 % 60) as u16, (s % 60) as u16)
 }
 
 fn fatal(msg: &str) -> ! {
@@ -35,11 +48,21 @@ fn fatal(msg: &str) -> ! {
     std::process::exit(1);
 }
 
+/// Command-line path, else a portable ini next to the exe, else %APPDATA%\LiveDelay
+/// (the exe may sit in Program Files next to the OBS plugin, which is read-only).
 fn config_path() -> PathBuf {
     if let Some(p) = std::env::args().nth(1) {
         return PathBuf::from(p);
     }
-    std::env::current_exe().unwrap_or_default().with_file_name("livedelay.ini")
+    let portable = std::env::current_exe().unwrap_or_default().with_file_name("livedelay.ini");
+    match std::env::var_os("APPDATA") {
+        Some(appdata) if !portable.exists() => {
+            let dir = PathBuf::from(appdata).join("LiveDelay");
+            let _ = std::fs::create_dir_all(&dir);
+            dir.join("livedelay.ini")
+        }
+        _ => portable,
+    }
 }
 
 fn main() {
