@@ -1,15 +1,16 @@
 # Changelog
 
+## 1.0.0 – 2026-10-21
+
+- **Buffer RAM helper:** Settings show estimated MB for delay × bitrate, status colours, and **Use recommended**.
+- **Safer Arm:** refuses when the RAM limit is too small for the chosen delay; soft eviction so the buffer does not balloon.
+- **Auto-update (fixed):** dock banner with **Update**; checks `livedelay.vxh.pl/version.json` then GitHub via WinHTTP (no Qt TLS failure inside OBS).
+- Clearer About tab and Polish/EN/DE/RU copy; delay buffer documented as RAM (longer delay = more memory).
+
 ## 0.2.0 – 2026-10-21
 
 - **Auto-update:** the dock checks GitHub Releases (and `livedelay.vxh.pl/version.json`) a few seconds after open, then every 12 hours. A blue banner offers Download / Later; About → Check for updates opens the zip.
 - DLL cannot replace itself while OBS is running — Download opens the release zip; close OBS, unzip, restart.
-
-## Unreleased
-
-- **Per-platform encode (option A):** each destination gets its own OBS video encoder and its own delay buffer; stream keys `ld0`, `ld1`, … into the proxy. Stock OBS publish uses `_idle` (discarded).
-- Encode modes per platform: Auto, Recommended, Match OBS (performance, default), Manual.
-- Dock banner + **Fix/Dopasuj** for Match OBS when Output exceeds platform limits; info tip when 3+ encoders.
 
 ## 0.1.0 – 2026-10-21
 

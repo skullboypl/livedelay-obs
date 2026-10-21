@@ -242,6 +242,26 @@ impl Engine {
         if !matches!(kind, MSG_AUDIO | MSG_VIDEO | MSG_DATA) || data.is_empty() {
             return;
         }
+        // Soft anti-OOM: free space before growing past the hard cap.
+        if self.bytes + data.len() > self.max_bytes {
+            self.evict(now);
+            while self.bytes + data.len() > self.max_bytes && self.tags.len() > 2 {
+                let Some(front) = self.tags.front() else { break };
+                let unsent = front.seq >= self.cursor && self.output_active;
+                if unsent && self.mode == Mode::Delayed {
+                    break; // never drop the delayed playhead's unread tags
+                }
+                let t = self.tags.pop_front().unwrap();
+                self.bytes = self.bytes.saturating_sub(t.data.len());
+                if let Some(slot) = cfg_slot(&t) {
+                    self.evicted_cfg[slot] = Some(t);
+                }
+            }
+            if self.bytes + data.len() > self.max_bytes.saturating_mul(2) {
+                // Absolute last resort: drop this packet rather than balloon RAM.
+                return;
+            }
+        }
         let ts = self.expand_ts(raw_ts);
         let (config, key) = classify(kind, &data);
         self.bytes += data.len();
@@ -410,9 +430,24 @@ impl Engine {
         }
     }
 
-    pub fn arm(&mut self, delay: Duration) {
+    /// Bytes needed to hold `delay` (+ retain margin) at the measured bitrate.
+    /// Falls back to 6 Mb/s when OBS has not sent anything yet.
+    pub fn bytes_needed_for(&self, delay: Duration) -> usize {
+        let kbps = if self.in_kbps > 200.0 { self.in_kbps } else { 6000.0 };
+        let secs = (delay + RETAIN_MARGIN).as_secs_f64();
+        ((kbps * 1000.0 / 8.0) * secs).ceil() as usize
+    }
+
+    /// Starts filling a delay buffer. Refuses when the slot's RAM cap is too small
+    /// for this delay at the current (or assumed) bitrate - avoids OBS OOM thrashing.
+    pub fn arm(&mut self, delay: Duration) -> Result<(), &'static str> {
+        let need = self.bytes_needed_for(delay);
+        if need > self.max_bytes {
+            return Err("buffer_too_small");
+        }
         self.arm_delay = Some(delay);
         self.changed();
+        Ok(())
     }
 
     pub fn disarm(&mut self) {
@@ -566,7 +601,7 @@ mod tests {
         let (mut e, mut rx) = setup();
         let t0 = Instant::now();
         e.push(MSG_VIDEO, 0, vec![0x17, 0, 0, 0, 0, 1], t0); // AVC config
-        e.arm(Duration::from_secs(5));
+        e.arm(Duration::from_secs(5)).unwrap();
         feed(&mut e, t0, 0, 10);
         let now = t0 + Duration::from_millis(9967);
         assert!(e.is_armed(now));
@@ -590,7 +625,7 @@ mod tests {
     fn cut_after_airs_waits_for_the_marked_tag() {
         let (mut e, mut rx) = setup();
         let t0 = Instant::now();
-        e.arm(Duration::from_secs(3));
+        e.arm(Duration::from_secs(3)).unwrap();
         feed(&mut e, t0, 0, 5);
         e.activate(t0 + Duration::from_secs(5)).unwrap();
         e.cut_after_airs();
@@ -605,7 +640,7 @@ mod tests {
     fn output_ends_after_buffer_drains() {
         let (mut e, mut rx) = setup();
         let t0 = Instant::now();
-        e.arm(Duration::from_secs(2));
+        e.arm(Duration::from_secs(2)).unwrap();
         feed(&mut e, t0, 0, 4);
         e.activate(t0 + Duration::from_secs(4)).unwrap();
         e.end_session();

@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.24)
-project(livedelay-obs VERSION 0.2.0 LANGUAGES CXX)
+project(livedelay-obs VERSION 1.0.0 LANGUAGES CXX)
 
 # Built against OBS 31 headers and import libraries generated from the installed
 # obs.dll / obs-frontend-api.dll (see ../../deps), plus OBS's own prebuilt Qt 6.6.3.
 set(DEPS "${CMAKE_CURRENT_SOURCE_DIR}/../../deps" CACHE PATH "obs-studio sources, Qt and import libs")
 list(APPEND CMAKE_PREFIX_PATH "${DEPS}/qt6")
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 set(CMAKE_AUTOMOC ON)
 
 # The proxy itself: the Rust crate one folder up, built as a static library (cargo build --release).
@@ -28,8 +28,8 @@ target_include_directories(livedelay-obs PRIVATE
   "${DEPS}/obs-studio/libobs"
   "${DEPS}/obs-studio/UI/obs-frontend-api")
 target_link_libraries(livedelay-obs PRIVATE
-  Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network
+  Qt6::Core Qt6::Gui Qt6::Widgets
   "${DEPS}/obslibs/obs.lib"
   "${DEPS}/obslibs/obs-frontend-api.lib"
   "${RUST_LIB}" "${WINDOWS_TARGETS_LIB}"
-  ws2_32 userenv ntdll dbghelp bcrypt)
+  ws2_32 userenv ntdll dbghelp bcrypt winhttp)

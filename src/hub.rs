@@ -116,11 +116,17 @@ impl Hub {
         self.busy.lock().unwrap().insert(self.map_key(key), false);
     }
 
-    pub fn arm_all(&self, delay: Duration) {
+    pub fn arm_all(&self, delay: Duration) -> Result<(), String> {
+        if self.slots.is_empty() {
+            return Err("need_arm".into());
+        }
         for s in &self.slots {
-            s.shared.with(|e| e.arm(delay));
+            if let Err(e) = s.shared.with(|eng| eng.arm(delay)) {
+                return Err(e.into());
+            }
         }
         self.bump();
+        Ok(())
     }
 
     pub fn disarm_all(&self) {

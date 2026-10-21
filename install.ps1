@@ -12,3 +12,8 @@ $old = Join-Path $bin 'livedelay.exe'
 if (Test-Path $old) { Remove-Item $old }
 Write-Host "Installed to $root"
 Write-Host "In OBS: Docks -> LiveDelay, and Tools -> LiveDelay for settings."
+# OBS must start from its bin folder or it shows "Failed to find locale/en-US.ini".
+$obsBin = 'C:\Program Files\obs-studio\bin\64bit'
+if ($env:LD_LAUNCH_OBS -eq '1' -and (Test-Path "$obsBin\obs64.exe")) {
+	Start-Process -FilePath "$obsBin\obs64.exe" -WorkingDirectory $obsBin
+}

@@ -9,7 +9,7 @@ Włączasz i wyłączasz opóźnienie streamu w trakcie nadawania, bez zrywania 
 - **Jedna wtyczka, bez dodatkowego programu.** Proxy opóźnienia działa w środku OBS (rdzeń w Ruście, ok. 0,1% CPU i 30 MB RAM przy 15 s opóźnienia i 6 Mb/s).
 - **Natywny panel.** Okno Qt, nie przeglądarka, więc prawie nic nie kosztuje.
 - **Skróty.** Arm, Activate, Cut i „Cut po wyemitowaniu” w Ustawienia → Skróty klawiszowe. Podepniesz je pod numpad albo Stream Deck.
-- **Kilka platform naraz.** Twitch, YouTube, Kick, Facebook albo dowolny serwer RTMP/RTMPS — każda z własnym Start / Stop, autostartem, buforem opóźnienia i enkoderem (Auto / Zalecane / Jak w OBS / Ręcznie).
+- **Kilka platform naraz.** Twitch, YouTube, Kick, Facebook albo dowolny serwer RTMP/RTMPS - każda z własnym Start / Stop, autostartem, buforem opóźnienia i enkoderem (Auto / Zalecane / Jak w OBS / Ręcznie).
 - **Podgląd na żywo.** `/live-preview` pokazuje obok siebie to, co wysyła OBS, i to, co dostają widzowie.
 - **Prowadzona konfiguracja.** Instrukcja „Jak podłączyć?”, a panel sam proponuje ustawienie OBS na LiveDelay, jeśli jeszcze nie jest.
 - **Overlay.** Źródło Przeglądarka, które pokazuje widzom, co się dzieje: LIVE, ARMING…, ARMED, DELAY 25s.

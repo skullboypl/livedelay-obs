@@ -11,33 +11,141 @@ Q_DECLARE_METATYPE(livedelay::UpdateInfo)
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
-#include <QNetworkAccessManager>
-#include <QNetworkReply>
-#include <QNetworkRequest>
+#include <QMetaObject>
 #include <QPointer>
 #include <QPushButton>
 #include <QSettings>
+#include <QThread>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <winhttp.h>
+
+#include <string>
 #include <vector>
+
+#pragma comment(lib, "winhttp.lib")
 
 namespace livedelay {
 namespace {
 
 constexpr const char *kGithubLatest = "https://api.github.com/repos/skullboypl/livedelay-obs/releases/latest";
 constexpr const char *kMirrorJson = "https://livedelay.vxh.pl/version.json";
-constexpr const char *kUserAgent = "livedelay-obs/" LD_VERSION_STRING " (+https://livedelay.vxh.pl)";
 constexpr const char *kSkipKey = "update/skipVersion";
 
-QNetworkAccessManager *Nam()
+std::wstring UserAgent()
 {
-	static QNetworkAccessManager *n = new QNetworkAccessManager;
-	return n;
+	return L"livedelay-obs/" + QStringLiteral(LD_VERSION_STRING).toStdWString() + L" (+https://livedelay.vxh.pl)";
 }
 
-// Returns true if a.b.c is strictly greater than x.y.z.
+// Qt Network SSL often fails inside OBS ("TLS initialization failed") because
+// OpenSSL plugins are missing next to obs64.exe. WinHTTP uses Windows Schannel.
+
+bool HttpGet(const QString &urlStr, const wchar_t *extraHeaders, QByteArray *out, QString *err)
+{
+	out->clear();
+	const QUrl url(urlStr);
+	if (!url.isValid() || url.host().isEmpty()) {
+		if (err)
+			*err = QStringLiteral("bad url");
+		return false;
+	}
+
+	const bool https = url.scheme().compare(QLatin1String("https"), Qt::CaseInsensitive) == 0;
+	INTERNET_PORT port = url.port(https ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT);
+	const std::wstring host = url.host().toStdWString();
+	QString path = url.path();
+	if (path.isEmpty())
+		path = QStringLiteral("/");
+	if (url.hasQuery())
+		path += QLatin1Char('?') + url.query();
+	const std::wstring object = path.toStdWString();
+
+	const std::wstring ua = UserAgent();
+	HINTERNET session = WinHttpOpen(ua.c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
+					WINHTTP_NO_PROXY_BYPASS, 0);
+	if (!session) {
+		if (err)
+			*err = QStringLiteral("WinHttpOpen %1").arg(GetLastError());
+		return false;
+	}
+
+	HINTERNET connect = WinHttpConnect(session, host.c_str(), port, 0);
+	if (!connect) {
+		if (err)
+			*err = QStringLiteral("WinHttpConnect %1").arg(GetLastError());
+		WinHttpCloseHandle(session);
+		return false;
+	}
+
+	DWORD flags = https ? WINHTTP_FLAG_SECURE : 0;
+	HINTERNET request = WinHttpOpenRequest(connect, L"GET", object.c_str(), nullptr, WINHTTP_NO_REFERER,
+					       WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+	if (!request) {
+		if (err)
+			*err = QStringLiteral("WinHttpOpenRequest %1").arg(GetLastError());
+		WinHttpCloseHandle(connect);
+		WinHttpCloseHandle(session);
+		return false;
+	}
+
+	// Follow redirects (GitHub asset / API).
+	DWORD redirect = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+	WinHttpSetOption(request, WINHTTP_OPTION_REDIRECT_POLICY, &redirect, sizeof(redirect));
+
+	BOOL ok = TRUE;
+	if (extraHeaders && *extraHeaders)
+		ok = WinHttpAddRequestHeaders(request, extraHeaders, (ULONG)-1L, WINHTTP_ADDREQ_FLAG_ADD);
+	if (ok)
+		ok = WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0);
+	if (ok)
+		ok = WinHttpReceiveResponse(request, nullptr);
+
+	if (!ok) {
+		if (err)
+			*err = QStringLiteral("WinHttp request %1").arg(GetLastError());
+		WinHttpCloseHandle(request);
+		WinHttpCloseHandle(connect);
+		WinHttpCloseHandle(session);
+		return false;
+	}
+
+	DWORD status = 0, statusSize = sizeof(status);
+	WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+			    &status, &statusSize, WINHTTP_NO_HEADER_INDEX);
+
+	for (;;) {
+		DWORD avail = 0;
+		if (!WinHttpQueryDataAvailable(request, &avail))
+			break;
+		if (avail == 0)
+			break;
+		QByteArray chunk;
+		chunk.resize(int(avail));
+		DWORD read = 0;
+		if (!WinHttpReadData(request, chunk.data(), avail, &read))
+			break;
+		chunk.resize(int(read));
+		out->append(chunk);
+	}
+
+	WinHttpCloseHandle(request);
+	WinHttpCloseHandle(connect);
+	WinHttpCloseHandle(session);
+
+	if (status < 200 || status >= 300) {
+		if (err)
+			*err = QStringLiteral("HTTP %1").arg(status);
+		return false;
+	}
+	return true;
+}
+
 bool NewerThan(const QString &remote, const QString &local)
 {
 	auto parts = [](QString v) {
@@ -155,46 +263,55 @@ void UpdateChecker::Check(bool force)
 		return;
 	busy_ = true;
 
-	auto finish = [this] { busy_ = false; };
-
-	// 1) Fast mirror on the product site (updated with each release).
-	QNetworkRequest mirror(QUrl(QString::fromUtf8(kMirrorJson)));
-	mirror.setHeader(QNetworkRequest::UserAgentHeader, kUserAgent);
-	mirror.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-	QNetworkReply *m = Nam()->get(mirror);
-	auto fetchGithub = [this, force, finish] {
-		QNetworkRequest req(QUrl(QString::fromUtf8(kGithubLatest)));
-		req.setHeader(QNetworkRequest::UserAgentHeader, kUserAgent);
-		req.setRawHeader("Accept", "application/vnd.github+json");
-		req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-		QNetworkReply *r = Nam()->get(req);
-		connect(r, &QNetworkReply::finished, this, [this, r, force, finish] {
-			if (r->error() != QNetworkReply::NoError) {
-				emit failed(r->errorString());
-				r->deleteLater();
-				finish();
-				return;
-			}
-			ParseGithub(r->readAll(), force);
-			r->deleteLater();
-			finish();
-		});
-	};
-
-	connect(m, &QNetworkReply::finished, this, [this, m, force, finish, fetchGithub] {
-		const bool ok = m->error() == QNetworkReply::NoError;
-		const QByteArray body = m->readAll();
-		m->deleteLater();
-		if (ok && !body.isEmpty()) {
+	// Background thread: WinHTTP is sync; keep the OBS UI responsive.
+	QPointer<UpdateChecker> self(this);
+	QThread *thread = QThread::create([self, force] {
+		QByteArray body;
+		QString err;
+		bool usedMirror = false;
+		if (HttpGet(QString::fromUtf8(kMirrorJson), nullptr, &body, &err)) {
 			const QJsonObject o = QJsonDocument::fromJson(body).object();
-			if (!o.value("version").toString().trimmed().isEmpty()) {
-				ParseMirror(body, force);
-				finish();
+			if (!o.value("version").toString().trimmed().isEmpty())
+				usedMirror = true;
+		}
+		if (!usedMirror) {
+			body.clear();
+			err.clear();
+			const wchar_t *hdr = L"Accept: application/vnd.github+json\r\n";
+			if (!HttpGet(QString::fromUtf8(kGithubLatest), hdr, &body, &err)) {
+				QMetaObject::invokeMethod(
+					self, [self, err] {
+						if (!self)
+							return;
+						self->busy_ = false;
+						emit self->failed(err.isEmpty() ? QStringLiteral("network") : err);
+					},
+					Qt::QueuedConnection);
 				return;
 			}
+			QMetaObject::invokeMethod(
+				self,
+				[self, force, body] {
+					if (!self)
+						return;
+					self->ParseGithub(body, force);
+					self->busy_ = false;
+				},
+				Qt::QueuedConnection);
+			return;
 		}
-		fetchGithub();
+		QMetaObject::invokeMethod(
+			self,
+			[self, force, body] {
+				if (!self)
+					return;
+				self->ParseMirror(body, force);
+				self->busy_ = false;
+			},
+			Qt::QueuedConnection);
 	});
+	connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+	thread->start();
 }
 
 void AttachUpdateBanner(QWidget *dockParent, QVBoxLayout *layout)
@@ -204,9 +321,10 @@ void AttachUpdateBanner(QWidget *dockParent, QVBoxLayout *layout)
 	banner->setStyleSheet("#ldUpdate { background: rgba(90, 200, 250, .14); border: 1px solid rgba(90, 200, 250, .5); border-radius: 6px; }");
 	auto *text = new QLabel(banner);
 	text->setWordWrap(true);
-	auto *get = new QPushButton(T("Update.Download"), banner);
-	get->setProperty("ldText", "Update.Download");
+	auto *get = new QPushButton(T("Update.UpdateNow"), banner);
+	get->setProperty("ldText", "Update.UpdateNow");
 	get->setCursor(Qt::PointingHandCursor);
+	get->setStyleSheet("QPushButton { font-weight: 600; }");
 	auto *later = new QPushButton(T("Update.Later"), banner);
 	later->setProperty("ldText", "Update.Later");
 	later->setCursor(Qt::PointingHandCursor);
@@ -220,7 +338,7 @@ void AttachUpdateBanner(QWidget *dockParent, QVBoxLayout *layout)
 
 	auto *checker = new UpdateChecker(dockParent);
 	QObject::connect(checker, &UpdateChecker::found, dockParent, [banner, text, get, later](UpdateInfo info) {
-		text->setText(T("Update.Available").arg(info.version).arg(UpdateChecker::CurrentVersion()));
+		text->setText(T("Update.Banner").arg(info.version));
 		banner->show();
 		get->disconnect();
 		later->disconnect();
@@ -231,7 +349,6 @@ void AttachUpdateBanner(QWidget *dockParent, QVBoxLayout *layout)
 		});
 	});
 
-	// First check a few seconds after the dock opens, then every 12 hours.
 	QTimer::singleShot(4000, checker, [checker] { checker->Check(false); });
 	auto *timer = new QTimer(dockParent);
 	timer->setInterval(12 * 60 * 60 * 1000);

@@ -34,20 +34,30 @@ pub extern "C" fn ld_set_logger(f: Option<LogFn>) {
 /// `config_path` must be a valid NUL-terminated string.
 #[no_mangle]
 pub unsafe extern "C" fn ld_start(config_path: *const c_char) -> c_int {
-    ld_stop();
-    LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()).clear();
-    let path = CStr::from_ptr(config_path).to_string_lossy().into_owned();
-    let cfg = match config::load(Path::new(&path)) {
-        Ok(c) => c,
-        Err(e) => {
-            set_error(e);
-            return 1;
+    // Keep a panic inside the Rust core from taking down OBS.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ld_stop();
+        LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()).clear();
+        let path = CStr::from_ptr(config_path).to_string_lossy().into_owned();
+        let cfg = match config::load(Path::new(&path)) {
+            Ok(c) => c,
+            Err(e) => {
+                set_error(e);
+                return 1;
+            }
+        };
+        log!("settings: {path}");
+        let proxy = Proxy::start(&cfg, set_error, |_| {});
+        *PROXY.lock().unwrap_or_else(|p| p.into_inner()) = Some(proxy);
+        0
+    }));
+    match result {
+        Ok(code) => code,
+        Err(_) => {
+            set_error("internal panic while starting LiveDelay".into());
+            1
         }
-    };
-    log!("settings: {path}");
-    let proxy = Proxy::start(&cfg, set_error, |_| {});
-    *PROXY.lock().unwrap_or_else(|p| p.into_inner()) = Some(proxy);
-    0
+    }
 }
 
 /// Stops the proxy and closes all connections. Safe to call when not running.

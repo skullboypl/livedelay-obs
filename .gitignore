@@ -2,3 +2,19 @@
 livedelay.ini
 /obs-plugin/build
 /dist
+
+# Agent / code-graph caches (never commit)
+graphify-out/
+**/graphify-out/
+
+# Local / OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+.env
+.env.*
+*.pem
+id_rsa
+id_ed25519
+DeployKey*

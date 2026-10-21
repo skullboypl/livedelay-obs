@@ -40,6 +40,8 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -376,15 +378,30 @@ public:
 			resize(qMin(780, int(ag.width() * 0.9)), qMin(640, int(ag.height() * 0.85)));
 		}
 
-		auto *delay = new QSpinBox;
-		delay->setRange(1, 3600);
-		delay->setSuffix(" s");
-		delay->setValue(s_.delay);
-		auto *buffer = new QSpinBox;
-		buffer->setRange(16, 16384);
-		buffer->setSuffix(" MB");
-		buffer->setValue(s_.max_buffer_mb);
-		buffer->setToolTip(T("Settings.BufferTip"));
+		delay_ = new QSpinBox;
+		delay_->setRange(1, 3600);
+		delay_->setSuffix(" s");
+		delay_->setValue(s_.delay);
+		buffer_ = new QSpinBox;
+		buffer_->setRange(16, 16384);
+		buffer_->setSuffix(" MB");
+		buffer_->setValue(s_.max_buffer_mb);
+		buffer_->setToolTip(T("Settings.BufferTip"));
+		bufferSuggest_ = new QPushButton;
+		bufferSuggest_->setToolTip(T("Settings.BufferTip"));
+		bufferHint_ = new QLabel;
+		bufferHint_->setWordWrap(true);
+		bufferHint_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+		auto *bufferRow = new QWidget;
+		auto *bufferLay = new QVBoxLayout(bufferRow);
+		bufferLay->setContentsMargins(0, 0, 0, 0);
+		bufferLay->setSpacing(4);
+		auto *bufferTop = new QHBoxLayout;
+		bufferTop->setContentsMargins(0, 0, 0, 0);
+		bufferTop->addWidget(buffer_, 1);
+		bufferTop->addWidget(bufferSuggest_);
+		bufferLay->addLayout(bufferTop);
+		bufferLay->addWidget(bufferHint_);
 		language_ = new QComboBox;
 		const char *obsLocale = obs_get_locale();
 		language_->addItem(T("Settings.LanguageAuto").arg(obsLocale ? obsLocale : "en-US"), "auto");
@@ -398,9 +415,16 @@ public:
 		}
 		original_ = s_;
 		auto *general = new QFormLayout;
-		general->addRow(T("Settings.DefaultDelay"), delay);
-		general->addRow(T("Settings.BufferLimit"), buffer);
+		general->addRow(T("Settings.DefaultDelay"), delay_);
+		general->addRow(T("Settings.BufferLimit"), bufferRow);
 		general->addRow(T("Settings.Language"), language_);
+		connect(delay_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { RefreshBufferHint(); });
+		connect(buffer_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { RefreshBufferHint(); });
+		connect(bufferSuggest_, &QPushButton::clicked, this, [this] {
+			const int rec = RecommendedBufferMb();
+			if (rec > 0)
+				buffer_->setValue(rec);
+		});
 
 		// Platforms: list on the left, the selected one's fields on the right.
 		list_ = new QListWidget;
@@ -583,6 +607,8 @@ public:
 		auto *wizard = new QPushButton(T("Settings.SmoothWizardButton"));
 		auto *site = new QPushButton(T("Settings.WebsiteButton"));
 		auto *checkUpdate = new QPushButton(T("Update.Check"));
+		auto *downloadUpdate = new QPushButton(T("Update.UpdateNow"));
+		downloadUpdate->hide();
 		auto *updateStatus = new QLabel;
 		updateStatus->setWordWrap(true);
 		auto *versionLabel = new QLabel(T("Settings.Version").arg(QStringLiteral(LD_VERSION_STRING)));
@@ -591,7 +617,15 @@ public:
 		auto *aboutLayout = new QVBoxLayout(aboutPage);
 		aboutLayout->setContentsMargins(8, 8, 8, 8);
 		aboutLayout->addWidget(versionLabel);
-		aboutLayout->addWidget(checkUpdate, 0, Qt::AlignLeft);
+		aboutLayout->addSpacing(8);
+		aboutLayout->addWidget(Hint(T("Update.HowItWorks")));
+		auto *updateRow = new QHBoxLayout;
+		updateRow->setSpacing(8);
+		updateRow->addWidget(checkUpdate, 0, Qt::AlignLeft);
+		updateRow->addWidget(downloadUpdate, 0, Qt::AlignLeft);
+		updateRow->addStretch();
+		aboutLayout->addLayout(updateRow);
+		updateStatus->setStyleSheet("color: palette(window-text);");
 		aboutLayout->addWidget(updateStatus);
 		aboutLayout->addSpacing(12);
 		aboutLayout->addWidget(Hint(T("Settings.WebsiteText")));
@@ -604,22 +638,27 @@ public:
 		aboutLayout->addWidget(wizard, 0, Qt::AlignLeft);
 		aboutLayout->addStretch();
 		auto *updateChecker = new UpdateChecker(this);
-		connect(checkUpdate, &QPushButton::clicked, this, [updateChecker, updateStatus, checkUpdate] {
+		connect(checkUpdate, &QPushButton::clicked, this, [updateChecker, updateStatus, checkUpdate, downloadUpdate] {
 			checkUpdate->setEnabled(false);
+			downloadUpdate->hide();
 			updateStatus->setText(T("Update.Checking"));
 			updateChecker->Check(true);
 		});
-		connect(updateChecker, &UpdateChecker::found, this, [updateStatus, checkUpdate](UpdateInfo info) {
+		connect(updateChecker, &UpdateChecker::found, this, [updateStatus, checkUpdate, downloadUpdate](UpdateInfo info) {
 			checkUpdate->setEnabled(true);
 			updateStatus->setText(T("Update.Available").arg(info.version).arg(UpdateChecker::CurrentVersion()));
-			UpdateChecker::OpenDownload(info);
+			downloadUpdate->show();
+			downloadUpdate->disconnect();
+			QObject::connect(downloadUpdate, &QPushButton::clicked, downloadUpdate, [info] { UpdateChecker::OpenDownload(info); });
 		});
-		connect(updateChecker, &UpdateChecker::upToDate, this, [updateStatus, checkUpdate] {
+		connect(updateChecker, &UpdateChecker::upToDate, this, [updateStatus, checkUpdate, downloadUpdate] {
 			checkUpdate->setEnabled(true);
+			downloadUpdate->hide();
 			updateStatus->setText(T("Update.UpToDate").arg(UpdateChecker::CurrentVersion()));
 		});
-		connect(updateChecker, &UpdateChecker::failed, this, [updateStatus, checkUpdate](const QString &reason) {
+		connect(updateChecker, &UpdateChecker::failed, this, [updateStatus, checkUpdate, downloadUpdate](const QString &reason) {
 			checkUpdate->setEnabled(true);
+			downloadUpdate->hide();
 			updateStatus->setText(T("Update.Failed").arg(reason));
 		});
 
@@ -684,6 +723,8 @@ public:
 				list_->item(current_)->setText(t);
 		});
 		connect(encodeMode_, &QComboBox::currentIndexChanged, this, [this] { UpdateEncodeFields(); });
+		connect(videoKbps_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { UpdateEncodeFields(); });
+		connect(audioKbps_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { UpdateEncodeFields(); });
 		connect(allObs, &QPushButton::clicked, this, [this] {
 			Store();
 			for (Destination &d : s_.dests)
@@ -708,10 +749,10 @@ public:
 		connect(wizard, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(kSmoothWizardUrl)); });
 		connect(site, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl("https://livedelay.vxh.pl/")); });
 		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
-		connect(buttons, &QDialogButtonBox::accepted, this, [=] {
+		connect(buttons, &QDialogButtonBox::accepted, this, [this] {
 			Store();
-			s_.delay = delay->value();
-			s_.max_buffer_mb = buffer->value();
+			s_.delay = delay_->value();
+			s_.max_buffer_mb = buffer_->value();
 			SaveOverlay();
 			s_.language = S(language_->currentData().toString());
 			SaveAndRestart();
@@ -719,6 +760,7 @@ public:
 
 		list_->setCurrentRow(s_.dests.empty() ? -1 : 0);
 		Select(list_->currentRow());
+		RefreshBufferHint();
 	}
 
 private:
@@ -851,6 +893,92 @@ private:
 		tmp.service = service_->currentIndex() > 0 ? S(service_->currentText()) : tmp.service;
 		tmp.url = S(url_->text());
 		encodeSummary_->setText(ResolveEncode(tmp).summary);
+		RefreshBufferHint();
+	}
+
+	// RAM for delay seconds at total kb/s: MB ≈ kbps × s / 8000 (matches Settings.BufferTip).
+	int EstimateNeededMb(int *out_peak_kbps, int *out_platforms) const
+	{
+		const int delay_s = delay_ ? delay_->value() : s_.delay;
+		int peak = 0;
+		int n = 0;
+		for (size_t i = 0; i < s_.dests.size(); ++i) {
+			Destination d = s_.dests[i];
+			if (int(i) == current_ && encodeMode_ && videoKbps_ && audioKbps_) {
+				d.encode_mode = EncodeMode(encodeMode_->currentData().toInt());
+				d.video_kbps = uint32_t(videoKbps_->value());
+				d.audio_kbps = uint32_t(audioKbps_->value());
+				d.keyint_sec = uint32_t(keyint_->value());
+				d.rate_control = S(rateControl_->currentText());
+				d.width = uint32_t(width_->value());
+				d.height = uint32_t(height_->value());
+				d.vod_audio = vodAudio_->isChecked();
+				d.enhanced_broadcasting = enhanced_->isChecked();
+				d.service = service_->currentIndex() > 0 ? S(service_->currentText()) : d.service;
+				d.url = S(url_->text());
+			}
+			const EncodeSettings e = ResolveEncode(d);
+			peak = std::max(peak, e.video_kbps + e.audio_kbps);
+			++n;
+		}
+		if (n == 0) {
+			const ObsOutput obs = ReadObsOutput();
+			peak = (obs.video_kbps > 0 ? obs.video_kbps : 6000) + (obs.audio_kbps > 0 ? obs.audio_kbps : 160);
+			n = 1;
+		}
+		if (out_peak_kbps)
+			*out_peak_kbps = peak;
+		if (out_platforms)
+			*out_platforms = n;
+		// Equal split across platforms: total limit must cover n × one full delay buffer.
+		return int(std::ceil(double(peak) * double(delay_s) / 8000.0 * double(n)));
+	}
+
+	int RecommendedBufferMb() const
+	{
+		const int need = EstimateNeededMb(nullptr, nullptr);
+		// ~25% headroom, then snap up to a friendly step.
+		int rec = int(std::ceil(need * 1.25));
+		if (rec < 64)
+			rec = 64;
+		const int steps[] = {64, 96, 128, 192, 256, 384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192, 12288, 16384};
+		for (int s : steps) {
+			if (s >= rec)
+				return s;
+		}
+		return 16384;
+	}
+
+	void RefreshBufferHint()
+	{
+		if (!bufferHint_ || !buffer_ || !bufferSuggest_)
+			return;
+		int peak = 0, n = 0;
+		const int need = EstimateNeededMb(&peak, &n);
+		const int limit = buffer_->value();
+		const int delay_s = delay_->value();
+		const int rec = RecommendedBufferMb();
+		bufferSuggest_->setText(T("Settings.BufferSuggest").arg(rec));
+		QString line;
+		if (n > 1)
+			line = T("Settings.BufferEstimateMulti").arg(need).arg(n).arg(delay_s).arg(peak);
+		else
+			line = T("Settings.BufferEstimate").arg(need).arg(delay_s).arg(peak);
+		QString status;
+		QString color;
+		if (limit < need) {
+			status = T("Settings.BufferLow");
+			color = "#c44";
+		} else if (limit < int(std::ceil(need * 1.15))) {
+			status = T("Settings.BufferTight");
+			color = "#b26a00";
+		} else {
+			const double head = need > 0 ? double(limit) / double(need) : 99.0;
+			status = T("Settings.BufferOk").arg(head, 0, 'f', 1);
+			color = "#2a7";
+		}
+		bufferHint_->setText(line + "\n" + status);
+		bufferHint_->setStyleSheet(QString("color: %1; font-size: 11px;").arg(color));
 	}
 
 	void Select(int row)
@@ -945,6 +1073,10 @@ private:
 	OverlayRow rows_[4];
 	QCheckBox *armedAsLive_ = nullptr;
 	QComboBox *language_;
+	QSpinBox *delay_ = nullptr;
+	QSpinBox *buffer_ = nullptr;
+	QLabel *bufferHint_ = nullptr;
+	QPushButton *bufferSuggest_ = nullptr;
 	int current_ = -1;
 	QListWidget *list_;
 	QWidget *fields_;

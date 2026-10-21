@@ -94,8 +94,7 @@ pub fn act(ctx: &Ctx, action: &str, delay: Option<f64>) -> Result<(), String> {
             if d.is_zero() || d > Duration::from_secs(3600) {
                 Err("delay_range".to_string())
             } else {
-                ctx.hub.arm_all(d);
-                Ok(())
+                ctx.hub.arm_all(d)
             }
         }
         "activate" => ctx.hub.activate_all(now),
