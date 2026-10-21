@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 – 2026-10-21
+
+- **Auto-update:** the dock checks GitHub Releases (and `livedelay.vxh.pl/version.json`) a few seconds after open, then every 12 hours. A blue banner offers Download / Later; About → Check for updates opens the zip.
+- DLL cannot replace itself while OBS is running — Download opens the release zip; close OBS, unzip, restart.
+
 ## Unreleased
 
 - **Per-platform encode (option A):** each destination gets its own OBS video encoder and its own delay buffer; stream keys `ld0`, `ld1`, … into the proxy. Stock OBS publish uses `_idle` (discarded).

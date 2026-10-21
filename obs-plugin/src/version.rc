@@ -1,8 +1,8 @@
 #include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
-FILEVERSION 0, 1, 0, 0
-PRODUCTVERSION 0, 1, 0, 0
+FILEVERSION 0, 2, 0, 0
+PRODUCTVERSION 0, 2, 0, 0
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_DLL
 BEGIN
@@ -12,12 +12,12 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "skullboypl"
       VALUE "FileDescription", "LiveDelay - switchable stream delay for OBS"
-      VALUE "FileVersion", "0.1.0"
+      VALUE "FileVersion", "0.2.0"
       VALUE "InternalName", "livedelay-obs"
       VALUE "LegalCopyright", "(C) 2026 skullboypl, GPL-2.0-or-later"
       VALUE "OriginalFilename", "livedelay-obs.dll"
       VALUE "ProductName", "LiveDelay"
-      VALUE "ProductVersion", "0.1.0"
+      VALUE "ProductVersion", "0.2.0"
     END
   END
   BLOCK "VarFileInfo"

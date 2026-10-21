@@ -1,4 +1,6 @@
 #include "settings.hpp"
+#include "update.hpp"
+#include "version.hpp"
 #include "dock.hpp"
 #include "encode.hpp"
 #include "i18n.hpp"
@@ -579,15 +581,47 @@ public:
 
 		auto *support = new QPushButton(T("Settings.SupportButton"));
 		auto *wizard = new QPushButton(T("Settings.SmoothWizardButton"));
+		auto *site = new QPushButton(T("Settings.WebsiteButton"));
+		auto *checkUpdate = new QPushButton(T("Update.Check"));
+		auto *updateStatus = new QLabel;
+		updateStatus->setWordWrap(true);
+		auto *versionLabel = new QLabel(T("Settings.Version").arg(QStringLiteral(LD_VERSION_STRING)));
+		versionLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
 		auto *aboutPage = new QWidget;
 		auto *aboutLayout = new QVBoxLayout(aboutPage);
 		aboutLayout->setContentsMargins(8, 8, 8, 8);
+		aboutLayout->addWidget(versionLabel);
+		aboutLayout->addWidget(checkUpdate, 0, Qt::AlignLeft);
+		aboutLayout->addWidget(updateStatus);
+		aboutLayout->addSpacing(12);
+		aboutLayout->addWidget(Hint(T("Settings.WebsiteText")));
+		aboutLayout->addWidget(site, 0, Qt::AlignLeft);
+		aboutLayout->addSpacing(12);
 		aboutLayout->addWidget(Hint(T("Settings.SupportText")));
 		aboutLayout->addWidget(support, 0, Qt::AlignLeft);
 		aboutLayout->addSpacing(12);
 		aboutLayout->addWidget(Hint(T("Settings.SmoothWizardText")));
 		aboutLayout->addWidget(wizard, 0, Qt::AlignLeft);
 		aboutLayout->addStretch();
+		auto *updateChecker = new UpdateChecker(this);
+		connect(checkUpdate, &QPushButton::clicked, this, [updateChecker, updateStatus, checkUpdate] {
+			checkUpdate->setEnabled(false);
+			updateStatus->setText(T("Update.Checking"));
+			updateChecker->Check(true);
+		});
+		connect(updateChecker, &UpdateChecker::found, this, [updateStatus, checkUpdate](UpdateInfo info) {
+			checkUpdate->setEnabled(true);
+			updateStatus->setText(T("Update.Available").arg(info.version).arg(UpdateChecker::CurrentVersion()));
+			UpdateChecker::OpenDownload(info);
+		});
+		connect(updateChecker, &UpdateChecker::upToDate, this, [updateStatus, checkUpdate] {
+			checkUpdate->setEnabled(true);
+			updateStatus->setText(T("Update.UpToDate").arg(UpdateChecker::CurrentVersion()));
+		});
+		connect(updateChecker, &UpdateChecker::failed, this, [updateStatus, checkUpdate](const QString &reason) {
+			checkUpdate->setEnabled(true);
+			updateStatus->setText(T("Update.Failed").arg(reason));
+		});
 
 		auto *tabs = new QTabWidget;
 		tabs->addTab(ScrollWrap(generalPage), T("Settings.TabGeneral"));
@@ -672,6 +706,7 @@ public:
 		});
 		connect(support, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(kSupportUrl)); });
 		connect(wizard, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(kSmoothWizardUrl)); });
+		connect(site, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl("https://livedelay.vxh.pl/")); });
 		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 		connect(buttons, &QDialogButtonBox::accepted, this, [=] {
 			Store();

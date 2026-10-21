@@ -6,6 +6,7 @@
 #include "limits.hpp"
 #include "outputs.hpp"
 #include "settings.hpp"
+#include "update.hpp"
 
 #include <QDesktopServices>
 #include <QFrame>
@@ -196,6 +197,7 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	toolsRow->addWidget(help);
 
 	auto *layout = new QVBoxLayout(this);
+	AttachUpdateBanner(this, layout);
 	layout->addWidget(banner_);
 	layout->addWidget(limits_);
 	layout->addWidget(status_);
