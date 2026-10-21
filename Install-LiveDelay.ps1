@@ -65,7 +65,8 @@ function Find-ObsRoots {
 		'C:\Program Files (x86)\Steam\steamapps\common\OBS Studio',
 		'C:\Program Files\Steam\steamapps\common\OBS Studio'
 	)) { & $add $s }
-	return $list | Select-Object -Unique
+	# Always return Object[] — a single string makes $roots[0] mean the char 'C'.
+	return @($list | Select-Object -Unique)
 }
 
 function Pick-ObsRoot {
@@ -128,13 +129,13 @@ $payload = Find-ReleasePayload
 Write-Info "DLL:  $($payload.Dll)"
 Write-Info "Data: $($payload.Data)"
 
-$obsRoots = Find-ObsRoots
+$obsRoots = @(Find-ObsRoots)
 $obsExe = $null
 $obsRoot = $ObsRoot
 
 if (-not $obsRoot) {
 	if ($obsRoots.Count -eq 1) {
-		$obsRoot = $obsRoots[0]
+		$obsRoot = [string]$obsRoots[0]
 	} elseif ($obsRoots.Count -gt 1) {
 		Write-Info "Found OBS installs:"
 		for ($i = 0; $i -lt $obsRoots.Count; $i++) {
@@ -146,7 +147,7 @@ if (-not $obsRoot) {
 			$pick = Read-Host "Install number (Enter = ProgramData only)"
 			if ($pick -match '^\d+$') {
 				$n = [int]$pick - 1
-				if ($n -ge 0 -and $n -lt $obsRoots.Count) { $obsRoot = $obsRoots[$n] }
+				if ($n -ge 0 -and $n -lt $obsRoots.Count) { $obsRoot = [string]$obsRoots[$n] }
 			}
 		}
 	} elseif (-not $NoPrompt) {
@@ -156,10 +157,19 @@ if (-not $obsRoot) {
 }
 
 if ($obsRoot) {
+	$obsRoot = [string]$obsRoot
+	# Guard against accidental drive-letter / single-char paths (PS string indexing bug).
+	if ($obsRoot.Length -lt 4) {
+		Write-Warn "Ignoring invalid OBS path: '$obsRoot' (ProgramData install only)."
+		$obsRoot = $null
+	}
+}
+if ($obsRoot) {
 	$obsExe = Join-Path $obsRoot 'bin\64bit\obs64.exe'
 	if (-not (Test-Path -LiteralPath $obsExe)) {
-		Write-Err "obs64.exe missing in: $obsRoot"
-		exit 1
+		Write-Warn "obs64.exe missing in: $obsRoot - continuing with ProgramData only."
+		$obsRoot = $null
+		$obsExe = $null
 	}
 }
 
