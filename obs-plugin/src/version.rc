@@ -13,12 +13,12 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "skullboypl"
       VALUE "FileDescription", "LiveDelay OBS Studio plugin"
-      VALUE "FileVersion", "1.0.13"
+      VALUE "FileVersion", "1.0.14"
       VALUE "InternalName", "livedelay-obs"
       VALUE "LegalCopyright", "Copyright (C) skullboypl"
       VALUE "OriginalFilename", "livedelay-obs.dll"
       VALUE "ProductName", "LiveDelay"
-      VALUE "ProductVersion", "1.0.13"
+      VALUE "ProductVersion", "1.0.14"
     END
   END
   BLOCK "VarFileInfo"

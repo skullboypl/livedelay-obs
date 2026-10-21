@@ -8,15 +8,29 @@ $name = "livedelay-obs-$version-windows-x64"
 $stage = Join-Path $PSScriptRoot "dist\$name"
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force "$stage\obs-plugins\64bit", "$stage\data\obs-plugins\livedelay-obs" | Out-Null
-Copy-Item "$PSScriptRoot\obs-plugin\build\Release\livedelay-obs.dll" "$stage\obs-plugins\64bit"
+$dllSrc = "$PSScriptRoot\obs-plugin\build\Release\livedelay-obs.dll"
+Copy-Item $dllSrc "$stage\obs-plugins\64bit"
 Copy-Item "$PSScriptRoot\obs-plugin\data\*" "$stage\data\obs-plugins\livedelay-obs" -Recurse
 Copy-Item "$PSScriptRoot\LICENSE" "$stage\LICENSE.txt"
 Copy-Item "$PSScriptRoot\Install-LiveDelay.ps1" "$stage\Install-LiveDelay.ps1"
 # BOM for Windows PowerShell 5.1 -File. Do NOT put BOM on web/public/install.ps1 (breaks irm|iex).
 $utf8bom = New-Object System.Text.UTF8Encoding $true
 [System.IO.File]::WriteAllText("$stage\Install-LiveDelay.ps1", [System.IO.File]::ReadAllText("$stage\Install-LiveDelay.ps1"), $utf8bom)
+# Release zips should contain an Authenticode-signed DLL (sign before packaging; tooling stays outside this repo).
+try {
+	$sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $stage 'obs-plugins\64bit\livedelay-obs.dll')
+	if ($sig.Status -eq 'Valid') {
+		Write-Host "Authenticode: Valid ($($sig.SignerCertificate.Subject))"
+	} else {
+		Write-Warning "Authenticode status=$($sig.Status) - official releases ship a signed livedelay-obs.dll. Sign the DLL before packaging."
+	}
+} catch {
+	Write-Warning "Could not read Authenticode signature: $_"
+}
 @"
 LiveDelay $version for OBS Studio 31+ (Windows x64)
+
+The plugin DLL in this zip is Authenticode-signed (EV code signing).
 
 Recommended install (no admin)
   1. Close OBS.
@@ -31,7 +45,7 @@ Portable OBS
 
 Manual install (legacy)
   Copy obs-plugins and data into your OBS folder and merge.
-  Prefer the script — wrong folder is the #1 cause of
+  Prefer the script - wrong folder is the #1 cause of
   "The following OBS plugins failed to load".
 
 Uninstall
@@ -41,6 +55,8 @@ Uninstall
 If the plugin still fails to load
   - OBS Studio 31+ x64 required
   - Install "Microsoft Visual C++ Redistributable 2015-2022 x64"
+  - Windows error (4551): Smart App Control / Application Control blocked the DLL
+    (Windows Security -> App and browser control -> Smart App Control)
   - Check %AppData%\obs-studio\logs\ for LoadLibrary / [livedelay]
 
 Source and help: $repo

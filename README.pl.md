@@ -56,7 +56,7 @@ $env:LD_INTO_OBS='1'; $env:LD_OBS_ROOT='D:\sciezka\obs-studio'; irm https://live
 
 Albo ręcznie: rozpakuj zip → `Install-LiveDelay.ps1`.
 
-Jeśli „poniższe wtyczki OBS nie załadowały się”: zły folder, OBS &lt; 31, brak VC++ Redistributable x64, albo portable bez `-IntoObsFolder`. Log: `%AppData%\obs-studio\logs\`.
+Oficjalne buildy mają **podpisany Authenticode (EV)** plik `livedelay-obs.dll`. Jeśli „poniższe wtyczki OBS nie załadowały się”: zły folder, OBS &lt; 31, brak VC++ Redistributable x64, portable bez `-IntoObsFolder`, albo **Smart App Control** blokuje DLL (`LoadLibrary` **4551**). Log: `%AppData%\obs-studio\logs\`.
 
 Wymaga OBS Studio 31+, Windows 10/11 x64.
 

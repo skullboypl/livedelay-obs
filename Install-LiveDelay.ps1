@@ -396,6 +396,8 @@ function Get-LoadFailureHint([string]$detail) {
 		return @(
 			'Windows error 4551 = Smart App Control / Application Control blocked the DLL.',
 			'This is NOT a missing VC++ issue - Windows refused to load the file.',
+			'Official LiveDelay builds ship an Authenticode-signed (EV) livedelay-obs.dll;',
+			'Smart App Control can still block new publishers until reputation builds.',
 			'Fix (Windows 11):',
 			'  1) Windows Security -> App and browser control -> Smart App Control -> Off',
 			'  2) Or add an exclusion for C:\ProgramData\obs-studio\plugins\livedelay-obs\',

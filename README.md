@@ -56,7 +56,7 @@ $env:LD_INTO_OBS='1'; $env:LD_OBS_ROOT='D:\path\to\obs-studio'; irm https://live
 
 Or unzip the release and run `Install-LiveDelay.ps1`.
 
-If OBS says plugins failed to load: wrong folder, OBS &lt; 31, missing VC++ Redistributable x64, or portable without `LD_INTO_OBS`. Logs: `%AppData%\obs-studio\logs\`.
+Release builds ship an **Authenticode-signed** `livedelay-obs.dll` (EV). If OBS says plugins failed to load: wrong folder, OBS &lt; 31, missing VC++ Redistributable x64, portable without `LD_INTO_OBS`, or Windows **Smart App Control** blocking the DLL (`LoadLibrary` error **4551**). Logs: `%AppData%\obs-studio\logs\`.
 
 Requires OBS Studio 31+ on Windows 10/11 x64.
 
