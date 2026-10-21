@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiveDelay preview</title>
+<style>
+  :root { --bg: #0f1115; --card: #171a21; --line: #262a33; --text: #e8eaef; --muted: #8b90a0;
+          --live: #34c759; --amber: #ffb300; --red: #ff453a; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 18px 24px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  #state { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px;
+           background: #20242c; font-weight: 600; font-size: 13px; letter-spacing: .04em; }
+  #state i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  #state.live i { background: var(--live); } #state.delayed i { background: var(--red); }
+  #state.arming i, #state.armed i { background: var(--amber); }
+  #dests { color: var(--muted); font-size: 13px; margin-left: auto; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 20px; padding: 24px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .card h2 { margin: 0; padding: 12px 16px; font-size: 14px; font-weight: 600; display: flex; justify-content: space-between; gap: 12px; }
+  .card h2 span { color: var(--muted); font-weight: 400; }
+  video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+  .note { color: var(--muted); font-size: 13px; padding: 0 24px 24px; max-width: 900px; }
+  .off { display: grid; place-items: center; aspect-ratio: 16 / 9; color: var(--muted); background: #0b0c0f; }
+</style>
+</head>
+<body>
+<header>
+  <h1>LiveDelay</h1>
+  <span id="state"><i></i><b id="stateText">…</b></span>
+  <span id="dests"></span>
+</header>
+<main>
+  <section class="card">
+    <h2><b data-t="in"></b><span data-t="inSub"></span></h2>
+    <div class="off" id="inOff" data-t="noSignal"></div>
+    <video id="in" muted playsinline hidden></video>
+  </section>
+  <section class="card">
+    <h2><b data-t="out"></b><span id="outSub"></span></h2>
+    <div class="off" id="outOff" data-t="noSignal"></div>
+    <video id="out" muted playsinline hidden></video>
+  </section>
+</main>
+<p class="note" data-t="note"></p>
+<script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
+<script>
+  const I18N = {
+    en: { dest: { stopped: 'stopped', waiting: 'waiting', connecting: 'connecting', live: 'live', error: 'error' }, in: 'From OBS', inSub: 'what OBS sends to LiveDelay', out: 'To viewers', live: 'live, no delay',
+          delayed: 'delayed {s} s', noSignal: 'Waiting for the stream from OBS…', waiting: 'WAITING FOR OBS',
+          sLive: 'LIVE', sArming: 'ARMING {b}/{s} s', sArmed: 'ARMED {s} s', sDelayed: 'DELAY {s} s',
+          note: 'Both players are muted and run on this computer only. The right one is exactly what LiveDelay sends to your platforms, so it trails by the delay plus a second or two of player buffer.' },
+    pl: { dest: { stopped: 'zatrzymana', waiting: 'czeka', connecting: 'łączy', live: 'nadaje', error: 'błąd' }, in: 'Z OBS', inSub: 'to, co OBS wysyła do LiveDelay', out: 'Do widzów', live: 'na żywo, bez opóźnienia',
+          delayed: 'opóźnienie {s} s', noSignal: 'Czekam na stream z OBS…', waiting: 'CZEKAM NA OBS',
+          sLive: 'NA ŻYWO', sArming: 'UZBRAJANIE {b}/{s} s', sArmed: 'UZBROJONE {s} s', sDelayed: 'OPÓŹNIENIE {s} s',
+          note: 'Oba odtwarzacze są wyciszone i działają tylko na tym komputerze. Prawy pokazuje dokładnie to, co LiveDelay wysyła na platformy, więc jest z tyłu o opóźnienie plus sekundę czy dwie bufora odtwarzacza.' },
+    de: { dest: { stopped: 'gestoppt', waiting: 'wartet', connecting: 'verbindet', live: 'sendet', error: 'Fehler' }, in: 'Von OBS', inSub: 'was OBS an LiveDelay sendet', out: 'An die Zuschauer', live: 'live, ohne Verzögerung',
+          delayed: 'verzögert {s} s', noSignal: 'Warte auf den Stream von OBS…', waiting: 'WARTE AUF OBS',
+          sLive: 'LIVE', sArming: 'VORBEREITUNG {b}/{s} s', sArmed: 'BEREIT {s} s', sDelayed: 'VERZÖGERT {s} s',
+          note: 'Beide Player sind stumm und laufen nur auf diesem Computer. Rechts siehst du genau das, was LiveDelay an deine Plattformen sendet; es liegt um die Verzögerung plus ein, zwei Sekunden Player-Puffer zurück.' },
+    ru: { dest: { stopped: 'остановлено', waiting: 'ожидание', connecting: 'подключение', live: 'в эфире', error: 'ошибка' }, in: 'Из OBS', inSub: 'что OBS отправляет в LiveDelay', out: 'Зрителям', live: 'эфир без задержки',
+          delayed: 'задержка {s} с', noSignal: 'Жду трансляцию из OBS…', waiting: 'ЖДУ OBS',
+          sLive: 'ЭФИР', sArming: 'ПОДГОТОВКА {b}/{s} с', sArmed: 'ГОТОВО {s} с', sDelayed: 'ЗАДЕРЖКА {s} с',
+          note: 'Оба плеера без звука и работают только на этом компьютере. Справа ровно то, что LiveDelay отправляет на платформы, поэтому он отстаёт на задержку плюс секунду-две буфера плеера.' },
+  };
+  const q = new URLSearchParams(location.search);
+  const lang = (q.get('lang') || navigator.language || 'en').slice(0, 2);
+  const L = I18N[lang] || I18N.en;
+  document.documentElement.lang = I18N[lang] ? lang : 'en';
+  document.querySelectorAll('[data-t]').forEach(el => el.textContent = L[el.dataset.t]);
+  const fill = (t, s) => t.replace('{s}', Math.round(s.mode === 'delayed' ? s.delay : (s.arm_delay || 0)))
+                          .replace('{b}', Math.floor(Math.min(s.buffer_s, s.arm_delay || 0)));
+
+  const players = {};
+  function play(id, on) {
+    const video = document.getElementById(id), off = document.getElementById(id + 'Off');
+    if (!on) {
+      if (players[id]) { players[id].destroy(); delete players[id]; }
+      video.hidden = true; off.hidden = false;
+      return;
+    }
+    if (players[id] || !window.mpegts || !mpegts.isSupported()) return;
+    const p = mpegts.createPlayer({ type: 'flv', isLive: true, url: '/live-preview/' + id + '.flv' },
+      { enableStashBuffer: false, liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 3 });
+    p.attachMediaElement(video);
+    p.load();
+    p.play().catch(() => {});
+    p.on(mpegts.Events.ERROR, () => { play(id, false); setTimeout(() => last && play(id, last.input), 2000); });
+    players[id] = p;
+    video.hidden = false; off.hidden = true;
+  }
+
+  let last = null;
+  const es = new EventSource('/events');
+  es.onmessage = (e) => {
+    const s = JSON.parse(e.data);
+    const state = document.getElementById('state'), text = document.getElementById('stateText');
+    let kind = 'live', label = L.sLive;
+    if (!s.input && s.mode !== 'delayed') { kind = ''; label = L.waiting; }
+    else if (s.mode === 'delayed') { kind = 'delayed'; label = fill(L.sDelayed, s); }
+    else if (s.arm_delay !== null) { kind = s.armed ? 'armed' : 'arming'; label = fill(s.armed ? L.sArmed : L.sArming, s); }
+    state.className = kind; text.textContent = label;
+    document.getElementById('outSub').textContent = s.mode === 'delayed' ? fill(L.delayed, s) : L.live;
+    document.getElementById('dests').textContent = s.dests.map(d => d.name + ': ' + (L.dest[d.state] || d.state) + (d.kbps ? ' ' + d.kbps + ' kb/s' : '')).join('  ·  ');
+    if (!last || last.input !== s.input) { play('in', s.input); play('out', s.input); }
+    last = s;
+  };
+</script>
+</body>
+</html>

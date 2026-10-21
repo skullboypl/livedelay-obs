@@ -25,11 +25,13 @@ hotkey_activate =
 hotkey_cut =
 hotkey_cut_after =
 
-# One block per platform. enabled = no turns it off without deleting it.
+# One block per platform. enabled = no turns it off without deleting it,
+# autostart = no waits for Start in LiveDelay instead of following OBS.
 [dest Twitch]
 url = rtmp://live.twitch.tv/app
 key = PASTE_YOUR_KEY
 enabled = no
+autostart = yes
 ";
 
 #[derive(Clone, Debug)]
@@ -38,6 +40,8 @@ pub struct Dest {
     pub url: String,
     pub key: String,
     pub enabled: bool,
+    /// Start sending as soon as OBS streams; otherwise wait for Start in LiveDelay.
+    pub autostart: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -91,7 +95,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
         let err = |m: &str| format!("livedelay.ini, line {}: {m}", n + 1);
         if let Some(sec) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
             let name = sec.trim().strip_prefix("dest").map(str::trim).ok_or_else(|| err("a section must look like [dest Name]"))?;
-            c.dests.push(Dest { name: name.to_string(), url: String::new(), key: String::new(), enabled: true });
+            c.dests.push(Dest { name: name.to_string(), url: String::new(), key: String::new(), enabled: true, autostart: true });
             continue;
         }
         let (k, v) = line.split_once('=').ok_or_else(|| err("brak znaku ="))?;
@@ -101,6 +105,7 @@ pub fn parse(text: &str) -> Result<Config, String> {
                 "url" => d.url = v.into(),
                 "key" => d.key = v.into(),
                 "enabled" => d.enabled = yes(v),
+                "autostart" => d.autostart = yes(v),
                 _ => return Err(err(&format!("unknown key {k}"))),
             }
             continue;

@@ -5,6 +5,8 @@
 #include <memory>
 #include <string>
 
+class QFrame;
+class QGridLayout;
 class QLabel;
 class QPushButton;
 class QProgressBar;
@@ -30,7 +32,12 @@ private:
 	void ShowState(const std::string &json);
 	void ShowOffline();
 	void ShowError(const QString &msg);
+	void ShowDestinations(const std::string &json);
+	void UpdateBanner();
 
+	QFrame *banner_;
+	QFrame *dests_;
+	QGridLayout *destGrid_;
 	QLabel *status_;
 	QLabel *detail_;
 	QLabel *error_;

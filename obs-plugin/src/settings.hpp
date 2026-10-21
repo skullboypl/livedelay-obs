@@ -11,6 +11,7 @@ namespace livedelay {
 struct Destination {
 	std::string name, url, key;
 	bool enabled = true;
+	bool autostart = true;
 };
 
 struct Settings {
@@ -35,6 +36,13 @@ std::string ConfigPath();
 std::string StartProxy();
 
 std::string OverlayUrl();
+std::string LivePreviewUrl();
+// True when OBS's stream settings point at LiveDelay.
+bool ObsRoutedToLiveDelay();
+// Moves OBS's current server and key onto LiveDelay's platform list, saves,
+// restarts the proxy and points OBS at LiveDelay. Tells the user what happened.
+void RouteObsThroughLiveDelay(QWidget *parent);
+void ShowHelp(QWidget *parent);
 void AddOverlayToScene(QWidget *parent);
 void ShowSettings(QWidget *parent);
 

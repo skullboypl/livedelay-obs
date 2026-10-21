@@ -109,6 +109,8 @@ Settings Settings::Load(const std::string &path)
 				dest->key = v;
 			else if (k == "enabled")
 				dest->enabled = Yes(v);
+			else if (k == "autostart")
+				dest->autostart = Yes(v);
 			continue;
 		}
 		if (k == "listen")
@@ -145,7 +147,7 @@ bool Settings::Save(const std::string &path) const
 	  << "\noverlay_armed = " << overlay_armed << "\noverlay_delayed = " << overlay_delayed << "\n";
 	for (const Destination &d : dests)
 		o << "\n[dest " << d.name << "]\nurl = " << d.url << "\nkey = " << d.key
-		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\n";
+		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\nautostart = " << (d.autostart ? "yes" : "no") << "\n";
 	std::string tmp = path + ".tmp";
 	{
 		std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
@@ -189,12 +191,22 @@ std::string StartProxy()
 	return buf;
 }
 
-std::string OverlayUrl()
+static std::string ApiBase()
 {
 	Settings s = Settings::Load(ConfigPath());
-	std::string api = s.api;
-	size_t c = api.rfind(':');
-	return "http://127.0.0.1" + (c == std::string::npos ? std::string(":7799") : api.substr(c)) + "/overlay";
+	size_t c = s.api.rfind(':');
+	return "http://127.0.0.1" + (c == std::string::npos ? std::string(":7799") : s.api.substr(c));
+}
+
+std::string OverlayUrl()
+{
+	return ApiBase() + "/overlay";
+}
+
+std::string LivePreviewUrl()
+{
+	const char *locale = obs_get_locale();
+	return ApiBase() + "/live-preview?lang=" + std::string(locale ? locale : "en").substr(0, 2);
 }
 
 void AddOverlayToScene(QWidget *parent)
@@ -262,6 +274,13 @@ void PointObsAtLiveDelay(int port)
 	obs_data_release(s);
 }
 
+bool RoutedTo(int port)
+{
+	obs_service_t *svc = obs_frontend_get_streaming_service();
+	const char *url = svc ? obs_service_get_connect_info(svc, OBS_SERVICE_CONNECT_INFO_SERVER_URL) : nullptr;
+	return url && std::string(url).find("127.0.0.1:" + std::to_string(port)) != std::string::npos;
+}
+
 // Links shown in the settings window only, never on stream.
 constexpr const char *kSupportUrl = "https://donate.skullmedia.pl";
 constexpr const char *kSmoothWizardUrl = "https://smoothwizard.com/?utm_source=livedelay-obs";
@@ -309,6 +328,8 @@ public:
 		key_->setEchoMode(QLineEdit::Password);
 		auto *show = new QCheckBox(T("Settings.Show"));
 		enabled_ = new QCheckBox(T("Settings.SendHere"));
+		autostart_ = new QCheckBox(T("Settings.Autostart"));
+		autostart_->setToolTip(T("Settings.AutostartTip"));
 		auto *keyRow = new QHBoxLayout;
 		keyRow->addWidget(key_, 1);
 		keyRow->addWidget(show);
@@ -318,6 +339,7 @@ public:
 		form->addRow(T("Settings.Server"), url_);
 		form->addRow(T("Settings.Key"), keyRow);
 		form->addRow(QString(), enabled_);
+		form->addRow(QString(), autostart_);
 		fields_ = new QWidget;
 		fields_->setLayout(form);
 		auto *add = new QPushButton(T("Settings.Add"));
@@ -332,11 +354,17 @@ public:
 		destRow->addLayout(listCol);
 		destRow->addWidget(fields_, 1);
 		auto *importBtn = new QPushButton(T("Settings.SwitchObs"));
+		auto *livePreview = new QPushButton(T("Settings.LivePreview"));
+		livePreview->setToolTip(T("Settings.LivePreviewTip"));
+		auto *helpBtn = new QPushButton(T("Dock.Help"));
 		auto *destBox = new QGroupBox(T("Settings.Platforms"));
 		auto *destLayout = new QVBoxLayout(destBox);
 		destLayout->addWidget(Hint(T("Settings.PlatformsAbout")));
 		destLayout->addLayout(destRow);
-		destLayout->addWidget(importBtn);
+		auto *destBtns = new QHBoxLayout;
+		destBtns->addWidget(importBtn, 1);
+		destBtns->addWidget(livePreview);
+		destLayout->addLayout(destBtns);
 
 		// Overlay for a Browser source.
 		auto *urlLine = new QLineEdit(Q(OverlayUrl()));
@@ -383,8 +411,11 @@ public:
 		buttons->button(QDialogButtonBox::Save)->setText(T("Settings.Save"));
 		buttons->button(QDialogButtonBox::Cancel)->setText(T("Settings.Cancel"));
 
+		auto *top = new QHBoxLayout;
+		top->addLayout(general, 1);
+		top->addWidget(helpBtn, 0, Qt::AlignTop);
 		auto *layout = new QVBoxLayout(this);
-		layout->addLayout(general);
+		layout->addLayout(top);
 		layout->addWidget(destBox);
 		layout->addWidget(ovBox);
 		layout->addWidget(footer);
@@ -425,6 +456,9 @@ public:
 				list_->item(current_)->setText(t);
 		});
 		connect(importBtn, &QPushButton::clicked, this, [this] { Import(); });
+		connect(livePreview, &QPushButton::clicked, this,
+			[] { QDesktopServices::openUrl(QUrl(Q(LivePreviewUrl()))); });
+		connect(helpBtn, &QPushButton::clicked, this, [this] { ShowHelp(this); });
 		connect(copy, &QPushButton::clicked, this,
 			[urlLine] { QApplication::clipboard()->setText(urlLine->text()); });
 		connect(preview, &QPushButton::clicked, this,
@@ -458,6 +492,7 @@ private:
 		d.url = S(url_->text());
 		d.key = S(key_->text());
 		d.enabled = enabled_->isChecked();
+		d.autostart = autostart_->isChecked();
 	}
 
 	void Select(int row)
@@ -471,6 +506,7 @@ private:
 		url_->setText(Q(d.url));
 		key_->setText(Q(d.key));
 		enabled_->setChecked(d.enabled);
+		autostart_->setChecked(d.autostart);
 	}
 
 	void Import()
@@ -512,6 +548,7 @@ private:
 	QLineEdit *name_, *url_, *key_;
 	QComboBox *preset_;
 	QCheckBox *enabled_;
+	QCheckBox *autostart_;
 };
 
 } // namespace
@@ -519,6 +556,70 @@ private:
 void ShowSettings(QWidget *parent)
 {
 	SettingsDialog dlg(parent);
+	dlg.exec();
+}
+
+bool ObsRoutedToLiveDelay()
+{
+	return RoutedTo(Settings::Load(ConfigPath()).RtmpPort());
+}
+
+void RouteObsThroughLiveDelay(QWidget *parent)
+{
+	Settings s = Settings::Load(ConfigPath());
+	Destination d;
+	bool already = false;
+	if (!CurrentObsTarget(d, already, s.RtmpPort()) && !already) {
+		QMessageBox::warning(parent, "LiveDelay", T("Settings.ReadObsFailed"));
+		return;
+	}
+	if (!already) {
+		bool known = false;
+		for (const Destination &x : s.dests)
+			known |= x.url == d.url && x.key == d.key;
+		if (!known)
+			s.dests.push_back(d);
+		if (!s.Save(ConfigPath())) {
+			QMessageBox::warning(parent, "LiveDelay", T("Settings.SaveFailed"));
+			return;
+		}
+		StartProxy();
+	}
+	PointObsAtLiveDelay(s.RtmpPort());
+	QMessageBox::information(parent, "LiveDelay", already ? T("Settings.AlreadyRouted") : T("Settings.RoutedSaved"));
+}
+
+void ShowHelp(QWidget *parent)
+{
+	QDialog dlg(parent);
+	dlg.setWindowTitle(T("Help.Title"));
+	dlg.setMinimumWidth(560);
+	auto *body = new QLabel(T("Help.Body").arg(Q(OverlayUrl())));
+	body->setWordWrap(true);
+	body->setTextFormat(Qt::RichText);
+	body->setTextInteractionFlags(Qt::TextBrowserInteraction);
+	body->setOpenExternalLinks(true);
+	auto *route = new QPushButton(T("Help.RouteNow"));
+	route->setEnabled(!ObsRoutedToLiveDelay());
+	auto *settings = new QPushButton(T("Dock.Settings"));
+	auto *close = new QPushButton(T("Help.Close"));
+	auto *buttons = new QHBoxLayout;
+	buttons->addWidget(route);
+	buttons->addWidget(settings);
+	buttons->addStretch();
+	buttons->addWidget(close);
+	auto *layout = new QVBoxLayout(&dlg);
+	layout->addWidget(body);
+	layout->addLayout(buttons);
+	QObject::connect(route, &QPushButton::clicked, &dlg, [&dlg, route] {
+		RouteObsThroughLiveDelay(&dlg);
+		route->setEnabled(!ObsRoutedToLiveDelay());
+	});
+	QObject::connect(settings, &QPushButton::clicked, &dlg, [&dlg] {
+		dlg.accept();
+		ShowSettings(dlg.parentWidget());
+	});
+	QObject::connect(close, &QPushButton::clicked, &dlg, &QDialog::accept);
 	dlg.exec();
 }
 

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::io::{split, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc, watch};
 
 pub trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
@@ -53,9 +53,37 @@ pub fn parse_url(url: &str, key: &str) -> Result<Target, String> {
 #[derive(Clone, Debug, Default)]
 pub struct DestStatus {
     pub name: String,
+    /// stopped, waiting, connecting, live or error.
     pub state: &'static str,
     pub error: String,
     pub kbps: f64,
+}
+
+/// One destination as the rest of the app sees it: its status and an on/off switch.
+pub struct Dest {
+    pub status: Mutex<DestStatus>,
+    pub autostart: bool,
+    want: watch::Sender<bool>,
+}
+
+impl Dest {
+    pub fn new(name: &str, autostart: bool) -> Arc<Self> {
+        let (want, _) = watch::channel(autostart);
+        Arc::new(Self {
+            status: Mutex::new(DestStatus { name: name.to_string(), state: "waiting", ..Default::default() }),
+            autostart,
+            want,
+        })
+    }
+
+    pub fn is_on(&self) -> bool {
+        *self.want.borrow()
+    }
+
+    /// Start (or stop) sending to this destination. Takes effect immediately.
+    pub fn set_on(&self, on: bool) {
+        self.want.send_replace(on);
+    }
 }
 
 async fn open(t: &Target) -> io::Result<Box<dyn Io>> {
@@ -153,11 +181,20 @@ fn media_message(t: &OutTag, base: u64, sid: u32) -> (u8, Message) {
 
 enum Ended {
     StreamEnd,
+    /// Switched off from LiveDelay.
+    Stopped,
     Error(io::Error),
 }
 
 /// One publishing session: sends config, then waits for a keyframe and streams.
-async fn stream(c: Conn, sid: u32, rx: &mut broadcast::Receiver<OutMsg>, shared: &Shared, status: &Mutex<DestStatus>) -> Ended {
+async fn stream(
+    c: Conn,
+    sid: u32,
+    rx: &mut broadcast::Receiver<OutMsg>,
+    want: &mut watch::Receiver<bool>,
+    shared: &Shared,
+    status: &Mutex<DestStatus>,
+) -> Ended {
     let Conn { io, mut reader, w, mut out } = c;
     let (rd, mut wr) = split(io);
     // The server may ping us; answer from the writer side.
@@ -193,6 +230,10 @@ async fn stream(c: Conn, sid: u32, rx: &mut broadcast::Receiver<OutMsg>, shared:
     let result = loop {
         let msg = tokio::select! {
             m = rx.recv() => m,
+            _ = want.changed() => {
+                if *want.borrow_and_update() { continue }
+                break Ended::Stopped;
+            }
             p = ping_rx.recv() => {
                 match p {
                     Some(p) => {
@@ -247,7 +288,7 @@ async fn stream(c: Conn, sid: u32, rx: &mut broadcast::Receiver<OutMsg>, shared:
             window_start = Instant::now();
         }
     };
-    if matches!(result, Ended::StreamEnd) {
+    if matches!(result, Ended::StreamEnd | Ended::Stopped) {
         let mut bye = Vec::new();
         w.encode(CS_COMMAND, &command(0, &[s("FCUnpublish"), Amf::Number(6.0), Amf::Null, s("")]), &mut bye);
         w.encode(CS_COMMAND, &command(0, &[s("deleteStream"), Amf::Number(7.0), Amf::Null, Amf::Number(sid as f64)]), &mut bye);
@@ -258,10 +299,11 @@ async fn stream(c: Conn, sid: u32, rx: &mut broadcast::Receiver<OutMsg>, shared:
     result
 }
 
-/// Keeps one destination connected whenever there is something to send.
-pub async fn run(name: String, target: Target, shared: Arc<Shared>, status: Arc<Mutex<DestStatus>>) {
+/// Keeps one destination connected while it is switched on and there is something to send.
+pub async fn run(target: Target, shared: Arc<Shared>, dest: Arc<Dest>) {
+    let name = dest.status.lock().unwrap().name.clone();
     let set = |state: &'static str, error: String| {
-        let mut s = status.lock().unwrap();
+        let mut s = dest.status.lock().unwrap();
         s.state = state;
         s.error = error;
         if state != "live" {
@@ -270,42 +312,67 @@ pub async fn run(name: String, target: Target, shared: Arc<Shared>, status: Arc<
         drop(s);
         shared.state.send_modify(|v| *v += 1);
     };
-    set("waiting", String::new());
+    let mut want = dest.want.subscribe();
     let mut rx = shared.out.subscribe();
     let mut backoff = Duration::from_secs(2);
     loop {
-        // Wait for the first tag of a stream before dialing out.
-        loop {
-            match rx.recv().await {
-                Ok(OutMsg::Tag(_)) | Err(broadcast::error::RecvError::Lagged(_)) => break,
-                Ok(OutMsg::End) => continue,
-                Err(broadcast::error::RecvError::Closed) => return,
+        if !*want.borrow_and_update() {
+            set("stopped", String::new());
+            if want.changed().await.is_err() {
+                return;
             }
+            // Tags piled up while switched off are old; start from what is current.
+            rx = rx.resubscribe();
+            continue;
+        }
+        set("waiting", String::new());
+        // Wait for the first tag of a stream before dialing out.
+        let go = loop {
+            tokio::select! {
+                r = rx.recv() => match r {
+                    Ok(OutMsg::Tag(_)) | Err(broadcast::error::RecvError::Lagged(_)) => break true,
+                    Ok(OutMsg::End) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return,
+                },
+                _ = want.changed() => if !*want.borrow_and_update() { break false },
+            }
+        };
+        if !go {
+            continue;
         }
         set("connecting", String::new());
-        match publish(&target).await {
+        let failure = match publish(&target).await {
             Ok((conn, sid)) => {
                 log!("{name}: connected");
                 set("live", String::new());
                 backoff = Duration::from_secs(2);
-                match stream(conn, sid, &mut rx, &shared, &status).await {
+                match stream(conn, sid, &mut rx, &mut want, &shared, &dest.status).await {
                     Ended::StreamEnd => {
                         log!("{name}: stream ended");
-                        set("waiting", String::new());
+                        // A manually started destination is manual again next time.
+                        dest.set_on(dest.autostart);
+                        continue;
+                    }
+                    Ended::Stopped => {
+                        log!("{name}: stopped from LiveDelay");
                         continue;
                     }
                     Ended::Error(e) => {
                         log!("{name}: dropped: {e}");
-                        set("error", e.to_string());
+                        e
                     }
                 }
             }
             Err(e) => {
                 log!("{name}: could not connect: {e}");
-                set("error", e.to_string());
+                e
             }
+        };
+        set("error", failure.to_string());
+        tokio::select! {
+            _ = tokio::time::sleep(backoff) => {}
+            _ = want.changed() => {}
         }
-        tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(Duration::from_secs(30));
         // Anything queued while we slept is stale; resync to the next keyframe.
         rx = rx.resubscribe();

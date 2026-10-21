@@ -7,7 +7,9 @@ Turn a stream delay on and off while you are live, without reconnecting. LiveDel
 - **One plugin, no extra program.** The delay proxy runs inside OBS (Rust core, about 0.1% CPU and 30 MB RAM for a 15 s delay at 6 Mb/s).
 - **Native dock.** A Qt panel, not a browser dock, so it costs next to nothing.
 - **Hotkeys.** Arm, Activate, Cut and "Cut after it airs" in Settings → Hotkeys. Bind them to the numpad or a Stream Deck.
-- **Several platforms at once.** Twitch, YouTube, Kick, Facebook or any RTMP/RTMPS server.
+- **Several platforms at once.** Twitch, YouTube, Kick, Facebook or any RTMP/RTMPS server, each with its own Start / Stop and an autostart switch.
+- **Live preview.** `/live-preview` shows what OBS sends next to what viewers get.
+- **Guided setup.** A "How to connect?" walkthrough, and the dock offers to point OBS at LiveDelay when it isn't yet.
 - **Overlay.** A Browser source that tells viewers what is going on: LIVE, ARMING…, ARMED, DELAY 25s.
 - **English, Polski, Deutsch, Русский.**
 
@@ -42,6 +44,10 @@ Add a Browser source with `http://127.0.0.1:7799/overlay` (or click **Add to sce
 
 An empty text hides the overlay in that state. Per-source options in the address: `?size=60` (font size in px), `?live=&delayed=ON%20DELAY%20{s}s`. Restyle it with the Browser source's Custom CSS (`#tag`, `.live`, `.arming`, `.armed`, `.delayed`).
 
+## Live preview
+
+`http://127.0.0.1:7799/live-preview` (the **Preview** button in the dock) plays the OBS input and the output to viewers side by side, so you can see the delay working. It loads a small player (mpegts.js) from jsDelivr, so it needs internet; H.264 streams play in any browser.
+
 ## Stream Deck and scripts
 
 Use the **Hotkey** action with the OBS hotkeys, or call the local API (127.0.0.1 only):
@@ -53,12 +59,14 @@ Use the **Hotkey** action with the OBS hotkeys, or call the local API (127.0.0.1
 | `POST /cut` | back to live now |
 | `POST /cut-after` | back to live once this moment has aired |
 | `POST /disarm` | drop the buffer |
+| `POST /dest/start?i=0`, `POST /dest/stop?i=0` | start or end the stream on one platform (0 = first) |
 | `GET /state`, `GET /events` | state as JSON, or pushed as server-sent events |
 
 GET works for the actions too, so the Stream Deck **Website** action can call them. Requests coming from other websites are refused, so a web page cannot cut your stream.
 
 ## Known limits
 
+- OBS 31 does not let plugins add their own entry to Settings → Stream → Service, so LiveDelay uses a Custom server (`rtmp://127.0.0.1:1935/live`) and sets it for you.
 - No Twitch Enhanced Broadcasting (multitrack). **Route OBS through LiveDelay** switches OBS to a custom server, which turns it off.
 - Closing OBS while delayed ends the stream right away: the last N seconds never air.
 - Saving the settings while live restarts LiveDelay and drops the stream for a few seconds. The dialog asks first.

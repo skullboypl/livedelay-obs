@@ -172,17 +172,17 @@ std::string JsonString(const std::string &json, const char *key, size_t from)
 	return out;
 }
 
-double JsonNumber(const std::string &json, const char *key, double fallback)
+double JsonNumber(const std::string &json, const char *key, double fallback, size_t from)
 {
-	size_t p = FindValue(json, key, 0);
+	size_t p = FindValue(json, key, from);
 	if (p == std::string::npos || json.compare(p, 4, "null") == 0)
 		return fallback;
 	return std::strtod(json.c_str() + p, nullptr);
 }
 
-bool JsonBool(const std::string &json, const char *key)
+bool JsonBool(const std::string &json, const char *key, size_t from)
 {
-	size_t p = FindValue(json, key, 0);
+	size_t p = FindValue(json, key, from);
 	return p != std::string::npos && json.compare(p, 4, "true") == 0;
 }
 

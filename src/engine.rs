@@ -119,23 +119,32 @@ pub struct Engine {
 
     out: broadcast::Sender<OutMsg>,
     state: watch::Sender<u64>,
+
+    /// Undelayed copy of the input for /live-preview; only fed while someone watches.
+    input_out: broadcast::Sender<OutMsg>,
+    input_cfg: [Option<OutTag>; 3],
 }
 
 pub struct Shared {
     pub eng: Mutex<Engine>,
     pub wake: Notify,
     pub out: broadcast::Sender<OutMsg>,
+    pub input: broadcast::Sender<OutMsg>,
     pub state: watch::Sender<u64>,
 }
 
 impl Shared {
     pub fn new(max_bytes: usize) -> Arc<Self> {
         let (out, _) = broadcast::channel(2048);
+        let (input, _) = broadcast::channel(2048);
         let (state, _) = watch::channel(0);
+        let mut engine = Engine::new(max_bytes, out.clone(), state.clone());
+        engine.input_out = input.clone();
         Arc::new(Self {
-            eng: Mutex::new(Engine::new(max_bytes, out.clone(), state.clone())),
+            eng: Mutex::new(engine),
             wake: Notify::new(),
             out,
+            input,
             state,
         })
     }
@@ -185,6 +194,8 @@ impl Engine {
             sent_audio_cfg: None,
             evicted_cfg: [None, None, None],
             arm_delay: None,
+            input_out: broadcast::channel(1).0,
+            input_cfg: [None, None, None],
             out,
             state,
         }
@@ -226,6 +237,12 @@ impl Engine {
         let (config, key) = classify(kind, &data);
         self.bytes += data.len();
         let tag = Tag { seq: self.next_seq, ts, arrival: now, kind, key, config, data: Arc::new(data) };
+        if let Some(slot) = cfg_slot(&tag) {
+            self.input_cfg[slot] = Some(OutTag { kind, ts, key, config: true, data: tag.data.clone() });
+        }
+        if self.input_out.receiver_count() > 0 {
+            let _ = self.input_out.send(OutMsg::Tag(OutTag { kind, ts, key, config, data: tag.data.clone() }));
+        }
         self.next_seq += 1;
         self.tags.push_back(tag);
         if key && !self.output_active {
@@ -414,6 +431,11 @@ impl Engine {
             self.cut_after_seq = Some(self.next_seq - 1);
             self.changed();
         }
+    }
+
+    /// Latest config tags seen on the input, for an undelayed preview.
+    pub fn input_config(&self) -> Vec<OutTag> {
+        self.input_cfg.iter().flatten().cloned().collect()
     }
 
     /// Config tags a freshly connected destination needs before the first keyframe.

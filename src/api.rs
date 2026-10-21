@@ -7,25 +7,28 @@
 //! POST /cut              back to live now
 //! POST /cut-after        back to live once the current moment has aired
 //! POST /disarm           stop keeping the buffer
-//! GET  /overlay          status text for an OBS Browser source
+//! GET  /overlay          status text for an OBS Browser source (?preview shows every state)
+//! GET  /live-preview     what OBS sends vs. what viewers get, side by side
+//! POST /dest/start?i=0   start / stop one destination (/dest/stop?i=0)
 
 use crate::engine::{Mode, Shared};
-use crate::rtmp::client::DestStatus;
+use crate::rtmp::client::Dest;
 use std::fmt::Write as _;
 use std::io;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 pub struct Ctx {
     pub shared: Arc<Shared>,
-    pub dests: Vec<Arc<Mutex<DestStatus>>>,
+    pub dests: Vec<Arc<Dest>>,
     pub default_delay: Duration,
     pub overlay: crate::config::Overlay,
 }
 
 const OVERLAY_HTML: &str = include_str!("overlay.html");
+const PREVIEW_HTML: &str = include_str!("preview.html");
 
 fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
@@ -56,15 +59,17 @@ pub fn state_json(ctx: &Ctx) -> String {
         st.cut_pending,
         ctx.default_delay.as_secs_f64(),
     );
-    for (i, d) in ctx.dests.iter().enumerate() {
-        let d = d.lock().unwrap();
+    for (i, dest) in ctx.dests.iter().enumerate() {
+        let d = dest.status.lock().unwrap();
         let _ = write!(
             j,
-            "{}{{\"name\":\"{}\",\"state\":\"{}\",\"kbps\":{:.0},\"error\":\"{}\"}}",
+            "{}{{\"name\":\"{}\",\"state\":\"{}\",\"kbps\":{:.0},\"on\":{},\"autostart\":{},\"error\":\"{}\"}}",
             if i > 0 { "," } else { "" },
             esc(&d.name),
             d.state,
             d.kbps,
+            dest.is_on(),
+            dest.autostart,
             esc(&d.error)
         );
     }
@@ -172,6 +177,22 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
         ("GET", "/state") => respond(&mut sock, "200 OK", &state_json(ctx)).await,
         ("GET", "/events") => events(sock, ctx).await,
         ("GET", "/overlay") => respond_typed(&mut sock, "200 OK", "text/html", &overlay_page(ctx)).await,
+        ("GET", "/live-preview") => respond_typed(&mut sock, "200 OK", "text/html", PREVIEW_HTML).await,
+        ("GET", "/live-preview/out.flv") => crate::preview::serve(sock, &ctx.shared, crate::preview::Feed::Output).await,
+        ("GET", "/live-preview/in.flv") => crate::preview::serve(sock, &ctx.shared, crate::preview::Feed::Input).await,
+        ("GET" | "POST", "/dest/start" | "/dest/stop") => {
+            let i = query.split('&').find_map(|kv| kv.strip_prefix("i=")).and_then(|v| v.parse::<usize>().ok());
+            match i.and_then(|i| ctx.dests.get(i)) {
+                Some(d) => {
+                    let on = path == "/dest/start";
+                    d.set_on(on);
+                    log!("{}: {}", d.status.lock().unwrap().name, if on { "start" } else { "stop" });
+                    ctx.shared.state.send_modify(|v| *v += 1);
+                    respond(&mut sock, "200 OK", &state_json(ctx)).await
+                }
+                None => respond(&mut sock, "404 Not Found", "{\"error\":\"unknown_destination\"}").await,
+            }
+        }
         ("GET" | "POST", "/arm" | "/activate" | "/cut" | "/cut-after" | "/disarm") => match act(ctx, &path[1..], delay) {
             Ok(()) => respond(&mut sock, "200 OK", &state_json(ctx)).await,
             Err(e) => respond(&mut sock, "409 Conflict", &format!("{{\"error\":\"{}\"}}", esc(&e))).await,

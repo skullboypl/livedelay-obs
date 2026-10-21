@@ -35,7 +35,7 @@ private:
 
 // Tiny readers for the proxy's flat JSON. Return the fallback when the key is missing.
 std::string JsonString(const std::string &json, const char *key, size_t from = 0);
-double JsonNumber(const std::string &json, const char *key, double fallback = 0);
-bool JsonBool(const std::string &json, const char *key);
+double JsonNumber(const std::string &json, const char *key, double fallback = 0, size_t from = 0);
+bool JsonBool(const std::string &json, const char *key, size_t from = 0);
 
 } // namespace livedelay

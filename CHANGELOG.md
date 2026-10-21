@@ -10,4 +10,8 @@ First release.
 - Several platforms at once over RTMP and RTMPS.
 - Browser-source overlay with editable texts and `?preview`.
 - Local HTTP API for Stream Deck and scripts.
+- Per-platform Start / Stop and autostart.
+- `/live-preview`: OBS input and viewer output side by side.
+- "How to connect?" walkthrough; the dock offers to route OBS when it isn't.
+- "Waiting for OBS stream" state.
 - English, Polish, German and Russian.

@@ -9,6 +9,7 @@ pub mod api;
 pub mod config;
 pub mod engine;
 mod ffi;
+mod preview;
 pub mod rtmp;
 
 use std::io::Write;
@@ -77,9 +78,9 @@ impl Proxy {
         for d in cfg.dests.iter().filter(|d| d.enabled) {
             match rtmp::client::parse_url(&d.url, &d.key) {
                 Ok(t) => {
-                    let st = Arc::new(Mutex::new(rtmp::client::DestStatus { name: d.name.clone(), ..Default::default() }));
-                    dests.push(st.clone());
-                    targets.push((d.name.clone(), t, st));
+                    let dest = rtmp::client::Dest::new(&d.name, d.autostart);
+                    dests.push(dest.clone());
+                    targets.push((t, dest));
                 }
                 Err(e) => log!("{}: {e}", d.name),
             }
@@ -104,8 +105,8 @@ impl Proxy {
                     Err(e) => return on_fatal(format!("tokio: {e}")),
                 };
                 rt.block_on(async move {
-                    for (name, target, st) in targets {
-                        tokio::spawn(rtmp::client::run(name, target, shared.clone(), st));
+                    for (target, dest) in targets {
+                        tokio::spawn(rtmp::client::run(target, shared.clone(), dest));
                     }
                     tokio::spawn(engine::run_pump(shared.clone()));
                     extra(&shared);

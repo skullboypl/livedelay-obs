@@ -7,7 +7,9 @@ Włączasz i wyłączasz opóźnienie streamu w trakcie nadawania, bez zrywania 
 - **Jedna wtyczka, bez dodatkowego programu.** Proxy opóźnienia działa w środku OBS (rdzeń w Ruście, ok. 0,1% CPU i 30 MB RAM przy 15 s opóźnienia i 6 Mb/s).
 - **Natywny panel.** Okno Qt, nie przeglądarka, więc prawie nic nie kosztuje.
 - **Skróty.** Arm, Activate, Cut i „Cut po wyemitowaniu” w Ustawienia → Skróty klawiszowe. Podepniesz je pod numpad albo Stream Deck.
-- **Kilka platform naraz.** Twitch, YouTube, Kick, Facebook albo dowolny serwer RTMP/RTMPS.
+- **Kilka platform naraz.** Twitch, YouTube, Kick, Facebook albo dowolny serwer RTMP/RTMPS, każda z własnym Start / Stop i przełącznikiem autostartu.
+- **Podgląd na żywo.** `/live-preview` pokazuje obok siebie to, co wysyła OBS, i to, co dostają widzowie.
+- **Prowadzona konfiguracja.** Instrukcja „Jak podłączyć?”, a panel sam proponuje ustawienie OBS na LiveDelay, jeśli jeszcze nie jest.
 - **Overlay.** Źródło Przeglądarka, które pokazuje widzom, co się dzieje: LIVE, ARMING…, ARMED, DELAY 25s.
 - **Polski, English, Deutsch, Русский.**
 
@@ -38,6 +40,10 @@ Dodaj źródło Przeglądarka z adresem `http://127.0.0.1:7799/overlay` (albo kl
 
 W ustawieniach zmienisz teksty dla stanów Na żywo, Uzbrajanie, Uzbrojone i Opóźnienie. `{s}` to opóźnienie w sekundach, `{buf}` to ile sekund jest już w buforze. Pusty tekst ukrywa overlay w danym stanie. Opcje dla jednego źródła w adresie: `?size=60` (rozmiar czcionki w px), `?live=&delayed=OPÓŹNIENIE%20{s}s`. Wygląd zmienisz polem „Własny CSS” w źródle (`#tag`, `.live`, `.arming`, `.armed`, `.delayed`).
 
+## Podgląd na żywo
+
+`http://127.0.0.1:7799/live-preview` (przycisk **Podgląd** w panelu) odtwarza obok siebie obraz z OBS i to, co idzie do widzów, więc widać działanie opóźnienia. Ładuje mały odtwarzacz (mpegts.js) z jsDelivr, więc potrzebuje internetu; streamy H.264 działają w każdej przeglądarce.
+
 ## Stream Deck i skrypty
 
 Akcja **Hotkey** ze skrótami z OBS albo lokalne API (tylko 127.0.0.1):
@@ -49,12 +55,14 @@ Akcja **Hotkey** ze skrótami z OBS albo lokalne API (tylko 127.0.0.1):
 | `POST /cut` | wraca na żywo teraz |
 | `POST /cut-after` | wraca na żywo, gdy ta chwila zostanie wyemitowana |
 | `POST /disarm` | zwalnia bufor |
+| `POST /dest/start?i=0`, `POST /dest/stop?i=0` | zaczyna albo kończy stream na jednej platformie (0 = pierwsza) |
 | `GET /state`, `GET /events` | stan jako JSON albo wypychany jako zdarzenia (SSE) |
 
 Akcje działają też przez GET, więc zadziała akcja **Website** w Stream Decku. Żądania z innych stron WWW są odrzucane, więc żadna strona nie wytnie Ci streamu.
 
 ## Ograniczenia
 
+- OBS 31 nie pozwala wtyczkom dodać własnej pozycji w Ustawienia → Transmisja → Usługa, więc LiveDelay używa serwera Własnego (`rtmp://127.0.0.1:1935/live`) i sam go ustawia.
 - Brak Enhanced Broadcasting Twitcha (wiele ścieżek). **Przełącz OBS na LiveDelay** ustawia własny serwer, co je wyłącza.
 - Zamknięcie OBS w trybie opóźnienia kończy stream od razu: ostatnie N sekund nie zostanie wyemitowane.
 - Zapis ustawień w trakcie streamu uruchamia LiveDelay ponownie i przerywa stream na kilka sekund. Okno pyta o to wcześniej.
