@@ -144,7 +144,8 @@ Settings Settings::Load(const std::string &path)
 			else if (k == "vod_audio")
 				dest->vod_audio = Yes(v);
 			else if (k == "enhanced_broadcasting" || k == "enhanced")
-				dest->enhanced_broadcasting = Yes(v);
+				// Ignored until GoLive: multi-video RTMP breaks Twitch (#1000).
+				dest->enhanced_broadcasting = false;
 			continue;
 		}
 		if (k == "listen")
@@ -927,11 +928,11 @@ private:
 				    url_->text().contains("twitch", Qt::CaseInsensitive) ||
 				    url_->text().contains("live-video.net", Qt::CaseInsensitive);
 		vodAudio_->setEnabled(twitch);
-		enhanced_->setEnabled(twitch);
-		if (!twitch) {
+		// Multi-video EB without GoLive breaks Twitch (#1000) — keep UI off until GoLive ships.
+		enhanced_->setEnabled(false);
+		enhanced_->setChecked(false);
+		if (!twitch)
 			vodAudio_->setChecked(false);
-			enhanced_->setChecked(false);
-		}
 		if (current_ < 0 || current_ >= int(s_.dests.size())) {
 			encodeSummary_->clear();
 			return;

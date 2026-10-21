@@ -14,12 +14,6 @@ namespace livedelay {
 
 namespace {
 
-struct Rendition {
-	uint32_t width = 0;
-	uint32_t height = 0;
-	int kbps = 0;
-};
-
 struct DestOutput {
 	std::string name;
 	std::string ingest_key;
@@ -213,19 +207,6 @@ bool EnsureVodAudio(DestOutput &o, int kbps)
 	return true;
 }
 
-std::vector<Rendition> PartnerLadder(uint32_t canvas_w, uint32_t canvas_h, int primary_kbps)
-{
-	std::vector<Rendition> r;
-	r.push_back({canvas_w, canvas_h, primary_kbps});
-	if (canvas_w >= 1280 && canvas_h >= 720)
-		r.push_back({1280, 720, std::min(4500, primary_kbps)});
-	if (canvas_w >= 852 && canvas_h >= 480)
-		r.push_back({852, 480, 1600});
-	if (canvas_w >= 640 && canvas_h >= 360)
-		r.push_back({640, 360, 800});
-	return r;
-}
-
 bool BuildOne(DestOutput &o, const Destination &d, size_t index)
 {
 	ReleaseOne(o);
@@ -235,13 +216,6 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index)
 	const EncodeSettings enc = ResolveEncode(d);
 	if (!EnsureAudio(enc.audio_kbps))
 		return false;
-
-	obs_video_info ovi{};
-	uint32_t cw = 1920, ch = 1080;
-	if (obs_get_video_info(&ovi)) {
-		cw = ovi.base_width;
-		ch = ovi.base_height;
-	}
 
 	obs_data_t *vs = VideoSettings(enc);
 	const std::string vname = "livedelay_v_" + o.ingest_key;
@@ -281,24 +255,15 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index)
 	obs_output_set_video_encoder(o.output, o.video);
 	obs_output_set_audio_encoder(o.output, g_audio, 0);
 
+	// NEVER attach obs_output_set_video_encoder2 for stock Twitch/YouTube RTMP.
+	// Multi-video Enhanced RTMP without Twitch GoLive produces unplayable media
+	// (Twitch player error #1000). Ladder stays off until GoLive ingest exists.
 	if (d.enhanced_broadcasting) {
-		const auto ladder = PartnerLadder(cw, ch, enc.video_kbps);
-		for (size_t i = 1; i < ladder.size(); ++i) {
-			const Rendition &r = ladder[i];
-			obs_data_t *es = VideoSettings(enc, r.kbps);
-			const std::string ename = "livedelay_v" + std::to_string(i) + "_" + o.ingest_key;
-			obs_encoder_t *ve =
-				obs_video_encoder_create(enc.video_encoder_id.toUtf8().constData(), ename.c_str(), es, nullptr);
-			obs_data_release(es);
-			if (!ve)
-				continue;
-			obs_encoder_set_video(ve, obs_get_video());
-			obs_encoder_set_scaled_size(ve, r.width, r.height);
-			obs_output_set_video_encoder2(o.output, ve, i);
-			o.extra_video.push_back(ve);
-			blog(LOG_INFO, "[livedelay] EB ladder #%zu %ux%u @ %d kb/s for %s", i, r.width, r.height, r.kbps,
-			     o.name.c_str());
-		}
+		blog(LOG_WARNING,
+		     "[livedelay] Enhanced Broadcasting requested for %s but ignored — "
+		     "multi-video RTMP breaks Twitch without GoLive (player #1000). "
+		     "Publishing single video track only.",
+		     o.name.c_str());
 	}
 
 	if (d.vod_audio) {
@@ -309,7 +274,7 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index)
 
 	blog(LOG_INFO, "[livedelay] ready %s → %s key=%s (%s %d kb/s)%s%s", o.name.c_str(), server.c_str(),
 	     o.ingest_key.c_str(), enc.video_encoder_id.toUtf8().constData(), enc.video_kbps,
-	     d.vod_audio ? " +VOD" : "", d.enhanced_broadcasting ? " +EB" : "");
+	     d.vod_audio ? " +VOD" : "", d.enhanced_broadcasting ? " +EB(ignored)" : "");
 	return true;
 }
 
@@ -417,10 +382,14 @@ void OutputsShutdown()
 
 void OutputsOnStreamingStarting()
 {
+	// Last chance before we encode to platforms: stock Multitrack must stay off.
+	HardenObsForLiveDelay();
 	if (g_outs.empty())
 		Rebuild(false);
 	Settings s = Settings::Load(ConfigPath());
 	for (size_t i = 0; i < s.dests.size() && i < g_outs.size(); ++i) {
+		// Never honor enhanced_broadcasting on the wire (see BuildOne).
+		s.dests[i].enhanced_broadcasting = false;
 		if (s.dests[i].autostart && s.dests[i].enabled)
 			StartIndex(i);
 	}

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.3 – 2026-10-21
+
+- **Twitch player #1000 guard:** never publish multi-video Enhanced Broadcasting over stock RTMP (breaks Twitch without GoLive). Always one video track; EB checkbox disabled until GoLive.
+- Re-harden Multitrack-off on every OBS Start Streaming.
+
 ## 1.0.2 – 2026-10-21
 
 - **No more Twitch drop on Save:** changing overlay look, delay, buffer or language no longer restarts the proxy or kills RTMP outputs.
