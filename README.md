@@ -8,7 +8,7 @@ Dwie części:
 
 ## Instalacja
 
-1. Zbuduj (niżej) i uruchom `install.ps1`. Kopiuje oba pliki do `%ProgramData%\obs-studio\plugins\livedelay-obsin4bit`.
+1. Zbuduj (niżej) i uruchom `install.ps1`. Kopiuje oba pliki do `%ProgramData%\obs-studio\plugins\livedelay-obs/bin/64bit`.
 2. W `%APPDATA%\LiveDelay\livedelay.ini` (otworzysz też z menu w trayu) wpisz adres i klucz platformy, ustaw `enabled = yes`, uruchom proxy ponownie.
 3. W OBS: Ustawienia → Transmisja → Usługa **Własna**, Serwer `rtmp://127.0.0.1:1935/live`, Klucz dowolny.
 
@@ -32,7 +32,7 @@ GET też działa dla akcji (np. akcja „Website” w Stream Decku).
 ```
 cargo build --release
 cargo test
-obs-pluginuild.bat
+obs-plugin/build.bat
 ```
 
-Wtyczka potrzebuje w `../deps`: źródeł obs-studio 31.0.3 (nagłówki), Qt 6.6.3 z obs-deps 2024-09-12 i bibliotek importu `obs.lib`/`obs-frontend-api.lib` z zainstalowanego OBS (`obs-pluginmake-import-libs.ps1` tworzy je w `deps/obslibs`).
+Wtyczka potrzebuje w `../deps`: źródeł obs-studio 31.0.3 (nagłówki), Qt 6.6.3 z obs-deps 2024-09-12 i bibliotek importu `obs.lib`/`obs-frontend-api.lib` z zainstalowanego OBS (`obs-plugin/make-import-libs.ps1` tworzy je w `deps/obslibs`).
