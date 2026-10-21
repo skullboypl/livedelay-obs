@@ -145,7 +145,7 @@ async fn handle(mut sock: TcpStream, hub: &Arc<Hub>) -> io::Result<()> {
                                     s.with(|e| e.begin_session());
                                     log!("RTMP: OBS is streaming as {key}");
                                 } else {
-                                    log!("RTMP: OBS idle publish ({key}) — discarded");
+                                    log!("RTMP: OBS idle/discard publish ({key})");
                                 }
                                 guard = Some(PublishGuard { hub: hub.clone(), key, shared });
                                 ses.send(CS_CONTROL, user_control(0, &STREAM_ID.to_be_bytes()));

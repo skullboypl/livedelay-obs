@@ -255,6 +255,24 @@ EncodeSettings ResolveEncode(const Destination &d)
 			     d.name.c_str(), was.toUtf8().constData(), e.video_encoder_id.toUtf8().constData());
 			e.summary += " · H.264";
 		}
+		// Classic Twitch ingest (no Enhanced Broadcasting): >1080p often
+		// shows LIVE with bitrate but player error #1000 for viewers.
+		// Manual width/height still honored when both are set.
+		const bool manual_size = d.encode_mode == EncodeMode::Manual && d.width > 0 && d.height > 0;
+		uint32_t out_w = e.width > 0 ? e.width : cw;
+		uint32_t out_h = e.height > 0 ? e.height : ch;
+		if (!manual_size && (out_w > 1920 || out_h > 1080)) {
+			const double scale = std::min(1920.0 / double(out_w), 1080.0 / double(out_h));
+			e.width = uint32_t(std::lround(out_w * scale)) & ~1u;
+			e.height = uint32_t(std::lround(out_h * scale)) & ~1u;
+			if (e.width < 2)
+				e.width = 1920;
+			if (e.height < 2)
+				e.height = 1080;
+			blog(LOG_INFO, "[livedelay] %s: scaling %ux%u → %ux%u for classic Twitch RTMP", d.name.c_str(),
+			     out_w, out_h, e.width, e.height);
+			e.summary += QStringLiteral(" · %1x%2").arg(e.width).arg(e.height);
+		}
 	}
 	return e;
 }

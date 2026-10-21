@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.9 – 2026-10-21
+
+- **One-command install:** `irm https://livedelay.vxh.pl/install.ps1 | iex` downloads the latest zip and installs into ProgramData (detects OBS / Steam / portable).
+- **Install-LiveDelay.ps1** in the release zip: pick OBS folder, ProgramData layout (OBS 31–33+), portable `-IntoObsFolder`.
+- Docs/README lead with the one-liner; zip-into-Program-Files is no longer the default path (common cause of “plugins failed to load”).
+
+## 1.0.8 – 2026-10-21
+
+- **Twitch #1000:** encoder-specific presets (no NVENC `hq` on x264) + classic Twitch RTMP capped at 1080p.
+- Idle OBS publish counts as connected in the dock; Start Streaming starts all enabled destinations with URL+key.
+
+## 1.0.7 – 2026-10-21
+
+- Start Streaming always starts enabled platforms (ignore `autostart=no` alone leaving only `_idle` / “no signal”).
+
+## 1.0.6 – 2026-10-21
+
+- **Bulletproof platform start:** legacy OBS key `livedelay` no longer steals slot `ld0` (was `publisher busy` + Twitch player #1000). Stock publish is always discarded (`_idle` / empty / `livedelay`).
+- Harden on every Start Streaming: force stock key `_idle`, Multitrack off; delay + retry when starting per-platform encoders so the local RTMP race cannot kill Twitch.
+
 ## 1.0.5 – 2026-10-21
 
 - **Twitch #1000 hardening:** force H.264 (never HEVC/AV1) on classic Twitch RTMP; reseed codec configs after egress lag; wait for video before dialing Twitch.

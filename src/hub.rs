@@ -2,13 +2,16 @@
 
 use crate::engine::{Mode, Shared, Status};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
 /// Dropped OBS stock publish (Start Streaming still needs somewhere to go).
 pub const IDLE_KEY: &str = "_idle";
-/// Older single-encode setups used this key; maps to slot 0 when present.
+/// Pre-1.0.6 Route OBS used this key and mapped it onto slot 0, so it raced with
+/// `ld0` ("publisher busy") and Twitch got the stock encode (player #1000).
+/// Treat it like idle: discard, never claim a real delay slot.
 pub const LEGACY_KEY: &str = "livedelay";
 
 pub struct Slot {
@@ -23,6 +26,8 @@ pub struct Hub {
     index: HashMap<String, usize>,
     /// Busy flag per ingest key currently publishing.
     busy: Mutex<HashMap<String, bool>>,
+    /// Stock OBS is publishing to `_idle` / legacy (media discarded, but OBS is live).
+    idle_active: AtomicBool,
     /// Aggregated change counter for SSE / tray.
     pub state: watch::Sender<u64>,
 }
@@ -42,10 +47,18 @@ impl Hub {
                 shared: Shared::new(per_slot_bytes),
             });
         }
-        if !slots.is_empty() {
-            index.entry(LEGACY_KEY.to_string()).or_insert(0);
-        }
-        Arc::new(Self { slots, index, busy: Mutex::new(HashMap::new()), state })
+        // Do NOT map LEGACY_KEY → slot 0 (that blocked ld0 and broke Twitch).
+        Arc::new(Self {
+            slots,
+            index,
+            busy: Mutex::new(HashMap::new()),
+            idle_active: AtomicBool::new(false),
+            state,
+        })
+    }
+
+    pub fn idle_active(&self) -> bool {
+        self.idle_active.load(Ordering::Relaxed)
     }
 
     /// Call inside the tokio runtime so engine state changes refresh the dock.
@@ -71,14 +84,15 @@ impl Hub {
 
     pub fn shared_for_key(&self, key: &str) -> Option<Arc<Shared>> {
         let key = key.trim();
-        if key.is_empty() {
-            return self.slots.first().map(|s| s.shared.clone());
+        if Self::is_idle_key(key) {
+            return None;
         }
         self.index.get(key).map(|&i| self.slots[i].shared.clone())
     }
 
     pub fn is_idle_key(key: &str) -> bool {
-        key.trim() == IDLE_KEY
+        let k = key.trim();
+        k.is_empty() || k == IDLE_KEY || k.eq_ignore_ascii_case(LEGACY_KEY)
     }
 
     fn map_key(&self, key: &str) -> String {
@@ -93,15 +107,22 @@ impl Hub {
     pub fn try_claim(&self, key: &str) -> Result<Option<Arc<Shared>>, &'static str> {
         let key = key.trim();
         if Self::is_idle_key(key) {
+            // Never block OBS Start Streaming on the discarded stock publish —
+            // OBS may reconnect while the previous idle TCP is still draining.
             let mut busy = self.busy.lock().unwrap();
-            if busy.get(IDLE_KEY).copied().unwrap_or(false) {
-                return Err("busy");
-            }
             busy.insert(IDLE_KEY.to_string(), true);
+            self.idle_active.store(true, Ordering::Relaxed);
+            self.state.send_modify(|v| *v += 1);
             return Ok(None);
         }
         let Some(shared) = self.shared_for_key(key) else {
-            return Err("unknown");
+            // Unknown key: discard like idle so Start Streaming never hard-fails.
+            log!("RTMP: unknown ingest key '{key}' — discarding (use ld0, ld1, …)");
+            let mut busy = self.busy.lock().unwrap();
+            busy.insert(format!("unknown:{key}"), true);
+            self.idle_active.store(true, Ordering::Relaxed);
+            self.state.send_modify(|v| *v += 1);
+            return Ok(None);
         };
         let map_key = self.map_key(key);
         let mut busy = self.busy.lock().unwrap();
@@ -113,7 +134,22 @@ impl Hub {
     }
 
     pub fn release(&self, key: &str) {
-        self.busy.lock().unwrap().insert(self.map_key(key), false);
+        let mut busy = self.busy.lock().unwrap();
+        if Self::is_idle_key(key) {
+            busy.insert(IDLE_KEY.to_string(), false);
+            self.idle_active.store(false, Ordering::Relaxed);
+            drop(busy);
+            self.state.send_modify(|v| *v += 1);
+            return;
+        }
+        busy.insert(self.map_key(key), false);
+        busy.insert(format!("unknown:{}", key.trim()), false);
+        // Unknown keys were treated as idle for OBS Start Streaming.
+        if !self.index.contains_key(key.trim()) {
+            self.idle_active.store(false, Ordering::Relaxed);
+            drop(busy);
+            self.state.send_modify(|v| *v += 1);
+        }
     }
 
     pub fn arm_all(&self, delay: Duration) -> Result<(), String> {
@@ -185,7 +221,9 @@ impl Hub {
         let statuses: Vec<Status> = self.slots.iter().map(|s| s.shared.eng.lock().unwrap().status(now)).collect();
         let primary = statuses.iter().find(|s| s.input).unwrap_or(&statuses[0]);
         let mut out = primary.clone();
-        out.input = statuses.iter().any(|s| s.input);
+        // Real media on ld0… OR stock OBS connected on _idle (dock must not say "no signal"
+        // while OBS shows Stop Streaming).
+        out.input = statuses.iter().any(|s| s.input) || self.idle_active();
         out.buffer_s = statuses.iter().map(|s| s.buffer_s).fold(0.0_f64, f64::max);
         out.buffer_mb = statuses.iter().map(|s| s.buffer_mb).sum();
         out.in_kbps = statuses.iter().map(|s| s.in_kbps).sum();

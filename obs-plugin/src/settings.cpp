@@ -1225,6 +1225,15 @@ void HardenObsForLiveDelay()
 		return;
 	DisableObsStockEnhancedBroadcasting();
 	OutputsEnsureCustomServerVodTrack();
+	// Stock key must be _idle. Legacy "livedelay" claimed slot ld0 → publisher busy
+	// and Twitch got the stock encode (player error #1000).
+	obs_service_t *svc = obs_frontend_get_streaming_service();
+	const char *key = svc ? obs_service_get_connect_info(svc, OBS_SERVICE_CONNECT_INFO_STREAM_KEY) : nullptr;
+	const bool bad_key = !key || !*key || strcmp(key, "_idle") != 0;
+	if (bad_key) {
+		blog(LOG_WARNING, "[livedelay] stock stream key was \"%s\" — forcing _idle", key ? key : "");
+		PointObsAtLiveDelay(port);
+	}
 }
 
 void RouteObsThroughLiveDelay(QWidget *parent)

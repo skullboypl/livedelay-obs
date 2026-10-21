@@ -11,7 +11,7 @@ void OutputsShutdown();
 // Lets Twitch VOD track work on Custom RTMP (user.ini EnableCustomServerVodTrack).
 void OutputsEnsureCustomServerVodTrack();
 
-// Start/stop all outputs that should follow OBS Start Streaming (autostart dests).
+// Start/stop all enabled destinations (URL+key) when OBS Start Streaming fires.
 void OutputsOnStreamingStarting();
 void OutputsOnStreamingStopping();
 

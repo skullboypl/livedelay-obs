@@ -282,6 +282,16 @@ async fn stream(
                 let (cs, m) = media_message(&OutTag { ts: tag.ts, ..p }, b, sid);
                 w.encode(cs, &m, &mut out);
             }
+            // First keyframe out → safe to show as live (Twitch has real media).
+            {
+                let mut s = status.lock().unwrap();
+                if s.state != "live" {
+                    s.state = "live";
+                    s.error.clear();
+                    log!("{}: live (keyframe sent)", s.name);
+                }
+            }
+            shared.state.send_modify(|v| *v += 1);
         }
         let b = *base.get_or_insert(tag.ts);
         let (cs, m) = media_message(&tag, b, sid);
@@ -367,9 +377,10 @@ pub async fn run(target: Target, shared: Arc<Shared>, dest: Arc<Dest>) {
         set("connecting", String::new());
         let failure = match publish(&target).await {
             Ok((conn, sid)) => {
-                log!("{name}: connected");
-                set("live", String::new());
+                log!("{name}: connected (waiting for keyframe before live)");
                 backoff = Duration::from_secs(2);
+                // Stay "connecting" until stream() has sent a keyframe — avoids
+                // Twitch announcing LIVE with an empty/broken publish (#1000).
                 match stream(conn, sid, &mut rx, &mut want, &shared, &dest.status).await {
                     Ended::StreamEnd => {
                         log!("{name}: stream ended");

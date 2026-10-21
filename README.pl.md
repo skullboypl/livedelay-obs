@@ -38,13 +38,27 @@ Start Streaming w OBS uruchamia osobny enkoder na każdą platformę do LiveDela
 
 ## Instalacja
 
-1. Zamknij OBS.
-2. Rozpakuj `livedelay-obs-<wersja>-windows-x64.zip` do folderu OBS (zwykle `C:\Program Files\obs-studio`) i potwierdź scalanie.
-3. Uruchom OBS i otwórz **Narzędzia → LiveDelay**.
-4. Kliknij **Przełącz OBS na LiveDelay**. Przenosi obecny serwer i klucz z OBS na listę platform i ustawia OBS na LiveDelay. Kliknij **Zapisz**.
-5. Panel włączysz przez **Panele → LiveDelay**.
+**Jedno polecenie** (PowerShell, zamknij OBS wcześniej):
 
-Wymaga OBS Studio 31 lub nowszego, Windows 10/11 x64.
+```powershell
+irm https://livedelay.vxh.pl/install.ps1 | iex
+```
+
+Wgrywa najnowszy release do `%ProgramData%\obs-studio\plugins\livedelay-obs` (bez admina), wykrywa OBS / Steam / portable.
+
+Potem w OBS: **Narzędzia → LiveDelay** → **Przełącz OBS na LiveDelay** → **Zapisz**. Panel: **Panele → LiveDelay**.
+
+OBS portable:
+
+```powershell
+$env:LD_INTO_OBS='1'; $env:LD_OBS_ROOT='D:\sciezka\obs-studio'; irm https://livedelay.vxh.pl/install.ps1 | iex
+```
+
+Albo ręcznie: rozpakuj zip → `Install-LiveDelay.ps1`.
+
+Jeśli „poniższe wtyczki OBS nie załadowały się”: zły folder, OBS &lt; 31, brak VC++ Redistributable x64, albo portable bez `-IntoObsFolder`. Log: `%AppData%\obs-studio\logs\`.
+
+Wymaga OBS Studio 31+, Windows 10/11 x64.
 
 ## Overlay
 

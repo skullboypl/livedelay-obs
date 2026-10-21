@@ -84,7 +84,12 @@ impl Proxy {
         for (i, d) in cfg.dests.iter().enumerate() {
             match rtmp::client::parse_url(&d.url, &d.key) {
                 Ok(t) => {
-                    let dest = rtmp::client::Dest::new(&d.name, d.autostart && d.enabled);
+                    // Keep real autostart flag for the dock; want follows enabled+autostart
+                    // until OBS Start Streaming / Live button turns egress on.
+                    let dest = rtmp::client::Dest::new(&d.name, d.autostart);
+                    if !(d.enabled && d.autostart) {
+                        dest.set_on(false);
+                    }
                     dests.push(dest.clone());
                     if let Some(slot) = hub.slot(i) {
                         targets.push((t, dest, slot.shared.clone()));

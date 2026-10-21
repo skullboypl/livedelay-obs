@@ -1,4 +1,5 @@
 #include "outputs.hpp"
+#include "client.hpp"
 #include "encode.hpp"
 #include "settings.hpp"
 
@@ -119,12 +120,27 @@ obs_data_t *VideoSettings(const EncodeSettings &e, int kbps_override = 0)
 	obs_data_set_string(s, "rate_control", e.rate_control.toUtf8().constData());
 	obs_data_set_int(s, "bitrate", kbps_override > 0 ? kbps_override : e.video_kbps);
 	obs_data_set_int(s, "keyint_sec", e.keyint_sec);
-	obs_data_set_string(s, "preset", "hq");
-	obs_data_set_string(s, "preset2", "p5");
-	obs_data_set_string(s, "tune", "hq");
-	obs_data_set_string(s, "multipass", "qres");
 	obs_data_set_string(s, "profile", "high");
-	obs_data_set_bool(s, "psycho_aq", true);
+	obs_data_set_int(s, "bf", 2);
+
+	// Encoder-specific knobs. Applying NVENC "hq"/"p5" to obs_x264 made
+	// Invalid preset/tune in the log and produced a Twitch-unplayable
+	// bitstream (player error #1000) while kbps still looked fine.
+	const QString id = e.video_encoder_id.toLower();
+	if (id.contains(QStringLiteral("nvenc"))) {
+		obs_data_set_string(s, "preset", "p5");
+		obs_data_set_string(s, "preset2", "p5");
+		obs_data_set_string(s, "tune", "hq");
+		obs_data_set_string(s, "multipass", "disabled");
+		obs_data_set_bool(s, "psycho_aq", true);
+	} else if (id.contains(QStringLiteral("amf")) || id.contains(QStringLiteral("amd"))) {
+		obs_data_set_string(s, "preset", "quality");
+	} else if (id.contains(QStringLiteral("qsv"))) {
+		obs_data_set_string(s, "target_usage", "balanced");
+	} else {
+		// obs_x264 (and unknown software encoders)
+		obs_data_set_string(s, "preset", "veryfast");
+	}
 	return s;
 }
 
@@ -319,16 +335,26 @@ bool StartIndex(size_t i)
 		if (!BuildOne(o, s.dests[i], i))
 			return false;
 	}
-	if (obs_output_active(o.output))
+	if (obs_output_active(o.output)) {
+		o.want = true;
 		return true;
-	if (!obs_output_start(o.output)) {
-		const char *err = obs_output_get_last_error(o.output);
-		blog(LOG_WARNING, "[livedelay] could not start output for %s: %s", o.name.c_str(), err ? err : "?");
-		return false;
 	}
-	o.want = true;
-	blog(LOG_INFO, "[livedelay] started encode for %s", o.name.c_str());
-	return true;
+	// Retry: stock OBS may still be finishing handshake on 127.0.0.1:1935.
+	for (int attempt = 1; attempt <= 6; ++attempt) {
+		if (obs_output_start(o.output)) {
+			o.want = true;
+			if (attempt > 1)
+				blog(LOG_INFO, "[livedelay] started encode for %s (retry %d)", o.name.c_str(), attempt);
+			else
+				blog(LOG_INFO, "[livedelay] started encode for %s", o.name.c_str());
+			return true;
+		}
+		const char *err = obs_output_get_last_error(o.output);
+		blog(LOG_WARNING, "[livedelay] start %s attempt %d/6 failed: %s", o.name.c_str(), attempt,
+		     err ? err : "?");
+		os_sleep_ms(150u * (unsigned)attempt);
+	}
+	return false;
 }
 
 void StopIndex(size_t i)
@@ -382,16 +408,30 @@ void OutputsShutdown()
 
 void OutputsOnStreamingStarting()
 {
-	// Last chance before we encode to platforms: stock Multitrack must stay off.
+	// Last chance before we encode to platforms: stock Multitrack off + key=_idle.
 	HardenObsForLiveDelay();
 	if (g_outs.empty())
 		Rebuild(false);
+	// Let stock OBS finish publishing to _idle before ld0… connect (avoids race).
+	os_sleep_ms(350);
 	Settings s = Settings::Load(ConfigPath());
 	for (size_t i = 0; i < s.dests.size() && i < g_outs.size(); ++i) {
+		Destination &d = s.dests[i];
 		// Never honor enhanced_broadcasting on the wire (see BuildOne).
-		s.dests[i].enhanced_broadcasting = false;
-		if (s.dests[i].autostart && s.dests[i].enabled)
-			StartIndex(i);
+		d.enhanced_broadcasting = false;
+		// Enabled + URL + key → always follow OBS Start Streaming.
+		// (autostart=no used to leave only _idle discard → dock "no signal".)
+		const bool ready = d.enabled && !d.url.empty() && !d.key.empty();
+		if (!ready && !(g_outs[i].want))
+			continue;
+		if (!StartIndex(i))
+			continue;
+		// Turn on Rust egress (Dest.want); encode alone only fills the delay buffer.
+		const std::string path = "/dest/start?i=" + std::to_string(i);
+		int status = 0;
+		Request("POST", path, &status);
+		if (status != 200)
+			blog(LOG_WARNING, "[livedelay] dest/start i=%zu HTTP %d", i, status);
 	}
 }
 
