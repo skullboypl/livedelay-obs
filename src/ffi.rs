@@ -1,0 +1,77 @@
+//! C API for the OBS plugin, which links this crate as a static library.
+
+use crate::{config, Proxy};
+use std::ffi::{c_char, c_int, CStr, CString};
+use std::path::Path;
+use std::sync::Mutex;
+
+static PROXY: Mutex<Option<Proxy>> = Mutex::new(None);
+static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+
+pub type LogFn = extern "C" fn(msg: *const c_char);
+
+fn set_error(e: String) {
+    log!("{e}");
+    *LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = e;
+}
+
+/// Routes LiveDelay's log lines to the host (OBS's log).
+#[no_mangle]
+pub extern "C" fn ld_set_logger(f: Option<LogFn>) {
+    if let Some(f) = f {
+        crate::set_logger(move |m| {
+            if let Ok(c) = CString::new(m.replace('\0', " ")) {
+                f(c.as_ptr());
+            }
+        });
+    }
+}
+
+/// Starts the proxy with the ini at `config_path` (UTF-8), stopping a running one first.
+/// Returns 0 on success, 1 if the config can't be read; see `ld_last_error`.
+///
+/// # Safety
+/// `config_path` must be a valid NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn ld_start(config_path: *const c_char) -> c_int {
+    ld_stop();
+    LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()).clear();
+    let path = CStr::from_ptr(config_path).to_string_lossy().into_owned();
+    let cfg = match config::load(Path::new(&path)) {
+        Ok(c) => c,
+        Err(e) => {
+            set_error(e);
+            return 1;
+        }
+    };
+    log!("ustawienia: {path}");
+    let proxy = Proxy::start(&cfg, set_error, |_| {});
+    *PROXY.lock().unwrap_or_else(|p| p.into_inner()) = Some(proxy);
+    0
+}
+
+/// Stops the proxy and closes all connections. Safe to call when not running.
+#[no_mangle]
+pub extern "C" fn ld_stop() {
+    let p = PROXY.lock().unwrap_or_else(|p| p.into_inner()).take();
+    if let Some(p) = p {
+        p.stop();
+        log!("zatrzymano");
+    }
+}
+
+/// Copies the last error (UTF-8, NUL-terminated, possibly truncated) into `buf`.
+/// Returns its full length in bytes, 0 if there was none.
+///
+/// # Safety
+/// `buf` must point to `len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn ld_last_error(buf: *mut c_char, len: usize) -> usize {
+    let e = LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()).clone();
+    if len > 0 && !buf.is_null() {
+        let n = e.len().min(len - 1);
+        std::ptr::copy_nonoverlapping(e.as_ptr(), buf.cast(), n);
+        *buf.add(n) = 0;
+    }
+    e.len()
+}

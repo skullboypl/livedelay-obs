@@ -1,0 +1,490 @@
+#include "settings.hpp"
+#include "dock.hpp"
+
+#include <obs-module.h>
+#include <obs-frontend-api.h>
+#include <util/platform.h>
+
+#include <QApplication>
+#include <QCheckBox>
+#include <QClipboard>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QMessageBox>
+#include <QPushButton>
+#include <QSpinBox>
+#include <QVBoxLayout>
+
+#include <cstdio>
+#include <fstream>
+#include <sstream>
+
+extern "C" {
+int ld_start(const char *config_path);
+size_t ld_last_error(char *buf, size_t len);
+}
+
+namespace livedelay {
+
+namespace {
+
+std::string Trim(const std::string &s)
+{
+	size_t a = s.find_first_not_of(" \t\r\n");
+	size_t b = s.find_last_not_of(" \t\r\n");
+	return a == std::string::npos ? std::string() : s.substr(a, b - a + 1);
+}
+
+bool Yes(std::string v)
+{
+	for (char &c : v)
+		c = char(tolower(static_cast<unsigned char>(c)));
+	return v == "yes" || v == "tak" || v == "true" || v == "1" || v == "on";
+}
+
+QString Q(const std::string &s)
+{
+	return QString::fromStdString(s);
+}
+
+std::string S(const QString &s)
+{
+	return s.trimmed().toStdString();
+}
+
+struct Preset {
+	const char *name;
+	const char *url;
+};
+
+const Preset kPresets[] = {
+	{"Twitch", "rtmp://live.twitch.tv/app"},
+	{"YouTube", "rtmp://a.rtmp.youtube.com/live2"},
+	{"Kick", "rtmps://fa723fc1b171.global-contribute.live-video.net/app"},
+	{"Facebook", "rtmps://live-api-s.facebook.com:443/rtmp"},
+};
+
+} // namespace
+
+Settings Settings::Load(const std::string &path)
+{
+	Settings s;
+	std::ifstream in(path, std::ios::binary);
+	std::string line;
+	Destination *dest = nullptr;
+	while (std::getline(in, line)) {
+		line = Trim(line);
+		if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF)
+			line = line.substr(3); // BOM
+		if (line.empty() || line[0] == '#' || line[0] == ';')
+			continue;
+		if (line.front() == '[' && line.back() == ']') {
+			std::string sec = Trim(line.substr(1, line.size() - 2));
+			if (sec.rfind("dest", 0) == 0) {
+				s.dests.push_back({Trim(sec.substr(4)), "", "", true});
+				dest = &s.dests.back();
+			}
+			continue;
+		}
+		size_t eq = line.find('=');
+		if (eq == std::string::npos)
+			continue;
+		std::string k = Trim(line.substr(0, eq)), v = Trim(line.substr(eq + 1));
+		if (dest) {
+			if (k == "url")
+				dest->url = v;
+			else if (k == "key")
+				dest->key = v;
+			else if (k == "enabled")
+				dest->enabled = Yes(v);
+			continue;
+		}
+		if (k == "listen")
+			s.listen = v;
+		else if (k == "api")
+			s.api = v;
+		else if (k == "delay")
+			s.delay = std::atoi(v.c_str());
+		else if (k == "max_buffer_mb")
+			s.max_buffer_mb = std::atoi(v.c_str());
+		else if (k == "overlay_live")
+			s.overlay_live = v;
+		else if (k == "overlay_arming")
+			s.overlay_arming = v;
+		else if (k == "overlay_armed")
+			s.overlay_armed = v;
+		else if (k == "overlay_delayed")
+			s.overlay_delayed = v;
+	}
+	if (s.delay < 1)
+		s.delay = 15;
+	if (s.max_buffer_mb < 16)
+		s.max_buffer_mb = 512;
+	return s;
+}
+
+bool Settings::Save(const std::string &path) const
+{
+	std::ostringstream o;
+	o << "# LiveDelay - ustawienia (edytowane z OBS: Narzędzia -> LiveDelay)\n\n"
+	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb
+	  << "\n\n# Overlay: {s} = opóźnienie w sekundach, {buf} = ile bufora już jest\n"
+	  << "overlay_live = " << overlay_live << "\noverlay_arming = " << overlay_arming
+	  << "\noverlay_armed = " << overlay_armed << "\noverlay_delayed = " << overlay_delayed << "\n";
+	for (const Destination &d : dests)
+		o << "\n[dest " << d.name << "]\nurl = " << d.url << "\nkey = " << d.key
+		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\n";
+	std::string tmp = path + ".tmp";
+	{
+		std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+		out << o.str();
+		if (!out)
+			return false;
+	}
+	return os_rename(tmp.c_str(), path.c_str()) == 0;
+}
+
+int Settings::RtmpPort() const
+{
+	size_t c = listen.rfind(':');
+	return c == std::string::npos ? 1935 : std::atoi(listen.c_str() + c + 1);
+}
+
+std::string ConfigPath()
+{
+	char *dir = obs_module_config_path("");
+	os_mkdirs(dir);
+	bfree(dir);
+	char *p = obs_module_config_path("livedelay.ini");
+	std::string path = p ? p : "livedelay.ini";
+	bfree(p);
+	return path;
+}
+
+std::string LastError()
+{
+	char buf[512];
+	ld_last_error(buf, sizeof(buf));
+	return buf;
+}
+
+std::string StartProxy()
+{
+	if (ld_start(ConfigPath().c_str()) == 0)
+		return {};
+	char buf[512];
+	ld_last_error(buf, sizeof(buf));
+	return buf;
+}
+
+std::string OverlayUrl()
+{
+	Settings s = Settings::Load(ConfigPath());
+	std::string api = s.api;
+	size_t c = api.rfind(':');
+	return "http://127.0.0.1" + (c == std::string::npos ? std::string(":7799") : api.substr(c)) + "/overlay";
+}
+
+void AddOverlayToScene(QWidget *parent)
+{
+	obs_source_t *scene_src = obs_frontend_get_current_scene();
+	obs_scene_t *scene = obs_scene_from_source(scene_src);
+	if (!scene) {
+		obs_source_release(scene_src);
+		return;
+	}
+	obs_data_t *bs = obs_data_create();
+	obs_data_set_string(bs, "url", OverlayUrl().c_str());
+	obs_data_set_int(bs, "width", 900);
+	obs_data_set_int(bs, "height", 140);
+	obs_source_t *src = obs_source_create("browser_source", "LiveDelay overlay", bs, nullptr);
+	if (src) {
+		obs_scene_add(scene, src);
+		obs_source_release(src);
+		QMessageBox::information(parent, "LiveDelay",
+					 QString::fromUtf8("Dodano źródło „LiveDelay overlay” do bieżącej sceny."));
+	} else {
+		QMessageBox::warning(parent, "LiveDelay",
+				     QString::fromUtf8("Nie udało się utworzyć źródła Przeglądarka (czy jest zainstalowane?)."));
+	}
+	obs_data_release(bs);
+	obs_source_release(scene_src);
+}
+
+namespace {
+
+// Reads the stream target OBS currently uses, so it can become a LiveDelay destination.
+bool CurrentObsTarget(Destination &out, bool &already_livedelay, int port)
+{
+	obs_service_t *svc = obs_frontend_get_streaming_service();
+	if (!svc)
+		return false;
+	const char *url = obs_service_get_connect_info(svc, OBS_SERVICE_CONNECT_INFO_SERVER_URL);
+	const char *key = obs_service_get_connect_info(svc, OBS_SERVICE_CONNECT_INFO_STREAM_KEY);
+	obs_data_t *st = obs_service_get_settings(svc);
+	std::string name = obs_data_get_string(st, "service");
+	obs_data_release(st);
+	out.url = url ? url : "";
+	out.key = key ? key : "";
+	out.name = name.empty() ? "Platforma" : name;
+	out.enabled = true;
+	already_livedelay = out.url.find("127.0.0.1:" + std::to_string(port)) != std::string::npos;
+	if (out.url.empty() || out.url == "auto") {
+		for (const Preset &p : kPresets)
+			if (name == p.name)
+				out.url = p.url;
+	}
+	return !out.url.empty();
+}
+
+void PointObsAtLiveDelay(int port)
+{
+	obs_data_t *s = obs_data_create();
+	std::string server = "rtmp://127.0.0.1:" + std::to_string(port) + "/live";
+	obs_data_set_string(s, "server", server.c_str());
+	obs_data_set_string(s, "key", "livedelay");
+	obs_service_t *svc = obs_service_create("rtmp_custom", "default_service", s, nullptr);
+	obs_frontend_set_streaming_service(svc);
+	obs_frontend_save_streaming_service();
+	obs_service_release(svc);
+	obs_data_release(s);
+}
+
+class SettingsDialog : public QDialog {
+public:
+	explicit SettingsDialog(QWidget *parent) : QDialog(parent), s_(Settings::Load(ConfigPath()))
+	{
+		setWindowTitle(QString::fromUtf8("LiveDelay – ustawienia"));
+		setMinimumWidth(620);
+
+		auto *delay = new QSpinBox;
+		delay->setRange(1, 3600);
+		delay->setSuffix(" s");
+		delay->setValue(s_.delay);
+		auto *buffer = new QSpinBox;
+		buffer->setRange(16, 16384);
+		buffer->setSuffix(" MB");
+		buffer->setValue(s_.max_buffer_mb);
+		buffer->setToolTip(QString::fromUtf8("Ile RAM może zająć bufor. 60 s przy 8 Mb/s to ok. 60 MB."));
+		auto *general = new QFormLayout;
+		general->addRow(QString::fromUtf8("Domyślne opóźnienie"), delay);
+		general->addRow(QString::fromUtf8("Limit pamięci bufora"), buffer);
+
+		// Destinations: list on the left, the selected one's fields on the right.
+		list_ = new QListWidget;
+		list_->setMaximumWidth(170);
+		name_ = new QLineEdit;
+		preset_ = new QComboBox;
+		preset_->addItem(QString::fromUtf8("Wybierz platformę…"));
+		for (const Preset &p : kPresets)
+			preset_->addItem(p.name, QString(p.url));
+		url_ = new QLineEdit;
+		url_->setPlaceholderText("rtmp://… lub rtmps://…");
+		key_ = new QLineEdit;
+		key_->setEchoMode(QLineEdit::Password);
+		auto *show = new QCheckBox(QString::fromUtf8("pokaż"));
+		enabled_ = new QCheckBox(QString::fromUtf8("Wysyłaj na tę platformę"));
+		auto *keyRow = new QHBoxLayout;
+		keyRow->addWidget(key_, 1);
+		keyRow->addWidget(show);
+		auto *form = new QFormLayout;
+		form->addRow(QString::fromUtf8("Nazwa"), name_);
+		form->addRow(QString::fromUtf8("Szablon"), preset_);
+		form->addRow(QString::fromUtf8("Adres serwera"), url_);
+		form->addRow(QString::fromUtf8("Klucz streamu"), keyRow);
+		form->addRow(QString(), enabled_);
+		fields_ = new QWidget;
+		fields_->setLayout(form);
+		auto *add = new QPushButton(QString::fromUtf8("Dodaj"));
+		auto *remove = new QPushButton(QString::fromUtf8("Usuń"));
+		auto *listCol = new QVBoxLayout;
+		listCol->addWidget(list_, 1);
+		auto *listBtns = new QHBoxLayout;
+		listBtns->addWidget(add);
+		listBtns->addWidget(remove);
+		listCol->addLayout(listBtns);
+		auto *destRow = new QHBoxLayout;
+		destRow->addLayout(listCol);
+		destRow->addWidget(fields_, 1);
+		auto *importBtn = new QPushButton(QString::fromUtf8("Przełącz OBS na LiveDelay (przenieś obecny serwer i klucz tutaj)"));
+		auto *destBox = new QGroupBox(QString::fromUtf8("Platformy"));
+		auto *destLayout = new QVBoxLayout(destBox);
+		destLayout->addLayout(destRow);
+		destLayout->addWidget(importBtn);
+
+		// Overlay for a Browser source.
+		auto *urlLine = new QLineEdit(Q(OverlayUrl()));
+		urlLine->setReadOnly(true);
+		auto *copy = new QPushButton(QString::fromUtf8("Kopiuj"));
+		auto *toScene = new QPushButton(QString::fromUtf8("Dodaj do sceny"));
+		auto *urlRow = new QHBoxLayout;
+		urlRow->addWidget(urlLine, 1);
+		urlRow->addWidget(copy);
+		urlRow->addWidget(toScene);
+		auto *ovLive = new QLineEdit(Q(s_.overlay_live));
+		auto *ovArming = new QLineEdit(Q(s_.overlay_arming));
+		auto *ovArmed = new QLineEdit(Q(s_.overlay_armed));
+		auto *ovDelayed = new QLineEdit(Q(s_.overlay_delayed));
+		auto *ovForm = new QFormLayout;
+		ovForm->addRow(QString::fromUtf8("Adres"), urlRow);
+		ovForm->addRow(QString::fromUtf8("Na żywo"), ovLive);
+		ovForm->addRow(QString::fromUtf8("Uzbrajanie"), ovArming);
+		ovForm->addRow(QString::fromUtf8("Uzbrojone"), ovArmed);
+		ovForm->addRow(QString::fromUtf8("Opóźnienie"), ovDelayed);
+		auto *hint = new QLabel(QString::fromUtf8(
+			"{s} = sekundy opóźnienia, {buf} = ile bufora już jest. Puste pole = overlay znika w tym stanie."));
+		hint->setWordWrap(true);
+		ovForm->addRow(QString(), hint);
+		auto *ovBox = new QGroupBox(QString::fromUtf8("Overlay (źródło Przeglądarka)"));
+		ovBox->setLayout(ovForm);
+
+		auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
+		buttons->button(QDialogButtonBox::Save)->setText(QString::fromUtf8("Zapisz"));
+		buttons->button(QDialogButtonBox::Cancel)->setText(QString::fromUtf8("Anuluj"));
+
+		auto *layout = new QVBoxLayout(this);
+		layout->addLayout(general);
+		layout->addWidget(destBox);
+		layout->addWidget(ovBox);
+		layout->addWidget(buttons);
+
+		for (const Destination &d : s_.dests)
+			list_->addItem(Q(d.name));
+		connect(list_, &QListWidget::currentRowChanged, this, [this](int row) { Select(row); });
+		connect(show, &QCheckBox::toggled, this,
+			[this](bool on) { key_->setEchoMode(on ? QLineEdit::Normal : QLineEdit::Password); });
+		connect(preset_, &QComboBox::activated, this, [this](int i) {
+			if (i <= 0)
+				return;
+			url_->setText(preset_->itemData(i).toString());
+			if (name_->text().trimmed().isEmpty() || name_->text() == QString::fromUtf8("Nowa platforma"))
+				name_->setText(preset_->itemText(i));
+			preset_->setCurrentIndex(0);
+		});
+		connect(add, &QPushButton::clicked, this, [this] {
+			s_.dests.push_back({"Nowa platforma", "", "", true});
+			list_->addItem(QString::fromUtf8("Nowa platforma"));
+			list_->setCurrentRow(list_->count() - 1);
+			name_->setFocus();
+		});
+		connect(remove, &QPushButton::clicked, this, [this] {
+			int row = list_->currentRow();
+			if (row < 0)
+				return;
+			current_ = -1;
+			s_.dests.erase(s_.dests.begin() + row);
+			delete list_->takeItem(row);
+			Select(list_->currentRow());
+		});
+		connect(name_, &QLineEdit::textEdited, this, [this](const QString &t) {
+			if (current_ >= 0)
+				list_->item(current_)->setText(t);
+		});
+		connect(importBtn, &QPushButton::clicked, this, [this] { Import(); });
+		connect(copy, &QPushButton::clicked, this,
+			[urlLine] { QApplication::clipboard()->setText(urlLine->text()); });
+		connect(toScene, &QPushButton::clicked, this, [this] { AddOverlayToScene(this); });
+		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+		connect(buttons, &QDialogButtonBox::accepted, this,
+			[=] {
+				Store();
+				s_.delay = delay->value();
+				s_.max_buffer_mb = buffer->value();
+				s_.overlay_live = S(ovLive->text());
+				s_.overlay_arming = S(ovArming->text());
+				s_.overlay_armed = S(ovArmed->text());
+				s_.overlay_delayed = S(ovDelayed->text());
+				SaveAndRestart();
+			});
+
+		list_->setCurrentRow(s_.dests.empty() ? -1 : 0);
+		Select(list_->currentRow());
+	}
+
+private:
+	void Store()
+	{
+		if (current_ < 0 || current_ >= int(s_.dests.size()))
+			return;
+		Destination &d = s_.dests[current_];
+		d.name = S(name_->text()).empty() ? "Platforma" : S(name_->text());
+		d.url = S(url_->text());
+		d.key = S(key_->text());
+		d.enabled = enabled_->isChecked();
+	}
+
+	void Select(int row)
+	{
+		Store();
+		current_ = row;
+		fields_->setEnabled(row >= 0);
+		const Destination empty;
+		const Destination &d = row >= 0 ? s_.dests[row] : empty;
+		name_->setText(Q(d.name));
+		url_->setText(Q(d.url));
+		key_->setText(Q(d.key));
+		enabled_->setChecked(d.enabled);
+	}
+
+	void Import()
+	{
+		Store();
+		Destination d;
+		bool already = false;
+		if (CurrentObsTarget(d, already, s_.RtmpPort()) && !already) {
+			s_.dests.push_back(d);
+			list_->addItem(Q(d.name));
+			list_->setCurrentRow(list_->count() - 1);
+		} else if (!already) {
+			QMessageBox::warning(this, "LiveDelay",
+					     QString::fromUtf8("Nie udało się odczytać serwera z ustawień transmisji OBS."));
+			return;
+		}
+		PointObsAtLiveDelay(s_.RtmpPort());
+		QMessageBox::information(this, "LiveDelay",
+					 QString::fromUtf8(already ? "OBS już nadaje przez LiveDelay."
+								   : "OBS nadaje teraz przez LiveDelay, a Twój serwer i klucz są na liście platform. Kliknij Zapisz."));
+	}
+
+	void SaveAndRestart()
+	{
+		if (obs_frontend_streaming_active() &&
+		    QMessageBox::question(this, "LiveDelay",
+					  QString::fromUtf8("Zapis uruchomi LiveDelay ponownie i przerwie stream na kilka sekund. Kontynuować?")) !=
+			    QMessageBox::Yes)
+			return;
+		if (!s_.Save(ConfigPath())) {
+			QMessageBox::warning(this, "LiveDelay", QString::fromUtf8("Nie udało się zapisać ustawień."));
+			return;
+		}
+		std::string err = StartProxy();
+		if (!err.empty())
+			QMessageBox::warning(this, "LiveDelay", Q(err));
+		accept();
+	}
+
+	Settings s_;
+	int current_ = -1;
+	QListWidget *list_;
+	QWidget *fields_;
+	QLineEdit *name_, *url_, *key_;
+	QComboBox *preset_;
+	QCheckBox *enabled_;
+};
+
+} // namespace
+
+void ShowSettings(QWidget *parent)
+{
+	SettingsDialog dlg(parent);
+	dlg.exec();
+}
+
+} // namespace livedelay

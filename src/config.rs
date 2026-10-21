@@ -13,6 +13,13 @@ delay = 15
 # limit pamięci na bufor (MB). 15 s przy 8 Mb/s to ok. 15 MB.
 max_buffer_mb = 512
 
+# Teksty overlayu (źródło Przeglądarka: http://127.0.0.1:7799/overlay).
+# {s} = opóźnienie w sekundach, {buf} = ile bufora już jest. Pusty tekst = nic nie pokazuj.
+overlay_live = LIVE
+overlay_arming = ARMING… {buf}/{s}s
+overlay_armed = ARMED {s}s
+overlay_delayed = DELAY {s}s
+
 # Globalne skróty (działają też poza OBS), np. Ctrl+Alt+Num1, F13, Shift+F5.
 # Puste = wyłączone. Skróty w samym OBS ustawisz we wtyczce.
 hotkey_arm =
@@ -36,6 +43,25 @@ pub struct Dest {
 }
 
 #[derive(Clone, Debug)]
+pub struct Overlay {
+    pub live: String,
+    pub arming: String,
+    pub armed: String,
+    pub delayed: String,
+}
+
+impl Default for Overlay {
+    fn default() -> Self {
+        Self {
+            live: "LIVE".into(),
+            arming: "ARMING… {buf}/{s}s".into(),
+            armed: "ARMED {s}s".into(),
+            delayed: "DELAY {s}s".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct Config {
     pub listen: String,
     pub api: String,
@@ -44,11 +70,12 @@ pub struct Config {
     pub dests: Vec<Dest>,
     /// (action, key combo) pairs for global hotkeys.
     pub hotkeys: Vec<(&'static str, String)>,
+    pub overlay: Overlay,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { listen: "127.0.0.1:1935".into(), api: "127.0.0.1:7799".into(), delay_s: 15.0, max_buffer_mb: 512, dests: vec![], hotkeys: vec![] }
+        Self { listen: "127.0.0.1:1935".into(), api: "127.0.0.1:7799".into(), delay_s: 15.0, max_buffer_mb: 512, dests: vec![], hotkeys: vec![], overlay: Overlay::default() }
     }
 }
 
@@ -85,6 +112,10 @@ pub fn parse(text: &str) -> Result<Config, String> {
             "api" => c.api = v.into(),
             "delay" => c.delay_s = v.parse().map_err(|_| err("delay musi być liczbą"))?,
             "max_buffer_mb" => c.max_buffer_mb = v.parse().map_err(|_| err("max_buffer_mb musi być liczbą"))?,
+            "overlay_live" => c.overlay.live = v.into(),
+            "overlay_arming" => c.overlay.arming = v.into(),
+            "overlay_armed" => c.overlay.armed = v.into(),
+            "overlay_delayed" => c.overlay.delayed = v.into(),
             "hotkey_arm" | "hotkey_activate" | "hotkey_cut" | "hotkey_cut_after" => {
                 let action = match k {
                     "hotkey_arm" => "arm",

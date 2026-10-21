@@ -2,17 +2,23 @@
 
 Lekki przełącznik opóźnienia streamu dla OBS na Windows. OBS wysyła stream do LiveDelay, a LiveDelay przesyła go dalej na platformy: na żywo albo z opóźnieniem, przełączane bez zrywania połączenia.
 
-Dwie części:
-- `livedelay.exe` (Rust): proxy z ikoną w trayu. Kolor ikony: zielona na żywo, pomarańczowa uzbrojone, czerwona opóźnienie. Prawy klik: Arm, Activate, Cut, ustawienia.
-- `livedelay-obs.dll` (C++/Qt): panel w OBS (Panele → LiveDelay) i skróty w Ustawienia → Skróty klawiszowe („LiveDelay: …”), np. pod numpad. Panel uruchamia proxy razem z OBS.
+Wszystko jest w jednej wtyczce OBS (`livedelay-obs.dll`, C++/Qt z wkompilowanym proxy w Ruście):
+- **Panel** (Panele → LiveDelay): stan, opóźnienie, Arm / Activate / Cut / Cut po wyemitowaniu.
+- **Ustawienia** (Narzędzia → LiveDelay albo przycisk w panelu): domyślne opóźnienie, limit pamięci, platformy z kluczami, teksty overlayu. Przycisk „Przełącz OBS na LiveDelay” przenosi obecny serwer i klucz z OBS na listę platform i ustawia OBS na `rtmp://127.0.0.1:1935/live`.
+- **Skróty** w Ustawienia → Skróty klawiszowe („LiveDelay: …”), np. pod numpad.
+- **Overlay**: źródło Przeglądarka z adresem `http://127.0.0.1:7799/overlay` (przycisk „Dodaj do sceny”). Pokazuje LIVE / ARMING… / ARMED / DELAY N s; teksty zmienisz w ustawieniach albo w adresie, np. `?delayed=OPÓŹNIENIE {s}s&live=&size=60`.
+
+Stream Deck: akcja „Hotkey” ze skrótem z OBS albo akcja „Website” z adresem `http://127.0.0.1:7799/cut` itp.
 
 ## Instalacja
 
-1. Zbuduj (niżej) i uruchom `install.ps1`. Kopiuje oba pliki do `%ProgramData%\obs-studio\plugins\livedelay-obs/bin/64bit`.
-2. W `%APPDATA%\LiveDelay\livedelay.ini` (otworzysz też z menu w trayu) wpisz adres i klucz platformy, ustaw `enabled = yes`, uruchom proxy ponownie.
-3. W OBS: Ustawienia → Transmisja → Usługa **Własna**, Serwer `rtmp://127.0.0.1:1935/live`, Klucz dowolny.
+1. Zbuduj: `obs-pluginuild.bat` (buduje Rusta i wtyczkę).
+2. Uruchom `install.ps1`: kopiuje DLL do `%ProgramData%\obs-studio\plugins\livedelay-obsin4bit` (bez admina).
+3. W OBS: Narzędzia → LiveDelay → „Przełącz OBS na LiveDelay”, Zapisz.
 
-Stream Deck: akcja „Hotkey” ze skrótem z OBS albo akcja „Website” z adresem `http://127.0.0.1:7799/cut` itp.
+Ustawienia leżą w `%APPDATA%\obs-studio\plugin_config\livedelay-obs\livedelay.ini`.
+
+Jest też samodzielna wersja z ikoną w trayu (`cargo build --release` → `targetelease\livedelay.exe`) do użycia bez wtyczki.
 
 ## Sterowanie (HTTP, tylko 127.0.0.1:7799)
 
@@ -30,9 +36,8 @@ GET też działa dla akcji (np. akcja „Website” w Stream Decku).
 ## Budowanie
 
 ```
-cargo build --release
 cargo test
-obs-plugin/build.bat
+obs-pluginuild.bat
 ```
 
 Wtyczka potrzebuje w `../deps`: źródeł obs-studio 31.0.3 (nagłówki), Qt 6.6.3 z obs-deps 2024-09-12 i bibliotek importu `obs.lib`/`obs-frontend-api.lib` z zainstalowanego OBS (`obs-plugin/make-import-libs.ps1` tworzy je w `deps/obslibs`).

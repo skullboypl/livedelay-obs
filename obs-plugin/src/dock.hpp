@@ -23,7 +23,6 @@ public:
 
 	// Runs an action on a worker thread; errors show up in the panel.
 	void Act(const std::string &action);
-	void StartProxy();
 	// Arm takes the delay set in the panel; other actions go straight through.
 	void Hotkey(const std::string &action);
 
@@ -47,7 +46,7 @@ private:
 	std::unique_ptr<EventStream> events_;
 };
 
-// Path of livedelay.exe shipped next to the plugin DLL.
-std::wstring ProxyExePath();
+// Last error reported by the embedded proxy, empty if none.
+std::string LastError();
 
 } // namespace livedelay

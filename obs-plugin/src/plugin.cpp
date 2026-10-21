@@ -1,4 +1,5 @@
-// LiveDelay for OBS: a native panel and OBS hotkeys for the LiveDelay proxy.
+// LiveDelay for OBS: the delay proxy runs inside OBS, with a native panel,
+// OBS hotkeys, a settings window and a Browser-source overlay.
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -8,11 +9,14 @@
 
 #include <string>
 
-#include <windows.h>
-#include <shellapi.h>
-
-#include "client.hpp"
 #include "dock.hpp"
+#include "settings.hpp"
+
+extern "C" {
+typedef void (*ld_log_fn)(const char *msg);
+void ld_set_logger(ld_log_fn f);
+void ld_stop(void);
+}
 
 OBS_DECLARE_MODULE()
 OBS_MODULE_AUTHOR("skullboypl")
@@ -60,20 +64,20 @@ void OnSave(obs_data_t *data, bool saving, void *)
 	}
 }
 
-void OnEvent(enum obs_frontend_event event, void *)
+void LogFromProxy(const char *msg)
 {
-	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
-		// Start the proxy with OBS if it isn't running yet. It keeps running after
-		// OBS closes so a delayed stream can finish sending what it still holds.
-		if (livedelay::Request("GET", "/state").empty() && dock)
-			dock->StartProxy();
-	}
+	blog(LOG_INFO, "[livedelay] %s", msg);
 }
 
 } // namespace
 
 bool obs_module_load(void)
 {
+	ld_set_logger(LogFromProxy);
+	std::string err = livedelay::StartProxy();
+	if (!err.empty())
+		blog(LOG_WARNING, "[livedelay] %s", err.c_str());
+
 	for (Hotkey &h : hotkeys)
 		h.id = obs_hotkey_register_frontend(h.name, h.description, OnHotkey, &h);
 
@@ -85,7 +89,10 @@ bool obs_module_load(void)
 		blog(LOG_WARNING, "[livedelay] could not add dock");
 	}
 	obs_frontend_add_save_callback(OnSave, nullptr);
-	obs_frontend_add_event_callback(OnEvent, nullptr);
+	obs_frontend_add_tools_menu_item(
+		"LiveDelay",
+		[](void *) { livedelay::ShowSettings(static_cast<QWidget *>(obs_frontend_get_main_window())); },
+		nullptr);
 	blog(LOG_INFO, "[livedelay] loaded");
 	return true;
 }
@@ -93,11 +100,11 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	obs_frontend_remove_save_callback(OnSave, nullptr);
-	obs_frontend_remove_event_callback(OnEvent, nullptr);
 	for (Hotkey &h : hotkeys)
 		obs_hotkey_unregister(h.id);
 	// OBS owns and deletes the dock widget.
 	dock = nullptr;
+	ld_stop();
 }
 
 const char *obs_module_name(void)
@@ -107,5 +114,5 @@ const char *obs_module_name(void)
 
 const char *obs_module_description(void)
 {
-	return "Panel i skróty do sterowania opóźnieniem streamu LiveDelay.";
+	return "Przełączane opóźnienie streamu: panel, skróty, overlay.";
 }

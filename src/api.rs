@@ -7,6 +7,7 @@
 //! POST /cut              back to live now
 //! POST /cut-after        back to live once the current moment has aired
 //! POST /disarm           stop keeping the buffer
+//! GET  /overlay          status text for an OBS Browser source
 
 use crate::engine::{Mode, Shared};
 use crate::rtmp::client::DestStatus;
@@ -21,7 +22,10 @@ pub struct Ctx {
     pub shared: Arc<Shared>,
     pub dests: Vec<Arc<Mutex<DestStatus>>>,
     pub default_delay: Duration,
+    pub overlay: crate::config::Overlay,
 }
+
+const OVERLAY_HTML: &str = include_str!("overlay.html");
 
 fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
@@ -114,12 +118,29 @@ pub async fn run(addr: String, ctx: Arc<Ctx>) -> io::Result<()> {
     }
 }
 
-async fn respond(sock: &mut TcpStream, code: &str, body: &str) -> io::Result<()> {
+async fn respond_typed(sock: &mut TcpStream, code: &str, ctype: &str, body: &str) -> io::Result<()> {
     let r = format!(
-        "HTTP/1.1 {code}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
+        "HTTP/1.1 {code}\r\nContent-Type: {ctype}; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     sock.write_all(r.as_bytes()).await
+}
+
+async fn respond(sock: &mut TcpStream, code: &str, body: &str) -> io::Result<()> {
+    respond_typed(sock, code, "application/json", body).await
+}
+
+fn overlay_page(ctx: &Ctx) -> String {
+    let o = &ctx.overlay;
+    let texts = format!(
+        "{{\"live\":\"{}\",\"arming\":\"{}\",\"armed\":\"{}\",\"delayed\":\"{}\"}}",
+        esc(&o.live),
+        esc(&o.arming),
+        esc(&o.armed),
+        esc(&o.delayed)
+    );
+    // Keep "</script>" from ever closing the script block the JSON sits in.
+    OVERLAY_HTML.replace("__TEXTS__", &texts.replace('<', "\\u003c"))
 }
 
 async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
@@ -150,6 +171,7 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
     match (method, path) {
         ("GET", "/state") => respond(&mut sock, "200 OK", &state_json(ctx)).await,
         ("GET", "/events") => events(sock, ctx).await,
+        ("GET", "/overlay") => respond_typed(&mut sock, "200 OK", "text/html", &overlay_page(ctx)).await,
         ("GET" | "POST", "/arm" | "/activate" | "/cut" | "/cut-after" | "/disarm") => match act(ctx, &path[1..], delay) {
             Ok(()) => respond(&mut sock, "200 OK", &state_json(ctx)).await,
             Err(e) => respond(&mut sock, "409 Conflict", &format!("{{\"error\":\"{}\"}}", esc(&e))).await,

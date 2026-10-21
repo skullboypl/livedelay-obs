@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>LiveDelay overlay</title>
+<style>
+  /* Override anything here with the Browser source's "Custom CSS". */
+  html, body { margin: 0; background: transparent; overflow: hidden; }
+  body { font: 800 var(--size, 40px)/1 "Segoe UI", system-ui, sans-serif; letter-spacing: .04em; padding: .3em; }
+  #tag {
+    display: inline-flex; align-items: center; gap: .45em;
+    padding: .35em .7em; border-radius: .4em; color: #fff;
+    background: rgba(17, 20, 26, .78);
+    transition: opacity .25s, background-color .25s;
+  }
+  #tag.hidden { opacity: 0; }
+  #dot { width: .55em; height: .55em; border-radius: 50%; background: currentColor; }
+  .live #dot { color: #34c759; }
+  .arming #dot, .armed #dot { color: #ffb300; }
+  .arming #dot { animation: pulse 1s ease-in-out infinite; }
+  .delayed { background: rgba(198, 40, 40, .88) !important; }
+  .delayed #dot { color: #fff; }
+  @keyframes pulse { 50% { opacity: .25; } }
+</style>
+</head>
+<body>
+<div id="tag" class="hidden"><span id="dot"></span><span id="text"></span></div>
+<script>
+  // Texts come from LiveDelay's settings; ?live=…&arming=…&armed=…&delayed=… overrides them
+  // per source, ?size=60 sets the font size in px.
+  const texts = __TEXTS__;
+  const q = new URLSearchParams(location.search);
+  for (const k of Object.keys(texts)) if (q.has(k)) texts[k] = q.get(k);
+  if (q.has('size')) document.body.style.setProperty('--size', q.get('size') + 'px');
+
+  const tag = document.getElementById('tag');
+  const text = document.getElementById('text');
+  function show(s) {
+    let kind = 'live', secs = 0;
+    if (s.mode === 'delayed') { kind = 'delayed'; secs = s.delay; }
+    else if (s.arm_delay !== null && s.armed) { kind = 'armed'; secs = s.arm_delay; }
+    else if (s.arm_delay !== null) { kind = 'arming'; secs = s.arm_delay; }
+    const t = (texts[kind] || '')
+      .replaceAll('{s}', Math.round(secs))
+      .replaceAll('{buf}', Math.min(Math.floor(s.buffer_s), Math.round(secs)));
+    text.textContent = t;
+    tag.className = t ? kind : 'hidden';
+  }
+  const es = new EventSource('/events');
+  es.onmessage = (e) => show(JSON.parse(e.data));
+  es.onerror = () => { tag.className = 'hidden'; };
+</script>
+</body>
+</html>

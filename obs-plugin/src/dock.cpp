@@ -1,5 +1,6 @@
 #include "dock.hpp"
 #include "client.hpp"
+#include "settings.hpp"
 
 #include <QHBoxLayout>
 #include <QLabel>
@@ -10,23 +11,9 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 
-#include <windows.h>
-#include <shellapi.h>
-
 #include <thread>
 
 namespace livedelay {
-
-std::wstring ProxyExePath()
-{
-	HMODULE self = nullptr;
-	GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-			   reinterpret_cast<LPCWSTR>(&ProxyExePath), &self);
-	wchar_t path[MAX_PATH];
-	DWORD n = GetModuleFileNameW(self, path, MAX_PATH);
-	std::wstring p(path, n);
-	return p.substr(0, p.find_last_of(L"\\/") + 1) + L"livedelay.exe";
-}
 
 static QPushButton *Button(const char *text, const char *tip)
 {
@@ -59,7 +46,8 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	cut_ = Button("Cut", "Wróć na żywo teraz");
 	cut_after_ = Button("Cut po wyemitowaniu", "Wróć na żywo, gdy obecna chwila dotrze do widzów");
 	disarm_ = Button("Rozbrój", "Przestań trzymać bufor");
-	start_ = Button("Uruchom LiveDelay", "Uruchom proxy LiveDelay");
+	start_ = Button("Uruchom ponownie", "Uruchom LiveDelay ponownie");
+	auto *settings = Button("Ustawienia", "Opóźnienie, platformy i klucze, overlay");
 	fill_ = new QProgressBar;
 	fill_->setTextVisible(false);
 	fill_->setMaximumHeight(6);
@@ -83,6 +71,7 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	layout->addLayout(mainRow);
 	layout->addLayout(moreRow);
 	layout->addWidget(start_);
+	layout->addWidget(settings);
 	layout->addWidget(error_);
 	layout->addStretch();
 
@@ -91,7 +80,8 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	connect(cut_, &QPushButton::clicked, this, [this] { Act("cut"); });
 	connect(cut_after_, &QPushButton::clicked, this, [this] { Act("cut-after"); });
 	connect(disarm_, &QPushButton::clicked, this, [this] { Act("disarm"); });
-	connect(start_, &QPushButton::clicked, this, [this] { StartProxy(); });
+	connect(start_, &QPushButton::clicked, this, [this] { ShowError(QString::fromStdString(livedelay::StartProxy())); });
+	connect(settings, &QPushButton::clicked, this, [this] { ShowSettings(window()); });
 
 	ShowOffline();
 	QPointer<Dock> self(this);
@@ -129,17 +119,6 @@ void Dock::Hotkey(const std::string &action)
 	Act(action == "arm" ? "arm?delay=" + std::to_string(delay_->value()) : action);
 }
 
-void Dock::StartProxy()
-{
-	std::wstring exe = ProxyExePath();
-	if (GetFileAttributesW(exe.c_str()) == INVALID_FILE_ATTRIBUTES) {
-		ShowError(QString::fromUtf8("Nie znaleziono ") + QString::fromStdWString(exe));
-		return;
-	}
-	ShellExecuteW(nullptr, L"open", exe.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-	ShowError({});
-}
-
 void Dock::ShowError(const QString &msg)
 {
 	error_->setText(msg);
@@ -155,7 +134,7 @@ static void Pill(QLabel *l, const QString &text, const char *bg)
 void Dock::ShowOffline()
 {
 	Pill(status_, QString::fromUtf8("LiveDelay nie działa"), "#5a5f6b");
-	detail_->setText(QString::fromUtf8("Uruchom proxy, żeby sterować opóźnieniem."));
+	detail_->setText(LastError().empty() ? QString::fromUtf8("Uruchamianie…") : QString::fromStdString(LastError()));
 	fill_->hide();
 	for (QPushButton *b : {arm_, activate_, cut_, cut_after_, disarm_})
 		b->setEnabled(false);
@@ -214,7 +193,7 @@ void Dock::ShowState(const std::string &j)
 		dests++;
 	}
 	if (dests == 0)
-		d += QString::fromUtf8("Brak celów: dodaj platformę w livedelay.ini (menu w trayu).");
+		d += QString::fromUtf8("Brak platform: dodaj je w Ustawieniach.");
 	detail_->setText(d.trimmed());
 
 	arm_->setEnabled(!delayed);

@@ -1,8 +1,8 @@
 //! Windows tray icon, its menu and global hotkeys. Runs the Win32 message loop
 //! on the main thread; the proxy itself lives on the tokio thread.
 
-use crate::api::{act, Ctx};
-use crate::engine::Mode;
+use livedelay::api::{act, Ctx};
+use livedelay::engine::Mode;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -40,7 +40,7 @@ static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
 
 /// Runs on the proxy's runtime: repaints the tray on every state change, and once a
 /// second so the buffer fill shown in the tooltip moves.
-pub async fn watch_state(shared: Arc<crate::engine::Shared>) {
+pub async fn watch_state(shared: Arc<livedelay::engine::Shared>) {
     let mut rx = shared.state.subscribe();
     loop {
         if let Ok(Err(_)) = tokio::time::timeout(std::time::Duration::from_secs(1), rx.changed()).await {
