@@ -29,7 +29,11 @@ public:
 	static QString CurrentVersion();
 	static void SkipVersion(const QString &version);
 	static bool IsSkipped(const QString &version);
+	/// Fallback: open the zip URL in the browser.
 	static void OpenDownload(const UpdateInfo &info);
+	/// One-click: download zip → quit OBS → replace plugin files → restart OBS.
+	/// parent is used for confirm/progress dialogs (dock or settings).
+	static void ApplyUpdate(const UpdateInfo &info, QWidget *parent);
 
 signals:
 	void found(livedelay::UpdateInfo info);

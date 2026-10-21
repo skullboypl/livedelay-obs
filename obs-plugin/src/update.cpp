@@ -4,15 +4,24 @@
 
 Q_DECLARE_METATYPE(livedelay::UpdateInfo)
 
+#include <obs-module.h>
+#include <obs-frontend-api.h>
+
+#include <QApplication>
 #include <QDesktopServices>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
+#include <QProcess>
 #include <QPushButton>
 #include <QSettings>
 #include <QThread>
@@ -208,6 +217,218 @@ void UpdateChecker::OpenDownload(const UpdateInfo &info)
 		QDesktopServices::openUrl(url);
 }
 
+namespace {
+
+QString PluginDllPath()
+{
+	obs_module_t *mod = obs_current_module();
+	const char *p = mod ? obs_get_module_binary_path(mod) : nullptr;
+	return p ? QString::fromUtf8(p) : QString();
+}
+
+QString ObsExePath()
+{
+	wchar_t buf[MAX_PATH];
+	if (!GetModuleFileNameW(nullptr, buf, MAX_PATH))
+		return {};
+	return QString::fromWCharArray(buf);
+}
+
+// Zip layout → ProgramData plugin OR Program Files OBS tree.
+bool ResolveInstallDirs(const QString &dllPath, QString *dllDestDir, QString *dataDestDir, QString *err)
+{
+	const QFileInfo fi(dllPath);
+	if (!fi.exists()) {
+		*err = QStringLiteral("dll_missing");
+		return false;
+	}
+	*dllDestDir = QDir::toNativeSeparators(fi.absolutePath());
+	const QString native = QDir::toNativeSeparators(dllPath);
+	// …\plugins\livedelay-obs\bin\64bit\livedelay-obs.dll
+	if (native.contains(QStringLiteral("\\plugins\\livedelay-obs\\"), Qt::CaseInsensitive)) {
+		QDir bin(fi.absolutePath()); // …/bin/64bit
+		bin.cdUp(); // bin
+		bin.cdUp(); // livedelay-obs
+		*dataDestDir = QDir::toNativeSeparators(bin.filePath(QStringLiteral("data")));
+		return true;
+	}
+	// …\obs-studio\obs-plugins\64bit\livedelay-obs.dll
+	QDir plugins(fi.absolutePath()); // 64bit
+	plugins.cdUp(); // obs-plugins
+	plugins.cdUp(); // obs-studio root
+	*dataDestDir = QDir::toNativeSeparators(plugins.filePath(QStringLiteral("data/obs-plugins/livedelay-obs")));
+	return true;
+}
+
+QString PsQuote(const QString &s)
+{
+	QString o = s;
+	o.replace('\'', QStringLiteral("''"));
+	return QStringLiteral("'%1'").arg(o);
+}
+
+bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &obsExe, const QString &extractDir,
+			const QString &dllDestDir, const QString &dataDestDir, QString *err)
+{
+	// Zip has obs-plugins\64bit\*.dll and data\obs-plugins\livedelay-obs\*
+	const QString dllSrc = QDir(extractDir).filePath(QStringLiteral("obs-plugins/64bit/livedelay-obs.dll"));
+	const QString dataSrc = QDir(extractDir).filePath(QStringLiteral("data/obs-plugins/livedelay-obs"));
+	const QString logPath = QDir::temp().filePath(QStringLiteral("livedelay-update.log"));
+
+	QString ps;
+	ps += QStringLiteral("$ErrorActionPreference='Stop'\n");
+	ps += QStringLiteral("Start-Transcript -Path %1 -Force | Out-Null\n").arg(PsQuote(logPath));
+	ps += QStringLiteral("$pidWait=%1\n").arg(obsPid);
+	ps += QStringLiteral("$obsExe=%1\n").arg(PsQuote(QDir::toNativeSeparators(obsExe)));
+	ps += QStringLiteral("$dllSrc=%1\n").arg(PsQuote(QDir::toNativeSeparators(dllSrc)));
+	ps += QStringLiteral("$dllDst=%1\n").arg(PsQuote(QDir::toNativeSeparators(QDir(dllDestDir).filePath(QStringLiteral("livedelay-obs.dll")))));
+	ps += QStringLiteral("$dataSrc=%1\n").arg(PsQuote(QDir::toNativeSeparators(dataSrc)));
+	ps += QStringLiteral("$dataDst=%1\n").arg(PsQuote(QDir::toNativeSeparators(dataDestDir)));
+	ps += QStringLiteral(
+		"Write-Host 'Waiting for OBS to exit...'\n"
+		"$deadline=(Get-Date).AddMinutes(3)\n"
+		"while ((Get-Date) -lt $deadline) {\n"
+		"  $alive=$false\n"
+		"  try { $p=Get-Process -Id $pidWait -ErrorAction Stop; if ($p) { $alive=$true } } catch {}\n"
+		"  Get-Process obs64,obs32 -ErrorAction SilentlyContinue | ForEach-Object { $alive=$true }\n"
+		"  if (-not $alive) { break }\n"
+		"  Start-Sleep -Milliseconds 400\n"
+		"}\n"
+		"Start-Sleep -Seconds 1\n"
+		"if (-not (Test-Path -LiteralPath $dllSrc)) { throw \"missing $dllSrc\" }\n"
+		"$dllDir=Split-Path -Parent $dllDst\n"
+		"New-Item -ItemType Directory -Force -Path $dllDir,$dataDst | Out-Null\n"
+		"Copy-Item -LiteralPath $dllSrc -Destination $dllDst -Force\n"
+		"Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force\n"
+		"Write-Host 'Installed. Starting OBS...'\n"
+		"if (Test-Path -LiteralPath $obsExe) {\n"
+		"  $wd=Split-Path -Parent $obsExe\n"
+		"  Start-Process -FilePath $obsExe -WorkingDirectory $wd\n"
+		"}\n"
+		"Stop-Transcript | Out-Null\n");
+
+	QFile f(scriptPath);
+	if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		*err = QStringLiteral("script_write");
+		return false;
+	}
+	f.write(ps.toUtf8());
+	f.close();
+	return true;
+}
+
+} // namespace
+
+void UpdateChecker::ApplyUpdate(const UpdateInfo &info, QWidget *parent)
+{
+	if (info.zipUrl.isEmpty()) {
+		OpenDownload(info);
+		return;
+	}
+	if (QMessageBox::question(parent, QStringLiteral("LiveDelay"), T("Update.Confirm").arg(info.version),
+				  QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) != QMessageBox::Yes)
+		return;
+
+	const QString dllPath = PluginDllPath();
+	const QString obsExe = ObsExePath();
+	QString dllDest, dataDest, err;
+	if (dllPath.isEmpty() || !ResolveInstallDirs(dllPath, &dllDest, &dataDest, &err)) {
+		QMessageBox::warning(parent, QStringLiteral("LiveDelay"), T("Update.ApplyFailed").arg(err.isEmpty() ? QStringLiteral("path") : err));
+		OpenDownload(info);
+		return;
+	}
+
+	auto *progress = new QMessageBox(parent);
+	progress->setWindowTitle(QStringLiteral("LiveDelay"));
+	progress->setText(T("Update.Downloading").arg(info.version));
+	progress->setStandardButtons(QMessageBox::NoButton);
+	progress->setModal(true);
+	progress->show();
+
+	const UpdateInfo infoCopy = info;
+	const QString dllDestCopy = dllDest;
+	const QString dataDestCopy = dataDest;
+	const QString obsExeCopy = obsExe;
+	const DWORD pid = GetCurrentProcessId();
+	QPointer<QWidget> parentGuard(parent);
+	QPointer<QMessageBox> progressGuard(progress);
+
+	QThread *thread = QThread::create([infoCopy, dllDestCopy, dataDestCopy, obsExeCopy, pid, parentGuard, progressGuard] {
+		QByteArray zip;
+		QString netErr;
+		const bool ok = HttpGet(infoCopy.zipUrl, nullptr, &zip, &netErr);
+		QMetaObject::invokeMethod(
+			qApp,
+			[ok, zip, netErr, infoCopy, dllDestCopy, dataDestCopy, obsExeCopy, pid, parentGuard, progressGuard] {
+				auto closeProgress = [&] {
+					if (progressGuard)
+						progressGuard->close();
+					if (progressGuard)
+						progressGuard->deleteLater();
+				};
+				QWidget *dlgParent = parentGuard ? parentGuard.data() : static_cast<QWidget *>(obs_frontend_get_main_window());
+				if (!ok || zip.size() < 1000) {
+					closeProgress();
+					QMessageBox::warning(dlgParent, QStringLiteral("LiveDelay"),
+							     T("Update.ApplyFailed").arg(netErr.isEmpty() ? QStringLiteral("download") : netErr));
+					return;
+				}
+
+				const QString work = QDir::temp().filePath(QStringLiteral("livedelay-update-%1").arg(infoCopy.version));
+				QDir().rmpath(work);
+				QDir().mkpath(work);
+				const QString zipPath = QDir(work).filePath(QStringLiteral("update.zip"));
+				const QString extractDir = QDir(work).filePath(QStringLiteral("extract"));
+				QDir().mkpath(extractDir);
+				{
+					QFile zf(zipPath);
+					if (!zf.open(QIODevice::WriteOnly | QIODevice::Truncate) || zf.write(zip) != zip.size()) {
+						closeProgress();
+						QMessageBox::warning(dlgParent, QStringLiteral("LiveDelay"), T("Update.ApplyFailed").arg(QStringLiteral("zip_write")));
+						return;
+					}
+				}
+
+				// Windows tar extracts the release zip (forward-slash paths).
+				QProcess tar;
+				tar.setProgram(QStringLiteral("tar"));
+				tar.setArguments({QStringLiteral("-xf"), zipPath, QStringLiteral("-C"), extractDir});
+				tar.start();
+				if (!tar.waitForFinished(60000) || tar.exitCode() != 0) {
+					closeProgress();
+					QMessageBox::warning(dlgParent, QStringLiteral("LiveDelay"), T("Update.ApplyFailed").arg(QStringLiteral("extract")));
+					return;
+				}
+
+				const QString script = QDir(work).filePath(QStringLiteral("apply.ps1"));
+				QString werr;
+				if (!WriteUpdaterScript(script, pid, obsExeCopy, extractDir, dllDestCopy, dataDestCopy, &werr)) {
+					closeProgress();
+					QMessageBox::warning(dlgParent, QStringLiteral("LiveDelay"), T("Update.ApplyFailed").arg(werr));
+					return;
+				}
+
+				const bool started = QProcess::startDetached(
+					QStringLiteral("powershell.exe"),
+					{QStringLiteral("-NoProfile"), QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
+					 QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"), QStringLiteral("-File"), script});
+				if (!started) {
+					closeProgress();
+					QMessageBox::warning(dlgParent, QStringLiteral("LiveDelay"), T("Update.ApplyFailed").arg(QStringLiteral("updater")));
+					return;
+				}
+
+				closeProgress();
+				// Quit OBS so the DLL unlocks; updater waits, copies, restarts.
+				if (QWidget *main = static_cast<QWidget *>(obs_frontend_get_main_window()))
+					QMetaObject::invokeMethod(main, "close", Qt::QueuedConnection);
+			},
+			Qt::QueuedConnection);
+	});
+	QObject::connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+	thread->start();
+}
+
 void UpdateChecker::Consider(UpdateInfo info, bool force)
 {
 	info.version = StripV(info.version);
@@ -341,12 +562,14 @@ void AttachUpdateBanner(QWidget *dockParent, QVBoxLayout *layout)
 	layout->insertWidget(0, banner);
 
 	auto *checker = new UpdateChecker(dockParent);
-	QObject::connect(checker, &UpdateChecker::found, dockParent, [banner, text, get, later](UpdateInfo info) {
+	QObject::connect(checker, &UpdateChecker::found, dockParent, [banner, text, get, later, dockParent](UpdateInfo info) {
 		text->setText(T("Update.Banner").arg(info.version));
 		banner->show();
 		get->disconnect();
 		later->disconnect();
-		QObject::connect(get, &QPushButton::clicked, banner, [info] { UpdateChecker::OpenDownload(info); });
+		QObject::connect(get, &QPushButton::clicked, banner, [info, dockParent] {
+			UpdateChecker::ApplyUpdate(info, dockParent);
+		});
 		QObject::connect(later, &QPushButton::clicked, banner, [banner, info] {
 			UpdateChecker::SkipVersion(info.version);
 			banner->hide();

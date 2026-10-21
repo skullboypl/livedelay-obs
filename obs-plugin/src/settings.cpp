@@ -701,12 +701,14 @@ public:
 			updateStatus->setText(T("Update.Checking"));
 			updateChecker->Check(true);
 		});
-		connect(updateChecker, &UpdateChecker::found, this, [updateStatus, checkUpdate, downloadUpdate](UpdateInfo info) {
+		connect(updateChecker, &UpdateChecker::found, this, [this, updateStatus, checkUpdate, downloadUpdate](UpdateInfo info) {
 			checkUpdate->setEnabled(true);
 			updateStatus->setText(T("Update.Available").arg(info.version).arg(UpdateChecker::CurrentVersion()));
 			downloadUpdate->show();
 			downloadUpdate->disconnect();
-			QObject::connect(downloadUpdate, &QPushButton::clicked, downloadUpdate, [info] { UpdateChecker::OpenDownload(info); });
+			QObject::connect(downloadUpdate, &QPushButton::clicked, downloadUpdate, [this, info] {
+				UpdateChecker::ApplyUpdate(info, this);
+			});
 		});
 		connect(updateChecker, &UpdateChecker::upToDate, this, [updateStatus, checkUpdate, downloadUpdate] {
 			checkUpdate->setEnabled(true);

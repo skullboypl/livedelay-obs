@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.4 – 2026-10-21
+
+- **One-click auto-update:** Update downloads the zip, closes OBS, replaces the plugin (ProgramData or Program Files layout), and restarts OBS. No manual unzip.
+
 ## 1.0.3 – 2026-10-21
 
 - **Twitch player #1000 guard:** never publish multi-video Enhanced Broadcasting over stock RTMP (breaks Twitch without GoLive). Always one video track; EB checkbox disabled until GoLive.
