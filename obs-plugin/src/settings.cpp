@@ -258,7 +258,7 @@ bool CurrentObsTarget(Destination &out, bool &already_livedelay, int port)
 			if (name == p.name)
 				out.url = p.url;
 	}
-	return !out.url.empty();
+	return !out.url.empty() && !out.key.empty();
 }
 
 void PointObsAtLiveDelay(int port)
@@ -519,7 +519,13 @@ private:
 			list_->addItem(Q(d.name));
 			list_->setCurrentRow(list_->count() - 1);
 		} else if (!already) {
-			QMessageBox::warning(this, "LiveDelay", T("Settings.ReadObsFailed"));
+			// OBS had no server/key yet: route it anyway and let the user add the platform here.
+			PointObsAtLiveDelay(s_.RtmpPort());
+			s_.dests.push_back({S(T("Settings.NewPlatform")), "", "", true});
+			list_->addItem(T("Settings.NewPlatform"));
+			list_->setCurrentRow(list_->count() - 1);
+			QMessageBox::information(this, "LiveDelay", T("Settings.RoutedNoTarget"));
+			preset_->setFocus();
 			return;
 		}
 		PointObsAtLiveDelay(s_.RtmpPort());
@@ -570,7 +576,10 @@ void RouteObsThroughLiveDelay(QWidget *parent)
 	Destination d;
 	bool already = false;
 	if (!CurrentObsTarget(d, already, s.RtmpPort()) && !already) {
-		QMessageBox::warning(parent, "LiveDelay", T("Settings.ReadObsFailed"));
+		// Nothing to move (OBS had no server or key): route OBS and open the platform list.
+		PointObsAtLiveDelay(s.RtmpPort());
+		QMessageBox::information(parent, "LiveDelay", T("Settings.RoutedNoTarget"));
+		ShowSettings(parent);
 		return;
 	}
 	if (!already) {
