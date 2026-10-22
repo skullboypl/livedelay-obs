@@ -9,6 +9,8 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QPushButton>
+#include <QSizePolicy>
 #include <QVBoxLayout>
 
 #include <cstdlib>
@@ -251,6 +253,17 @@ void LoadHotkeyData(obs_data_t *data)
 	}
 }
 
+// Wide enough for the translated label (Wyczyść, Löschen, Clear, Сброс, …).
+// A fixed pixel width clips the longer languages.
+QPushButton *MakeClearButton()
+{
+	auto *clear = new QPushButton(T("Hotkey.Clear"));
+	clear->ensurePolished();
+	clear->setMinimumWidth(clear->sizeHint().width());
+	clear->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+	return clear;
+}
+
 int ArmSeconds(int slot)
 {
 	if (slot < 0 || slot >= kArmSlotCount)
@@ -299,8 +312,7 @@ QWidget *MakeHotkeyPage(std::vector<ComboButton *> &keys, std::vector<QSpinBox *
 		auto *name = new QLabel(label);
 		auto *button = new ComboButton;
 		button->SetCombo(ReadCombo(id));
-		auto *clear = new QPushButton(T("Hotkey.Clear"));
-		clear->setFixedWidth(72);
+		auto *clear = MakeClearButton();
 		QObject::connect(clear, &QPushButton::clicked, button, [button] { button->SetCombo({0, OBS_KEY_NONE}); });
 		grid->addWidget(name, row, 0);
 		grid->addWidget(button, row, 1);
@@ -332,8 +344,7 @@ QWidget *MakeHotkeyPage(std::vector<ComboButton *> &keys, std::vector<QSpinBox *
 		spin->setToolTip(T("Hotkey.SlotTip"));
 		auto *button = new ComboButton;
 		button->SetCombo(ReadCombo(key.id));
-		auto *clear = new QPushButton(T("Hotkey.Clear"));
-		clear->setFixedWidth(72);
+		auto *clear = MakeClearButton();
 		QObject::connect(clear, &QPushButton::clicked, button, [button] { button->SetCombo({0, OBS_KEY_NONE}); });
 		grid->addWidget(spin, row, 0);
 		grid->addWidget(button, row, 1);
