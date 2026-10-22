@@ -9,6 +9,7 @@ Q_DECLARE_METATYPE(livedelay::UpdateInfo)
 
 #include <QApplication>
 #include <QDesktopServices>
+#include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -22,6 +23,7 @@ Q_DECLARE_METATYPE(livedelay::UpdateInfo)
 #include <QMetaObject>
 #include <QPointer>
 #include <QProcess>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
 #include <QThread>
@@ -268,7 +270,7 @@ QString PsQuote(const QString &s)
 }
 
 bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &obsExe, const QString &extractDir,
-			const QString &dllDestDir, const QString &dataDestDir, QString *err)
+			const QString &dllDestDir, const QString &dataDestDir, const QString &version, QString *err)
 {
 	// Zip has obs-plugins\64bit\*.dll and data\obs-plugins\livedelay-obs\*
 	const QString dllSrc = QDir(extractDir).filePath(QStringLiteral("obs-plugins/64bit/livedelay-obs.dll"));
@@ -288,8 +290,17 @@ bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &
 		}
 	}
 
+	// Localized UI strings for the WinForms window that stays up after OBS quits.
+	const QString uiTitle = T("Update.ProgressTitle");
+	const QString uiVer = T("Update.ProgressVersion").arg(version);
+	const QString uiWait = T("Update.ProgressWaiting");
+	const QString uiCopy = T("Update.ProgressCopying");
+	const QString uiData = T("Update.ProgressData");
+	const QString uiStart = T("Update.ProgressRestarting");
+	const QString uiDone = T("Update.ProgressDone");
+	const QString uiFail = T("Update.ProgressFailed");
+
 	QString ps;
-	// Continue on non-fatal probe errors (Get-Process -Id after OBS exits must not abort).
 	ps += QStringLiteral("$ErrorActionPreference='Continue'\n");
 	ps += QStringLiteral("Start-Transcript -Path %1 -Force | Out-Null\n").arg(PsQuote(logPath));
 	ps += QStringLiteral("$obsPidWait=%1\n").arg(obsPid);
@@ -299,46 +310,117 @@ bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &
 	ps += QStringLiteral("$dllFlat=%1\n").arg(PsQuote(flatDll));
 	ps += QStringLiteral("$dataSrc=%1\n").arg(PsQuote(QDir::toNativeSeparators(dataSrc)));
 	ps += QStringLiteral("$dataDst=%1\n").arg(PsQuote(QDir::toNativeSeparators(dataDestDir)));
+	ps += QStringLiteral("$uiTitle=%1\n").arg(PsQuote(uiTitle));
+	ps += QStringLiteral("$uiVer=%1\n").arg(PsQuote(uiVer));
+	ps += QStringLiteral("$uiWait=%1\n").arg(PsQuote(uiWait));
+	ps += QStringLiteral("$uiCopy=%1\n").arg(PsQuote(uiCopy));
+	ps += QStringLiteral("$uiData=%1\n").arg(PsQuote(uiData));
+	ps += QStringLiteral("$uiStart=%1\n").arg(PsQuote(uiStart));
+	ps += QStringLiteral("$uiDone=%1\n").arg(PsQuote(uiDone));
+	ps += QStringLiteral("$uiFail=%1\n").arg(PsQuote(uiFail));
+	// WinForms progress UI (STA + hidden console). Survives OBS exit.
 	ps += QStringLiteral(
+		"Add-Type -AssemblyName System.Windows.Forms\n"
+		"Add-Type -AssemblyName System.Drawing\n"
+		"try {\n"
+		"  Add-Type -Name W -Namespace LdHide -MemberDefinition @'\n"
+		"[DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h,int c);\n"
+		"[DllImport(\"kernel32.dll\")] public static extern IntPtr GetConsoleWindow();\n"
+		"'@\n"
+		"  $cw=[LdHide.W]::GetConsoleWindow()\n"
+		"  if ($cw -ne [IntPtr]::Zero) { [void][LdHide.W]::ShowWindow($cw,0) }\n"
+		"} catch {}\n"
+		"$form=New-Object System.Windows.Forms.Form\n"
+		"$form.Text=$uiTitle\n"
+		"$form.ClientSize=New-Object System.Drawing.Size(440,158)\n"
+		"$form.StartPosition='CenterScreen'\n"
+		"$form.FormBorderStyle='FixedDialog'\n"
+		"$form.MaximizeBox=$false; $form.MinimizeBox=$false; $form.ControlBox=$false\n"
+		"$form.TopMost=$true\n"
+		"$form.BackColor=[System.Drawing.Color]::FromArgb(22,26,34)\n"
+		"$brand=New-Object System.Windows.Forms.Label\n"
+		"$brand.Text='LiveDelay'; $brand.AutoSize=$true\n"
+		"$brand.Font=New-Object System.Drawing.Font('Segoe UI Semibold',13)\n"
+		"$brand.ForeColor=[System.Drawing.Color]::FromArgb(61,220,132)\n"
+		"$brand.Location=New-Object System.Drawing.Point(22,14)\n"
+		"$verLbl=New-Object System.Windows.Forms.Label\n"
+		"$verLbl.Text=$uiVer; $verLbl.AutoSize=$true\n"
+		"$verLbl.Font=New-Object System.Drawing.Font('Segoe UI',9)\n"
+		"$verLbl.ForeColor=[System.Drawing.Color]::FromArgb(160,172,190)\n"
+		"$verLbl.Location=New-Object System.Drawing.Point(22,42)\n"
+		"$status=New-Object System.Windows.Forms.Label\n"
+		"$status.Text=$uiWait\n"
+		"$status.Font=New-Object System.Drawing.Font('Segoe UI',9.75)\n"
+		"$status.ForeColor=[System.Drawing.Color]::White\n"
+		"$status.Location=New-Object System.Drawing.Point(22,72)\n"
+		"$status.Size=New-Object System.Drawing.Size(396,24)\n"
+		"$bar=New-Object System.Windows.Forms.ProgressBar\n"
+		"$bar.Location=New-Object System.Drawing.Point(22,106)\n"
+		"$bar.Size=New-Object System.Drawing.Size(396,24)\n"
+		"$bar.Minimum=0; $bar.Maximum=100; $bar.Value=4; $bar.Style='Continuous'\n"
+		"$form.Controls.AddRange(@($brand,$verLbl,$status,$bar))\n"
+		"$form.Show(); $form.Activate(); $form.Refresh()\n"
+		"[void][System.Windows.Forms.Application]::DoEvents()\n"
+		"function Set-Step([string]$text,[int]$pct) {\n"
+		"  if ($pct -lt 0) { $pct=0 }; if ($pct -gt 100) { $pct=100 }\n"
+		"  $status.Text=$text; $bar.Value=$pct\n"
+		"  $form.Refresh(); [void][System.Windows.Forms.Application]::DoEvents()\n"
+		"}\n"
 		"function Test-ObsAlive {\n"
 		"  if ($obsPidWait -gt 0) {\n"
-		"    $p = Get-Process -Id $obsPidWait -ErrorAction SilentlyContinue\n"
+		"    $p=Get-Process -Id $obsPidWait -ErrorAction SilentlyContinue\n"
 		"    if ($p) { return $true }\n"
 		"  }\n"
 		"  return [bool](Get-Process obs64,obs32 -ErrorAction SilentlyContinue)\n"
 		"}\n"
-		"Write-Host 'Waiting for OBS to exit...'\n"
-		"$deadline=(Get-Date).AddMinutes(3)\n"
-		"while ((Get-Date) -lt $deadline) {\n"
-		"  if (-not (Test-ObsAlive)) { break }\n"
+		"try {\n"
+		"  Set-Step $uiWait 8\n"
+		"  $deadline=(Get-Date).AddMinutes(3)\n"
+		"  $pulse=8\n"
+		"  while ((Get-Date) -lt $deadline) {\n"
+		"    if (-not (Test-ObsAlive)) { break }\n"
+		"    $pulse=[Math]::Min(38,$pulse+1)\n"
+		"    Set-Step $uiWait $pulse\n"
+		"    Start-Sleep -Milliseconds 320\n"
+		"  }\n"
+		"  if (Test-ObsAlive) {\n"
+		"    Set-Step $uiWait 40\n"
+		"    Get-Process obs64,obs32 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue\n"
+		"    Start-Sleep -Seconds 2\n"
+		"  }\n"
+		"  Start-Sleep -Milliseconds 800\n"
+		"  $ErrorActionPreference='Stop'\n"
+		"  if (-not (Test-Path -LiteralPath $dllSrc)) { throw \"missing $dllSrc\" }\n"
+		"  Set-Step $uiCopy 55\n"
+		"  $targets=New-Object System.Collections.Generic.List[string]\n"
+		"  [void]$targets.Add($dllDst)\n"
+		"  if ($dllFlat) { [void]$targets.Add($dllFlat) }\n"
+		"  foreach ($dst in $targets) {\n"
+		"    $dllDir=Split-Path -Parent $dst\n"
+		"    New-Item -ItemType Directory -Force -Path $dllDir | Out-Null\n"
+		"    Copy-Item -LiteralPath $dllSrc -Destination $dst -Force\n"
+		"    try { Unblock-File -LiteralPath $dst -ErrorAction SilentlyContinue } catch {}\n"
+		"  }\n"
+		"  Set-Step $uiData 78\n"
+		"  New-Item -ItemType Directory -Force -Path $dataDst | Out-Null\n"
+		"  Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force\n"
+		"  Set-Step $uiStart 92\n"
 		"  Start-Sleep -Milliseconds 400\n"
-		"}\n"
-		"if (Test-ObsAlive) {\n"
-		"  Write-Host 'OBS still running - stopping obs64/obs32...'\n"
-		"  Get-Process obs64,obs32 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue\n"
-		"  Start-Sleep -Seconds 2\n"
-		"}\n"
-		"Start-Sleep -Seconds 1\n"
-		"$ErrorActionPreference='Stop'\n"
-		"if (-not (Test-Path -LiteralPath $dllSrc)) { throw \"missing $dllSrc\" }\n"
-		"$targets = New-Object System.Collections.Generic.List[string]\n"
-		"[void]$targets.Add($dllDst)\n"
-		"if ($dllFlat) { [void]$targets.Add($dllFlat) }\n"
-		"foreach ($dst in $targets) {\n"
-		"  $dllDir=Split-Path -Parent $dst\n"
-		"  New-Item -ItemType Directory -Force -Path $dllDir | Out-Null\n"
-		"  Copy-Item -LiteralPath $dllSrc -Destination $dst -Force\n"
-		"  try { Unblock-File -LiteralPath $dst -ErrorAction SilentlyContinue } catch {}\n"
-		"  Write-Host \"Copied DLL -> $dst\"\n"
-		"}\n"
-		"New-Item -ItemType Directory -Force -Path $dataDst | Out-Null\n"
-		"Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force\n"
-		"Write-Host 'Installed. Starting OBS...'\n"
-		"if (Test-Path -LiteralPath $obsExe) {\n"
-		"  $wd=Split-Path -Parent $obsExe\n"
-		"  Start-Process -FilePath $obsExe -WorkingDirectory $wd\n"
-		"}\n"
-		"Stop-Transcript | Out-Null\n");
+		"  if (Test-Path -LiteralPath $obsExe) {\n"
+		"    $wd=Split-Path -Parent $obsExe\n"
+		"    Start-Process -FilePath $obsExe -WorkingDirectory $wd\n"
+		"  }\n"
+		"  Set-Step $uiDone 100\n"
+		"  Start-Sleep -Milliseconds 900\n"
+		"} catch {\n"
+		"  $msg=$uiFail + [string]$_.Exception.Message\n"
+		"  Set-Step $msg 100\n"
+		"  $form.ControlBox=$true\n"
+		"  [void][System.Windows.Forms.MessageBox]::Show($form,$msg,$uiTitle,'OK','Error')\n"
+		"} finally {\n"
+		"  try { $form.Close(); $form.Dispose() } catch {}\n"
+		"  try { Stop-Transcript | Out-Null } catch {}\n"
+		"}\n");
 
 	QFile f(scriptPath);
 	if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
@@ -351,6 +433,34 @@ bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &
 	f.write(ps.toUtf8());
 	f.close();
 	return true;
+}
+
+QDialog *MakeUpdateProgressDialog(QWidget *parent, const QString &version, QLabel **statusOut, QProgressBar **barOut)
+{
+	auto *dlg = new QDialog(parent);
+	dlg->setWindowTitle(T("Update.ProgressTitle"));
+	dlg->setModal(true);
+	dlg->setWindowFlags((dlg->windowFlags() | Qt::CustomizeWindowHint | Qt::WindowTitleHint) & ~Qt::WindowCloseButtonHint);
+	dlg->setFixedSize(400, 130);
+	auto *lay = new QVBoxLayout(dlg);
+	lay->setContentsMargins(18, 16, 18, 16);
+	lay->setSpacing(10);
+	auto *title = new QLabel(T("Update.ProgressVersion").arg(version));
+	title->setStyleSheet(QStringLiteral("font-weight:600; font-size:13px;"));
+	auto *status = new QLabel(T("Update.Downloading").arg(version));
+	status->setWordWrap(true);
+	auto *bar = new QProgressBar;
+	bar->setRange(0, 0); // indeterminate while downloading
+	bar->setTextVisible(false);
+	bar->setFixedHeight(18);
+	lay->addWidget(title);
+	lay->addWidget(status);
+	lay->addWidget(bar);
+	if (statusOut)
+		*statusOut = status;
+	if (barOut)
+		*barOut = bar;
+	return dlg;
 }
 
 } // namespace
@@ -374,12 +484,11 @@ void UpdateChecker::ApplyUpdate(const UpdateInfo &info, QWidget *parent)
 		return;
 	}
 
-	auto *progress = new QMessageBox(parent);
-	progress->setWindowTitle(QStringLiteral("LiveDelay"));
-	progress->setText(T("Update.Downloading").arg(info.version));
-	progress->setStandardButtons(QMessageBox::NoButton);
-	progress->setModal(true);
+	QLabel *progressStatus = nullptr;
+	QProgressBar *progressBar = nullptr;
+	auto *progress = MakeUpdateProgressDialog(parent, info.version, &progressStatus, &progressBar);
 	progress->show();
+	progress->raise();
 
 	const UpdateInfo infoCopy = info;
 	const QString dllDestCopy = dllDest;
@@ -387,15 +496,31 @@ void UpdateChecker::ApplyUpdate(const UpdateInfo &info, QWidget *parent)
 	const QString obsExeCopy = obsExe;
 	const DWORD pid = GetCurrentProcessId();
 	QPointer<QWidget> parentGuard(parent);
-	QPointer<QMessageBox> progressGuard(progress);
+	QPointer<QDialog> progressGuard(progress);
+	QPointer<QLabel> statusGuard(progressStatus);
+	QPointer<QProgressBar> barGuard(progressBar);
 
-	QThread *thread = QThread::create([infoCopy, dllDestCopy, dataDestCopy, obsExeCopy, pid, parentGuard, progressGuard] {
+	QThread *thread = QThread::create([infoCopy, dllDestCopy, dataDestCopy, obsExeCopy, pid, parentGuard, progressGuard, statusGuard,
+					  barGuard] {
 		QByteArray zip;
 		QString netErr;
 		const bool ok = HttpGet(infoCopy.zipUrl, nullptr, &zip, &netErr);
 		QMetaObject::invokeMethod(
 			qApp,
-			[ok, zip, netErr, infoCopy, dllDestCopy, dataDestCopy, obsExeCopy, pid, parentGuard, progressGuard] {
+			[ok, zip, netErr, infoCopy, dllDestCopy, dataDestCopy, obsExeCopy, pid, parentGuard, progressGuard, statusGuard,
+			 barGuard] {
+				auto setStatus = [&](const QString &text, int determinatePct) {
+					if (statusGuard)
+						statusGuard->setText(text);
+					if (barGuard) {
+						if (determinatePct < 0) {
+							barGuard->setRange(0, 0);
+						} else {
+							barGuard->setRange(0, 100);
+							barGuard->setValue(determinatePct);
+						}
+					}
+				};
 				auto closeProgress = [&] {
 					if (progressGuard)
 						progressGuard->close();
@@ -409,6 +534,8 @@ void UpdateChecker::ApplyUpdate(const UpdateInfo &info, QWidget *parent)
 							     T("Update.ApplyFailed").arg(netErr.isEmpty() ? QStringLiteral("download") : netErr));
 					return;
 				}
+
+				setStatus(T("Update.ProgressExtracting"), 55);
 
 				const QString work = QDir::temp().filePath(QStringLiteral("livedelay-update-%1").arg(infoCopy.version));
 				QDir().rmpath(work);
@@ -436,18 +563,21 @@ void UpdateChecker::ApplyUpdate(const UpdateInfo &info, QWidget *parent)
 					return;
 				}
 
+				setStatus(T("Update.ProgressLaunching"), 85);
+
 				const QString script = QDir(work).filePath(QStringLiteral("apply.ps1"));
 				QString werr;
-				if (!WriteUpdaterScript(script, pid, obsExeCopy, extractDir, dllDestCopy, dataDestCopy, &werr)) {
+				if (!WriteUpdaterScript(script, pid, obsExeCopy, extractDir, dllDestCopy, dataDestCopy, infoCopy.version, &werr)) {
 					closeProgress();
 					QMessageBox::warning(dlgParent, QStringLiteral("LiveDelay"), T("Update.ApplyFailed").arg(werr));
 					return;
 				}
 
-				// Not Hidden: user must see errors (DLL locked / copy fail).
+				// Hidden console; WinForms UI in apply.ps1 shows progress after OBS quits.
 				const bool started = QProcess::startDetached(
 					QStringLiteral("powershell.exe"),
-					{QStringLiteral("-NoProfile"), QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
+					{QStringLiteral("-NoProfile"), QStringLiteral("-STA"), QStringLiteral("-WindowStyle"),
+					 QStringLiteral("Hidden"), QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
 					 QStringLiteral("-File"), script});
 				if (!started) {
 					closeProgress();
@@ -455,10 +585,16 @@ void UpdateChecker::ApplyUpdate(const UpdateInfo &info, QWidget *parent)
 					return;
 				}
 
-				closeProgress();
-				// Quit OBS so the DLL unlocks; updater waits, copies, restarts.
-				if (QWidget *main = static_cast<QWidget *>(obs_frontend_get_main_window()))
-					QMetaObject::invokeMethod(main, "close", Qt::QueuedConnection);
+				setStatus(T("Update.ProgressWaiting"), 95);
+				// Brief beat so the user sees the hand-off, then quit OBS; WinForms UI continues.
+				QTimer::singleShot(450, qApp, [progressGuard]() {
+					if (progressGuard) {
+						progressGuard->close();
+						progressGuard->deleteLater();
+					}
+					if (QWidget *main = static_cast<QWidget *>(obs_frontend_get_main_window()))
+						QMetaObject::invokeMethod(main, "close", Qt::QueuedConnection);
+				});
 			},
 			Qt::QueuedConnection);
 	});
