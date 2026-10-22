@@ -13,6 +13,7 @@
 #include "dock.hpp"
 #include "hotkeys.hpp"
 #include "i18n.hpp"
+#include "log.hpp"
 #include "outputs.hpp"
 #include "settings.hpp"
 
@@ -47,6 +48,7 @@ void LogFromProxy(const char *msg)
 
 bool obs_module_load(void)
 {
+	livedelay::InstallLogCapture();
 	ld_set_logger(LogFromProxy);
 	// A language picked in LiveDelay's settings wins over OBS's.
 	const std::string language = livedelay::Settings::Load(livedelay::ConfigPath()).language;
@@ -96,6 +98,7 @@ void obs_module_unload(void)
 	dock = nullptr;
 	livedelay::OutputsShutdown();
 	ld_stop();
+	livedelay::UninstallLogCapture();
 }
 
 const char *obs_module_name(void)

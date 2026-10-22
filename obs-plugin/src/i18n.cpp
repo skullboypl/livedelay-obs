@@ -29,7 +29,7 @@ namespace {
 // Keys added after the locale files that a broken update can leave behind.
 // If any of these comes back as itself, the installed ini is incomplete.
 const char *kProbes[] = {
-	"Settings.TabHotkeys", "Hotkey.None", "Hotkey.Clear", "Hotkey.About",
+	"Settings.TabHotkeys", "Settings.TabLogs", "Hotkey.None", "Hotkey.Clear", "Hotkey.About",
 	"Update.ProgressTitle", "Update.ProgressWaiting", "Encode.VodAudioHelp", "Settings.StreamDeckText",
 };
 

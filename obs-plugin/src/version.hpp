@@ -3,5 +3,5 @@
 // Keep in sync with Cargo.toml, version.rc and CMakeLists.txt project VERSION.
 #define LD_VERSION_MAJOR 1
 #define LD_VERSION_MINOR 0
-#define LD_VERSION_PATCH 23
-#define LD_VERSION_STRING "1.0.23"
+#define LD_VERSION_PATCH 24
+#define LD_VERSION_STRING "1.0.24"

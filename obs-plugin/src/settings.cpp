@@ -7,6 +7,7 @@
 #include "i18n.hpp"
 #include "services.hpp"
 #include "limits.hpp"
+#include "log.hpp"
 #include "outputs.hpp"
 #include "client.hpp"
 
@@ -748,6 +749,7 @@ public:
 		tabs->addTab(ScrollWrap(hotkeyPage), T("Settings.TabHotkeys"));
 		tabs->addTab(destPage, T("Settings.TabPlatforms"));
 		tabs->addTab(ScrollWrap(ovPage), T("Settings.TabOverlay"));
+		tabs->addTab(MakeLogPage(), T("Settings.TabLogs"));
 		tabs->addTab(ScrollWrap(aboutPage), T("Settings.TabAbout"));
 
 		auto *buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel);
