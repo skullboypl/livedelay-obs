@@ -10,17 +10,6 @@ const port = flag("-port");
 const uuid = flag("-pluginUUID");
 const registerEvent = flag("-registerEvent") || "registerPlugin";
 
-if (!port || !uuid) {
-  console.error("LiveDelay Stream Deck: missing -port or -pluginUUID");
-  process.exit(1);
-}
-
-const ws = new WebSocket("ws://127.0.0.1:" + port);
-
-function send(msg) {
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-}
-
 function apiBase(settings) {
   let api = String((settings && settings.api) || "127.0.0.1:7799").trim();
   api = api.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
@@ -62,6 +51,17 @@ function get(url) {
   });
 }
 
+function connect() {
+  if (!port || !uuid) {
+    console.error("LiveDelay Stream Deck: missing -port or -pluginUUID");
+    process.exit(1);
+  }
+  const ws = new WebSocket("ws://127.0.0.1:" + port);
+
+  function send(msg) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  }
+
 ws.on("open", () => {
   send({ event: registerEvent, uuid });
 });
@@ -92,6 +92,11 @@ ws.on("message", async (raw) => {
   }
 });
 
-ws.on("error", (err) => {
-  console.error("LiveDelay websocket", err && err.message);
-});
+  ws.on("error", (err) => {
+    console.error("LiveDelay websocket", err && err.message);
+  });
+}
+
+if (require.main === module) connect();
+
+module.exports = { apiBase, actionUrl, armTitle, get };

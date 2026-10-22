@@ -209,6 +209,20 @@ void RegisterHotkeys(void (*dispatch)(const std::string &action))
 	}
 }
 
+void RefreshHotkeyDescriptions()
+{
+	for (HotkeyDef &key : g_keys) {
+		if (key.id == OBS_INVALID_HOTKEY_ID)
+			continue;
+		if (key.slot >= 0) {
+			RefreshSlotDescription(key.slot);
+		} else if (key.locale) {
+			const QByteArray text = T(key.locale).toUtf8();
+			obs_hotkey_set_description(key.id, text.constData());
+		}
+	}
+}
+
 void UnregisterHotkeys()
 {
 	for (HotkeyDef &key : g_keys) {

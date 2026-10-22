@@ -35,6 +35,7 @@ private:
 };
 
 void RegisterHotkeys(void (*dispatch)(const std::string &action));
+void RefreshHotkeyDescriptions();
 void UnregisterHotkeys();
 void SaveHotkeyData(obs_data_t *data);
 void LoadHotkeyData(obs_data_t *data);

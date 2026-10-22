@@ -353,7 +353,7 @@ function Install-ToProgramData([string]$dllSrc, [string]$dataSrc, [version]$obsV
 	# -Force overwrites an existing plugin (update path). OBS must be closed so the DLL unlocks.
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $legacyBin 'livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $root 'livedelay-obs.dll') -Force
-	Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force
+	Get-ChildItem -LiteralPath $dataSrc -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $dataDst -Recurse -Force }
 	Unblock-PluginFiles -root $root
 	Write-Ok "Installed to ProgramData (no admin):"
 	Write-Host "  $root"
@@ -375,12 +375,14 @@ function Install-IntoObsTree([string]$obsRoot, [string]$dllSrc, [string]$dataSrc
 	$dataDst = Join-Path $obsRoot 'data\obs-plugins\livedelay-obs'
 	New-Item -ItemType Directory -Force -Path (Split-Path $dllDst), $dataDst | Out-Null
 	Copy-Item -LiteralPath $dllSrc -Destination $dllDst -Force
-	Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force
+	Get-ChildItem -LiteralPath $dataSrc -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $dataDst -Recurse -Force }
 	$portable = Join-Path $obsRoot 'plugins\livedelay-obs'
 	New-Item -ItemType Directory -Force -Path (Join-Path $portable 'data'), (Join-Path $portable 'bin\64bit') | Out-Null
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $portable 'livedelay-obs.dll') -Force
 	Copy-Item -LiteralPath $dllSrc -Destination (Join-Path $portable 'bin\64bit\livedelay-obs.dll') -Force
-	Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination (Join-Path $portable 'data') -Recurse -Force
+	$portableData = Join-Path $portable 'data'
+	New-Item -ItemType Directory -Force -Path $portableData | Out-Null
+	Get-ChildItem -LiteralPath $dataSrc -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $portableData -Recurse -Force }
 	try { Unblock-File -LiteralPath $dllDst -ErrorAction SilentlyContinue } catch { }
 	Unblock-PluginFiles -root $portable
 	Write-Ok "Copied into OBS folder: $obsRoot"

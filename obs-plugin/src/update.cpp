@@ -37,6 +37,7 @@ Q_DECLARE_METATYPE(livedelay::UpdateInfo)
 #include <windows.h>
 #include <winhttp.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -403,7 +404,7 @@ bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &
 		"  }\n"
 		"  Set-Step $uiData 78\n"
 		"  New-Item -ItemType Directory -Force -Path $dataDst | Out-Null\n"
-		"  Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force\n"
+		"  Get-ChildItem -LiteralPath $dataSrc -Force | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $dataDst -Recurse -Force }\n"
 		"  Set-Step $uiStart 92\n"
 		"  Start-Sleep -Milliseconds 400\n"
 		"  if (Test-Path -LiteralPath $obsExe) {\n"
@@ -433,6 +434,24 @@ bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &
 	f.write(ps.toUtf8());
 	f.close();
 	return true;
+}
+
+bool OutputsBusy()
+{
+	return obs_frontend_streaming_active() || obs_frontend_recording_active() || obs_frontend_replay_buffer_active() ||
+	       obs_frontend_virtualcam_active();
+}
+
+void StopOutputs()
+{
+	if (obs_frontend_streaming_active())
+		obs_frontend_streaming_stop();
+	if (obs_frontend_recording_active())
+		obs_frontend_recording_stop();
+	if (obs_frontend_replay_buffer_active())
+		obs_frontend_replay_buffer_stop();
+	if (obs_frontend_virtualcam_active())
+		obs_frontend_stop_virtualcam();
 }
 
 QDialog *MakeUpdateProgressDialog(QWidget *parent, const QString &version, QLabel **statusOut, QProgressBar **barOut)
@@ -599,7 +618,32 @@ void UpdateChecker::ApplyUpdate(const UpdateInfo &info, QWidget *parent)
 			Qt::QueuedConnection);
 	});
 	QObject::connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-	thread->start();
+
+	// OBS refuses to quit while a stream or recording is running, so stop those first.
+	auto startDownload = [thread] { thread->start(); };
+	if (!OutputsBusy()) {
+		startDownload();
+		return;
+	}
+	if (progressStatus)
+		progressStatus->setText(T("Update.ProgressStopping"));
+	StopOutputs();
+	auto *wait = new QTimer(qApp);
+	auto left = std::make_shared<int>(75); // 75 × 200 ms = 15 s
+	const QString version = info.version;
+	QObject::connect(wait, &QTimer::timeout, qApp, [wait, left, startDownload, statusGuard, version] {
+		if (OutputsBusy() && *left > 0) {
+			--*left;
+			StopOutputs();
+			return;
+		}
+		wait->stop();
+		wait->deleteLater();
+		if (statusGuard)
+			statusGuard->setText(T("Update.Downloading").arg(version));
+		startDownload();
+	});
+	wait->start(200);
 }
 
 void UpdateChecker::Consider(UpdateInfo info, bool force)

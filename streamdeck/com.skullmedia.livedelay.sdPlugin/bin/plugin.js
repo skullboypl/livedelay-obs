@@ -3163,7 +3163,7 @@ var require_stream = __commonJS({
         this.emit("error", err);
       }
     }
-    function createWebSocketStream(ws2, options) {
+    function createWebSocketStream(ws, options) {
       let terminateOnDestroy = true;
       const duplex = new Duplex({
         ...options,
@@ -3172,65 +3172,65 @@ var require_stream = __commonJS({
         objectMode: false,
         writableObjectMode: false
       });
-      ws2.on("message", function message(msg, isBinary) {
+      ws.on("message", function message(msg, isBinary) {
         const data = !isBinary && duplex._readableState.objectMode ? msg.toString() : msg;
-        if (!duplex.push(data)) ws2.pause();
+        if (!duplex.push(data)) ws.pause();
       });
-      ws2.once("error", function error(err) {
+      ws.once("error", function error(err) {
         if (duplex.destroyed) return;
         terminateOnDestroy = false;
         duplex.destroy(err);
       });
-      ws2.once("close", function close() {
+      ws.once("close", function close() {
         if (duplex.destroyed) return;
         duplex.push(null);
       });
       duplex._destroy = function(err, callback) {
-        if (ws2.readyState === ws2.CLOSED) {
+        if (ws.readyState === ws.CLOSED) {
           callback(err);
           process.nextTick(emitClose, duplex);
           return;
         }
         let called = false;
-        ws2.once("error", function error(err2) {
+        ws.once("error", function error(err2) {
           called = true;
           callback(err2);
         });
-        ws2.once("close", function close() {
+        ws.once("close", function close() {
           if (!called) callback(err);
           process.nextTick(emitClose, duplex);
         });
-        if (terminateOnDestroy) ws2.terminate();
+        if (terminateOnDestroy) ws.terminate();
       };
       duplex._final = function(callback) {
-        if (ws2.readyState === ws2.CONNECTING) {
-          ws2.once("open", function open() {
+        if (ws.readyState === ws.CONNECTING) {
+          ws.once("open", function open() {
             duplex._final(callback);
           });
           return;
         }
-        if (ws2._socket === null) return;
-        if (ws2._socket._writableState.finished) {
+        if (ws._socket === null) return;
+        if (ws._socket._writableState.finished) {
           callback();
           if (duplex._readableState.endEmitted) duplex.destroy();
         } else {
-          ws2._socket.once("finish", function finish() {
+          ws._socket.once("finish", function finish() {
             callback();
           });
-          ws2.close();
+          ws.close();
         }
       };
       duplex._read = function() {
-        if (ws2.isPaused) ws2.resume();
+        if (ws.isPaused) ws.resume();
       };
       duplex._write = function(chunk, encoding, callback) {
-        if (ws2.readyState === ws2.CONNECTING) {
-          ws2.once("open", function open() {
+        if (ws.readyState === ws.CONNECTING) {
+          ws.once("open", function open() {
             duplex._write(chunk, encoding, callback);
           });
           return;
         }
-        ws2.send(chunk, callback);
+        ws.send(chunk, callback);
       };
       duplex.on("end", duplexOnEnd);
       duplex.on("error", duplexOnError);
@@ -3606,12 +3606,12 @@ var require_websocket_server = __commonJS({
           "Connection: Upgrade",
           `Sec-WebSocket-Accept: ${digest}`
         ];
-        const ws2 = new this.options.WebSocket(null, void 0, this.options);
+        const ws = new this.options.WebSocket(null, void 0, this.options);
         if (protocols.size) {
           const protocol = this.options.handleProtocols ? this.options.handleProtocols(protocols, req) : protocols.values().next().value;
           if (protocol) {
             headers.push(`Sec-WebSocket-Protocol: ${protocol}`);
-            ws2._protocol = protocol;
+            ws._protocol = protocol;
           }
         }
         if (extensions[PerMessageDeflate.extensionName]) {
@@ -3620,12 +3620,12 @@ var require_websocket_server = __commonJS({
             [PerMessageDeflate.extensionName]: [params]
           });
           headers.push(`Sec-WebSocket-Extensions: ${value}`);
-          ws2._extensions = extensions;
+          ws._extensions = extensions;
         }
         this.emit("headers", headers, req);
         socket.write(headers.concat("\r\n").join("\r\n"));
         socket.removeListener("error", socketOnError);
-        ws2.setSocket(socket, head, {
+        ws.setSocket(socket, head, {
           allowSynchronousEvents: this.options.allowSynchronousEvents,
           maxBufferedChunks: this.options.maxBufferedChunks,
           maxFragments: this.options.maxFragments,
@@ -3633,15 +3633,15 @@ var require_websocket_server = __commonJS({
           skipUTF8Validation: this.options.skipUTF8Validation
         });
         if (this.clients) {
-          this.clients.add(ws2);
-          ws2.on("close", () => {
-            this.clients.delete(ws2);
+          this.clients.add(ws);
+          ws.on("close", () => {
+            this.clients.delete(ws);
             if (this._shouldEmitClose && !this.clients.size) {
               process.nextTick(emitClose, this);
             }
           });
         }
-        cb(ws2, req);
+        cb(ws, req);
       }
     };
     module2.exports = WebSocketServer;
@@ -3721,14 +3721,6 @@ function flag(name) {
 var port = flag("-port");
 var uuid = flag("-pluginUUID");
 var registerEvent = flag("-registerEvent") || "registerPlugin";
-if (!port || !uuid) {
-  console.error("LiveDelay Stream Deck: missing -port or -pluginUUID");
-  process.exit(1);
-}
-var ws = new WebSocket("ws://127.0.0.1:" + port);
-function send(msg) {
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-}
 function apiBase(settings) {
   let api = String(settings && settings.api || "127.0.0.1:7799").trim();
   api = api.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
@@ -3766,34 +3758,46 @@ function get(url) {
     req.on("error", reject);
   });
 }
-ws.on("open", () => {
-  send({ event: registerEvent, uuid });
-});
-ws.on("message", async (raw) => {
-  let msg;
-  try {
-    msg = JSON.parse(raw.toString());
-  } catch {
-    return;
+function connect() {
+  if (!port || !uuid) {
+    console.error("LiveDelay Stream Deck: missing -port or -pluginUUID");
+    process.exit(1);
   }
-  const settings = msg.payload && msg.payload.settings || {};
-  if (msg.event === "willAppear" || msg.event === "didReceiveSettings") {
-    if (String(msg.action || "").endsWith(".arm")) {
-      send({ event: "setTitle", context: msg.context, payload: { title: armTitle(settings), target: 0 } });
+  const ws = new WebSocket("ws://127.0.0.1:" + port);
+  function send(msg) {
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  }
+  ws.on("open", () => {
+    send({ event: registerEvent, uuid });
+  });
+  ws.on("message", async (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw.toString());
+    } catch {
+      return;
     }
-    return;
-  }
-  if (msg.event !== "keyDown") return;
-  const url = actionUrl(msg.action || "", settings);
-  if (!url) return;
-  try {
-    const code = await get(url);
-    send({ event: code >= 200 && code < 300 ? "showOk" : "showAlert", context: msg.context });
-  } catch (err) {
-    console.error("LiveDelay request failed", url, err && err.message);
-    send({ event: "showAlert", context: msg.context });
-  }
-});
-ws.on("error", (err) => {
-  console.error("LiveDelay websocket", err && err.message);
-});
+    const settings = msg.payload && msg.payload.settings || {};
+    if (msg.event === "willAppear" || msg.event === "didReceiveSettings") {
+      if (String(msg.action || "").endsWith(".arm")) {
+        send({ event: "setTitle", context: msg.context, payload: { title: armTitle(settings), target: 0 } });
+      }
+      return;
+    }
+    if (msg.event !== "keyDown") return;
+    const url = actionUrl(msg.action || "", settings);
+    if (!url) return;
+    try {
+      const code = await get(url);
+      send({ event: code >= 200 && code < 300 ? "showOk" : "showAlert", context: msg.context });
+    } catch (err) {
+      console.error("LiveDelay request failed", url, err && err.message);
+      send({ event: "showAlert", context: msg.context });
+    }
+  });
+  ws.on("error", (err) => {
+    console.error("LiveDelay websocket", err && err.message);
+  });
+}
+if (require.main === module) connect();
+module.exports = { apiBase, actionUrl, armTitle, get };

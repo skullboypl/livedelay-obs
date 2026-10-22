@@ -12,6 +12,7 @@
 
 #include "dock.hpp"
 #include "hotkeys.hpp"
+#include "i18n.hpp"
 #include "outputs.hpp"
 #include "settings.hpp"
 
@@ -78,6 +79,11 @@ bool obs_module_load(void)
 		"LiveDelay",
 		[](void *) { livedelay::ShowSettings(static_cast<QWidget *>(obs_frontend_get_main_window())); },
 		nullptr);
+	livedelay::StartLocaleHeal([] {
+		livedelay::RefreshHotkeyDescriptions();
+		if (dock)
+			dock->Retranslate();
+	});
 	blog(LOG_INFO, "[livedelay] loaded");
 	return true;
 }
