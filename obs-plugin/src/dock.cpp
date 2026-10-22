@@ -1,4 +1,6 @@
 #include "dock.hpp"
+
+#include <cstdlib>
 #include "client.hpp"
 #include "encode.hpp"
 #include "i18n.hpp"
@@ -278,7 +280,15 @@ void Dock::Act(const std::string &action)
 
 void Dock::Hotkey(const std::string &action)
 {
-	Act(action == "arm" ? "arm?delay=" + std::to_string(delay_->value()) : action);
+	const std::string prefix = "arm?delay=";
+	if (action.rfind(prefix, 0) == 0) {
+		const int sec = std::atoi(action.c_str() + prefix.size());
+		if (sec >= delay_->minimum() && sec <= delay_->maximum())
+			delay_->setValue(sec);
+		Act(action);
+		return;
+	}
+	Act(action == "arm" ? prefix + std::to_string(delay_->value()) : action);
 }
 
 void Dock::ShowError(const QString &msg)

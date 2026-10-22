@@ -217,6 +217,8 @@ pub fn parse(text: &str) -> Result<Config, String> {
             "overlay_arming" => c.overlay.arming = v.into(),
             "overlay_armed" => c.overlay.armed = v.into(),
             "overlay_delayed" => c.overlay.delayed = v.into(),
+            // Plugin-only: seconds for the "arm this delay" hotkeys. The proxy does not bind keys.
+            k if k.starts_with("arm_slot_") => {}
             "hotkey_arm" | "hotkey_activate" | "hotkey_cut" | "hotkey_cut_after" => {
                 let action = match k {
                     "hotkey_arm" => "arm",

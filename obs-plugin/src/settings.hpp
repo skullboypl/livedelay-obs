@@ -35,6 +35,8 @@ struct Settings {
 	std::string api = "127.0.0.1:7799";
 	int delay = 15;
 	int max_buffer_mb = 512;
+	/// Seconds for the six "arm this delay" hotkeys. Keys themselves live in OBS.
+	int arm_slot[6] = {15, 30, 45, 60, 90, 120};
 	std::string language = "auto"; // auto = follow OBS, or en-US / pl-PL / de-DE / ru-RU
 	std::string overlay_live = "LIVE";
 	std::string overlay_arming = "ARMING… {buf}/{s}s";

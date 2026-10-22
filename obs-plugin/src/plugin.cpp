@@ -4,12 +4,14 @@
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
+#include <QApplication>
 #include <QMainWindow>
 #include <QMetaObject>
 
 #include <string>
 
 #include "dock.hpp"
+#include "hotkeys.hpp"
 #include "outputs.hpp"
 #include "settings.hpp"
 
@@ -25,45 +27,14 @@ OBS_MODULE_USE_DEFAULT_LOCALE("livedelay-obs", "en-US")
 
 namespace {
 
-struct Hotkey {
-	const char *name;
-	const char *description;
-	const char *action;
-	obs_hotkey_id id;
-};
-
-Hotkey hotkeys[] = {
-	{"livedelay.arm", "Hotkey.Arm", "arm", OBS_INVALID_HOTKEY_ID},
-	{"livedelay.activate", "Hotkey.Activate", "activate", OBS_INVALID_HOTKEY_ID},
-	{"livedelay.cut", "Hotkey.Cut", "cut", OBS_INVALID_HOTKEY_ID},
-	{"livedelay.cut_after", "Hotkey.CutAfter", "cut-after", OBS_INVALID_HOTKEY_ID},
-};
-
 livedelay::Dock *dock = nullptr;
-
-void OnHotkey(void *data, obs_hotkey_id, obs_hotkey_t *, bool pressed)
-{
-	if (!pressed || !dock)
-		return;
-	// Hotkeys fire on OBS's hotkey thread; the panel lives on the UI thread.
-	std::string action = static_cast<Hotkey *>(data)->action;
-	QMetaObject::invokeMethod(
-		dock, [action] { if (dock) dock->Hotkey(action); }, Qt::QueuedConnection);
-}
 
 void OnSave(obs_data_t *data, bool saving, void *)
 {
-	for (Hotkey &h : hotkeys) {
-		if (saving) {
-			obs_data_array_t *a = obs_hotkey_save(h.id);
-			obs_data_set_array(data, h.name, a);
-			obs_data_array_release(a);
-		} else {
-			obs_data_array_t *a = obs_data_get_array(data, h.name);
-			obs_hotkey_load(h.id, a);
-			obs_data_array_release(a);
-		}
-	}
+	if (saving)
+		livedelay::SaveHotkeyData(data);
+	else
+		livedelay::LoadHotkeyData(data);
 }
 
 void LogFromProxy(const char *msg)
@@ -89,8 +60,11 @@ bool obs_module_load(void)
 		blog(LOG_WARNING, "[livedelay] %s", err.c_str());
 	livedelay::OutputsInit();
 
-	for (Hotkey &h : hotkeys)
-		h.id = obs_hotkey_register_frontend(h.name, obs_module_text(h.description), OnHotkey, &h);
+	livedelay::RegisterHotkeys([](const std::string &action) {
+		// Hotkeys fire on OBS's hotkey thread; the panel lives on the UI thread.
+		QMetaObject::invokeMethod(
+			qApp, [action] { if (dock) dock->Hotkey(action); }, Qt::QueuedConnection);
+	});
 
 	auto *main = static_cast<QMainWindow *>(obs_frontend_get_main_window());
 	dock = new livedelay::Dock(main);
@@ -111,8 +85,7 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	obs_frontend_remove_save_callback(OnSave, nullptr);
-	for (Hotkey &h : hotkeys)
-		obs_hotkey_unregister(h.id);
+	livedelay::UnregisterHotkeys();
 	// OBS owns and deletes the dock widget.
 	dock = nullptr;
 	livedelay::OutputsShutdown();

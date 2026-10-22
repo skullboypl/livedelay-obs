@@ -1,4 +1,5 @@
 #include "settings.hpp"
+#include "hotkeys.hpp"
 #include "update.hpp"
 #include "version.hpp"
 #include "dock.hpp"
@@ -158,6 +159,17 @@ Settings Settings::Load(const std::string &path)
 			s.max_buffer_mb = std::atoi(v.c_str());
 		else if (k == "language")
 			s.language = v.empty() ? "auto" : v;
+		else if (k.rfind("arm_slot_", 0) == 0) {
+			const int slot = std::atoi(k.c_str() + 9);
+			int sec = std::atoi(v.c_str());
+			if (slot >= 0 && slot < 6) {
+				if (sec < 1)
+					sec = 1;
+				if (sec > 3600)
+					sec = 3600;
+				s.arm_slot[slot] = sec;
+			}
+		}
 		else if (k == "overlay_live")
 			s.overlay_live = v;
 		else if (k == "overlay_arming")
@@ -197,6 +209,8 @@ std::string Settings::Text() const
 	o << "# LiveDelay settings (edited from OBS: Tools -> LiveDelay)\n\n"
 	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb << "\nlanguage = " << language
 	  << "\n";
+	for (int i = 0; i < 6; ++i)
+		o << "arm_slot_" << i << " = " << arm_slot[i] << "\n";
 	for (size_t i = 0; i < dests.size(); ++i) {
 		const Destination &d = dests[i];
 		const std::string ingest = d.ingest_key.empty() ? ("ld" + std::to_string(i)) : d.ingest_key;
@@ -728,8 +742,10 @@ public:
 			updateStatus->setText(T("Update.Failed").arg(reason));
 		});
 
+		auto *hotkeyPage = MakeHotkeyPage(hotkeyKeys_, hotkeySpins_);
 		auto *tabs = new QTabWidget;
 		tabs->addTab(ScrollWrap(generalPage), T("Settings.TabGeneral"));
+		tabs->addTab(ScrollWrap(hotkeyPage), T("Settings.TabHotkeys"));
 		tabs->addTab(destPage, T("Settings.TabPlatforms"));
 		tabs->addTab(ScrollWrap(ovPage), T("Settings.TabOverlay"));
 		tabs->addTab(ScrollWrap(aboutPage), T("Settings.TabAbout"));
@@ -821,6 +837,9 @@ public:
 			s_.max_buffer_mb = buffer_->value();
 			SaveOverlay();
 			s_.language = S(language_->currentData().toString());
+			for (int i = 0; i < 6 && i < int(hotkeySpins_.size()); ++i)
+				s_.arm_slot[i] = hotkeySpins_[i]->value();
+			ApplyHotkeyPage(hotkeyKeys_, hotkeySpins_);
 			SaveAndRestart();
 		});
 
@@ -1192,6 +1211,8 @@ private:
 	OverlayRow rows_[4];
 	QCheckBox *armedAsLive_ = nullptr;
 	QComboBox *language_;
+	std::vector<ComboButton *> hotkeyKeys_;
+	std::vector<QSpinBox *> hotkeySpins_;
 	QSpinBox *delay_ = nullptr;
 	QSpinBox *buffer_ = nullptr;
 	QLabel *bufferHint_ = nullptr;
