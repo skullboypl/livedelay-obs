@@ -157,7 +157,10 @@
 
   function describe(s, c) {
     let kind = 'live', secs = 0;
-    if (s.mode === 'delayed') { kind = 'delayed'; secs = s.delay; }
+    // {s} = configured Arm delay, not measured keyframe lag (that is always
+    // a bit higher because Activate snaps to the previous keyframe).
+    const configured = (s.arm_delay != null) ? s.arm_delay : s.delay;
+    if (s.mode === 'delayed') { kind = 'delayed'; secs = configured; }
     else if (s.arm_delay !== null && s.armed) { kind = 'armed'; secs = s.arm_delay; }
     else if (s.arm_delay !== null) { kind = 'arming'; secs = s.arm_delay; }
     const wasArming = kind === 'arming';

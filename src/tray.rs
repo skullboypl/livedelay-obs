@@ -101,7 +101,14 @@ fn summary(app: &App) -> (usize, String) {
     let st = app.ctx.hub.status(Instant::now());
     let input = if st.input { "" } else { " · brak sygnału z OBS" };
     match st.mode {
-        Mode::Delayed => (2, format!("OPÓŹNIENIE {:.0} s{input}", st.delay_s)),
+        // Show configured Arm seconds, not measured keyframe lag after Activate.
+        Mode::Delayed => (
+            2,
+            format!(
+                "OPÓŹNIENIE {:.0} s{input}",
+                st.arm_delay_s.unwrap_or(st.delay_s)
+            ),
+        ),
         Mode::Live if st.armed => (1, format!("NA ŻYWO · uzbrojone {:.0} s{input}", st.arm_delay_s.unwrap_or(0.0))),
         Mode::Live if st.arm_delay_s.is_some() => (1, format!("NA ŻYWO · bufor {:.0}/{:.0} s{input}", st.buffer_s, st.arm_delay_s.unwrap_or(0.0))),
         Mode::Live => (0, format!("NA ŻYWO{input}")),

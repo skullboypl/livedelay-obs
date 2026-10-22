@@ -81,8 +81,12 @@
   const L = I18N[lang] || I18N.en;
   document.documentElement.lang = I18N[lang] ? lang : 'en';
   document.querySelectorAll('[data-t]').forEach(el => el.textContent = L[el.dataset.t]);
-  const fill = (t, s) => t.replace('{s}', Math.round(s.mode === 'delayed' ? s.delay : (s.arm_delay || 0)))
-                          .replace('{b}', Math.floor(Math.min(s.buffer_s, s.arm_delay || 0)));
+  // {s} = configured Arm delay (not measured keyframe lag after Activate).
+  const fill = (t, s) => {
+    const secs = (s.arm_delay != null) ? s.arm_delay : (s.delay || 0);
+    return t.replace('{s}', Math.round(secs))
+            .replace('{b}', Math.floor(Math.min(s.buffer_s, secs || 0)));
+  };
 
   const players = {};
   function play(id, on) {

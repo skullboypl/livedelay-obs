@@ -437,8 +437,10 @@ void Dock::ShowState(const std::string &j)
 		delay_->setValue(int(arm_delay > 0 ? arm_delay : JsonNumber(j, "default_delay", 15)));
 	}
 
+	// Show configured Arm seconds, not measured keyframe lag (always a bit higher).
+	const double shown_delay = arm_delay > 0 ? arm_delay : delay;
 	if (delayed)
-		Pill(status_, T("Dock.StateDelayed").arg(delay, 0, 'f', 0), "#c62828");
+		Pill(status_, T("Dock.StateDelayed").arg(shown_delay, 0, 'f', 0), "#c62828");
 	else if (!input)
 		Pill(status_, T("Dock.StateWaiting"), "#3b4a63");
 	else if (armed)
