@@ -1,0 +1,58 @@
+{
+  "UUID": "com.skullmedia.livedelay",
+  "Name": "LiveDelay",
+  "Version": "1.0.0",
+  "Author": "skullboypl",
+  "Description": "Arm, activate and cut a LiveDelay stream from Stream Deck.",
+  "Icon": "imgs/plugin",
+  "URL": "https://livedelay.vxh.pl/en/stream-deck/",
+  "CodePath": "bin/plugin.js",
+  "Category": "LiveDelay",
+  "CategoryIcon": "imgs/plugin",
+  "OS": [{ "Platform": "windows", "MinimumVersion": "10" }],
+  "Nodejs": { "Version": "20" },
+  "Software": { "MinimumVersion": "6.4" },
+  "SDKVersion": 2,
+  "Actions": [
+    {
+      "UUID": "com.skullmedia.livedelay.arm",
+      "Name": "Arm",
+      "Icon": "imgs/arm",
+      "Tooltip": "Fill the delay buffer for the seconds set on this button",
+      "PropertyInspectorPath": "ui/pi.html",
+      "States": [{ "Image": "imgs/arm", "TitleAlignment": "middle", "FontSize": "12" }]
+    },
+    {
+      "UUID": "com.skullmedia.livedelay.activate",
+      "Name": "Activate",
+      "Icon": "imgs/activate",
+      "Tooltip": "Switch viewers to the armed delay without reconnecting",
+      "PropertyInspectorPath": "ui/pi.html",
+      "States": [{ "Image": "imgs/activate" }]
+    },
+    {
+      "UUID": "com.skullmedia.livedelay.cut",
+      "Name": "Cut",
+      "Icon": "imgs/cut",
+      "Tooltip": "Return viewers to live now",
+      "PropertyInspectorPath": "ui/pi.html",
+      "States": [{ "Image": "imgs/cut" }]
+    },
+    {
+      "UUID": "com.skullmedia.livedelay.cutafter",
+      "Name": "Cut after",
+      "Icon": "imgs/cutafter",
+      "Tooltip": "Return to live after the current moment has aired",
+      "PropertyInspectorPath": "ui/pi.html",
+      "States": [{ "Image": "imgs/cutafter" }]
+    },
+    {
+      "UUID": "com.skullmedia.livedelay.disarm",
+      "Name": "Disarm",
+      "Icon": "imgs/disarm",
+      "Tooltip": "Drop the delay buffer and stay live",
+      "PropertyInspectorPath": "ui/pi.html",
+      "States": [{ "Image": "imgs/disarm" }]
+    }
+  ]
+}

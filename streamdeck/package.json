@@ -1,0 +1,14 @@
+{
+  "name": "livedelay-streamdeck",
+  "private": true,
+  "description": "Stream Deck plugin that calls the local LiveDelay API.",
+  "scripts": {
+    "build": "esbuild src/plugin.js --bundle --platform=node --target=node20 --outfile=com.skullmedia.livedelay.sdPlugin/bin/plugin.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10"
+  }
+}

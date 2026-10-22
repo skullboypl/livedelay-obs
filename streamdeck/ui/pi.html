@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LiveDelay</title>
+  <style>
+    body { margin: 0; color: #ebe8e3; font: 13px/1.4 "Segoe UI", sans-serif; }
+    .sdpi-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+    .sdpi-item-label { width: 88px; color: #8a8780; }
+    input { flex: 1; background: #111113; color: #ebe8e3; border: 1px solid #2a2a2e; padding: 6px 8px; }
+    p { margin: 4px 12px 10px; color: #8a8780; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="sdpi-item" id="delayRow">
+    <div class="sdpi-item-label">Seconds</div>
+    <input id="delay" type="number" min="1" max="3600" step="1" value="15">
+  </div>
+  <div class="sdpi-item">
+    <div class="sdpi-item-label">API</div>
+    <input id="api" type="text" value="127.0.0.1:7799" spellcheck="false">
+  </div>
+  <p id="hint">LiveDelay must be running inside OBS. Default API port is 7799.</p>
+  <script>
+    let websocket = null;
+    let uuid = "";
+    let action = "";
+    function save() {
+      if (!websocket || websocket.readyState !== 1) return;
+      const payload = { api: document.getElementById("api").value.trim() || "127.0.0.1:7799" };
+      if (!document.getElementById("delayRow").hidden) {
+        payload.delay = Math.max(1, Math.min(3600, Number(document.getElementById("delay").value) || 15));
+      }
+      websocket.send(JSON.stringify({ event: "setSettings", context: uuid, payload }));
+    }
+    function connectElgatoStreamDeckSocket(inPort, inUUID, inRegisterEvent, inInfo, inActionInfo) {
+      uuid = inUUID;
+      const info = JSON.parse(inActionInfo);
+      action = info.action || "";
+      const settings = (info.payload && info.payload.settings) || {};
+      const isArm = action.endsWith(".arm");
+      document.getElementById("delayRow").hidden = !isArm;
+      document.getElementById("hint").textContent = isArm
+        ? "This button arms its own delay. Viewers stay live until you press Activate."
+        : "Calls LiveDelay on this PC. OBS with LiveDelay must be open.";
+      if (settings.delay) document.getElementById("delay").value = settings.delay;
+      if (settings.api) document.getElementById("api").value = settings.api;
+      websocket = new WebSocket("ws://127.0.0.1:" + inPort);
+      websocket.onopen = function () {
+        websocket.send(JSON.stringify({ event: inRegisterEvent, uuid: inUUID }));
+        save();
+      };
+    }
+    document.getElementById("delay").addEventListener("change", save);
+    document.getElementById("api").addEventListener("change", save);
+  </script>
+</body>
+</html>

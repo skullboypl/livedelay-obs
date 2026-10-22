@@ -531,6 +531,8 @@ public:
 		height_->setSpecialValueText(T("Encode.Canvas"));
 		vodAudio_ = new QCheckBox(T("Encode.VodAudio"));
 		vodAudio_->setToolTip(T("Encode.VodAudioTip"));
+		vodHelp_ = Hint(T("Encode.VodAudioHelp"));
+		vodHelp_->hide();
 		enhanced_ = new QCheckBox(T("Encode.Enhanced"));
 		enhanced_->setToolTip(T("Encode.EnhancedTip"));
 		auto *allObs = new QPushButton(T("Encode.AllObs"));
@@ -556,6 +558,7 @@ public:
 		form->addRow(T("Encode.Width"), width_);
 		form->addRow(T("Encode.Height"), height_);
 		form->addRow(QString(), vodAudio_);
+		form->addRow(QString(), vodHelp_);
 		form->addRow(QString(), enhanced_);
 		form->addRow(QString(), allObs);
 		auto *fieldsInner = new QWidget;
@@ -684,6 +687,10 @@ public:
 		aboutLayout->addLayout(updateRow);
 		updateStatus->setStyleSheet("color: palette(window-text);");
 		aboutLayout->addWidget(updateStatus);
+		aboutLayout->addSpacing(12);
+		auto *streamDeck = Hint(T("Settings.StreamDeckText"));
+		streamDeck->setOpenExternalLinks(true);
+		aboutLayout->addWidget(streamDeck);
 		aboutLayout->addSpacing(12);
 		aboutLayout->addWidget(Hint(T("Settings.WebsiteText")));
 		aboutLayout->addWidget(site, 0, Qt::AlignLeft);
@@ -930,6 +937,7 @@ private:
 				    url_->text().contains("twitch", Qt::CaseInsensitive) ||
 				    url_->text().contains("live-video.net", Qt::CaseInsensitive);
 		vodAudio_->setEnabled(twitch);
+		vodHelp_->setVisible(twitch);
 		// Multi-video EB without GoLive breaks Twitch (#1000) — keep UI off until GoLive ships.
 		enhanced_->setEnabled(false);
 		enhanced_->setChecked(false);
@@ -1202,6 +1210,7 @@ private:
 	QSpinBox *videoKbps_, *audioKbps_, *keyint_, *width_, *height_;
 	QComboBox *rateControl_;
 	QCheckBox *vodAudio_;
+	QLabel *vodHelp_ = nullptr;
 	QCheckBox *enhanced_;
 };
 
