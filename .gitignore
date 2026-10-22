@@ -18,3 +18,8 @@ desktop.ini
 id_rsa
 id_ed25519
 DeployKey*
+
+# Private notes / release drafts (keep local)
+docs/*.md
+plan_*.md
+
