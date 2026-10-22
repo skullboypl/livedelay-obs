@@ -274,31 +274,64 @@ bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &
 	const QString dllSrc = QDir(extractDir).filePath(QStringLiteral("obs-plugins/64bit/livedelay-obs.dll"));
 	const QString dataSrc = QDir(extractDir).filePath(QStringLiteral("data/obs-plugins/livedelay-obs"));
 	const QString logPath = QDir::temp().filePath(QStringLiteral("livedelay-update.log"));
+	const QString primaryDll = QDir::toNativeSeparators(QDir(dllDestDir).filePath(QStringLiteral("livedelay-obs.dll")));
+
+	// When loaded from ProgramData\...\bin\64bit\, also refresh the flat DLL (OBS 33+).
+	QString flatDll;
+	{
+		const QString native = QDir::toNativeSeparators(dllDestDir);
+		if (native.contains(QStringLiteral("\\plugins\\livedelay-obs\\bin\\64bit"), Qt::CaseInsensitive)) {
+			QDir bin64(dllDestDir);
+			bin64.cdUp(); // bin
+			bin64.cdUp(); // livedelay-obs
+			flatDll = QDir::toNativeSeparators(bin64.filePath(QStringLiteral("livedelay-obs.dll")));
+		}
+	}
 
 	QString ps;
-	ps += QStringLiteral("$ErrorActionPreference='Stop'\n");
+	// Continue on non-fatal probe errors (Get-Process -Id after OBS exits must not abort).
+	ps += QStringLiteral("$ErrorActionPreference='Continue'\n");
 	ps += QStringLiteral("Start-Transcript -Path %1 -Force | Out-Null\n").arg(PsQuote(logPath));
-	ps += QStringLiteral("$pidWait=%1\n").arg(obsPid);
+	ps += QStringLiteral("$obsPidWait=%1\n").arg(obsPid);
 	ps += QStringLiteral("$obsExe=%1\n").arg(PsQuote(QDir::toNativeSeparators(obsExe)));
 	ps += QStringLiteral("$dllSrc=%1\n").arg(PsQuote(QDir::toNativeSeparators(dllSrc)));
-	ps += QStringLiteral("$dllDst=%1\n").arg(PsQuote(QDir::toNativeSeparators(QDir(dllDestDir).filePath(QStringLiteral("livedelay-obs.dll")))));
+	ps += QStringLiteral("$dllDst=%1\n").arg(PsQuote(primaryDll));
+	ps += QStringLiteral("$dllFlat=%1\n").arg(PsQuote(flatDll));
 	ps += QStringLiteral("$dataSrc=%1\n").arg(PsQuote(QDir::toNativeSeparators(dataSrc)));
 	ps += QStringLiteral("$dataDst=%1\n").arg(PsQuote(QDir::toNativeSeparators(dataDestDir)));
 	ps += QStringLiteral(
+		"function Test-ObsAlive {\n"
+		"  if ($obsPidWait -gt 0) {\n"
+		"    $p = Get-Process -Id $obsPidWait -ErrorAction SilentlyContinue\n"
+		"    if ($p) { return $true }\n"
+		"  }\n"
+		"  return [bool](Get-Process obs64,obs32 -ErrorAction SilentlyContinue)\n"
+		"}\n"
 		"Write-Host 'Waiting for OBS to exit...'\n"
 		"$deadline=(Get-Date).AddMinutes(3)\n"
 		"while ((Get-Date) -lt $deadline) {\n"
-		"  $alive=$false\n"
-		"  try { $p=Get-Process -Id $pidWait -ErrorAction Stop; if ($p) { $alive=$true } } catch {}\n"
-		"  Get-Process obs64,obs32 -ErrorAction SilentlyContinue | ForEach-Object { $alive=$true }\n"
-		"  if (-not $alive) { break }\n"
+		"  if (-not (Test-ObsAlive)) { break }\n"
 		"  Start-Sleep -Milliseconds 400\n"
 		"}\n"
+		"if (Test-ObsAlive) {\n"
+		"  Write-Host 'OBS still running - stopping obs64/obs32...'\n"
+		"  Get-Process obs64,obs32 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue\n"
+		"  Start-Sleep -Seconds 2\n"
+		"}\n"
 		"Start-Sleep -Seconds 1\n"
+		"$ErrorActionPreference='Stop'\n"
 		"if (-not (Test-Path -LiteralPath $dllSrc)) { throw \"missing $dllSrc\" }\n"
-		"$dllDir=Split-Path -Parent $dllDst\n"
-		"New-Item -ItemType Directory -Force -Path $dllDir,$dataDst | Out-Null\n"
-		"Copy-Item -LiteralPath $dllSrc -Destination $dllDst -Force\n"
+		"$targets = New-Object System.Collections.Generic.List[string]\n"
+		"[void]$targets.Add($dllDst)\n"
+		"if ($dllFlat) { [void]$targets.Add($dllFlat) }\n"
+		"foreach ($dst in $targets) {\n"
+		"  $dllDir=Split-Path -Parent $dst\n"
+		"  New-Item -ItemType Directory -Force -Path $dllDir | Out-Null\n"
+		"  Copy-Item -LiteralPath $dllSrc -Destination $dst -Force\n"
+		"  try { Unblock-File -LiteralPath $dst -ErrorAction SilentlyContinue } catch {}\n"
+		"  Write-Host \"Copied DLL -> $dst\"\n"
+		"}\n"
+		"New-Item -ItemType Directory -Force -Path $dataDst | Out-Null\n"
 		"Copy-Item -LiteralPath (Join-Path $dataSrc '*') -Destination $dataDst -Recurse -Force\n"
 		"Write-Host 'Installed. Starting OBS...'\n"
 		"if (Test-Path -LiteralPath $obsExe) {\n"
@@ -308,10 +341,13 @@ bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &
 		"Stop-Transcript | Out-Null\n");
 
 	QFile f(scriptPath);
-	if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+	if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
 		*err = QStringLiteral("script_write");
 		return false;
 	}
+	// UTF-8 BOM helps Windows PowerShell 5.1 -File parse reliably.
+	static const char bom[] = "\xEF\xBB\xBF";
+	f.write(bom, 3);
 	f.write(ps.toUtf8());
 	f.close();
 	return true;
@@ -408,10 +444,11 @@ void UpdateChecker::ApplyUpdate(const UpdateInfo &info, QWidget *parent)
 					return;
 				}
 
+				// Not Hidden: user must see errors (DLL locked / copy fail).
 				const bool started = QProcess::startDetached(
 					QStringLiteral("powershell.exe"),
 					{QStringLiteral("-NoProfile"), QStringLiteral("-ExecutionPolicy"), QStringLiteral("Bypass"),
-					 QStringLiteral("-WindowStyle"), QStringLiteral("Hidden"), QStringLiteral("-File"), script});
+					 QStringLiteral("-File"), script});
 				if (!started) {
 					closeProgress();
 					QMessageBox::warning(dlgParent, QStringLiteral("LiveDelay"), T("Update.ApplyFailed").arg(QStringLiteral("updater")));
