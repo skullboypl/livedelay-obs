@@ -8,6 +8,8 @@
 #include <util/config-file.h>
 #include <util/platform.h>
 
+#include <QTimer>
+
 #include <string>
 #include <vector>
 
@@ -29,6 +31,11 @@ struct DestOutput {
 std::vector<DestOutput> g_outs;
 obs_encoder_t *g_audio = nullptr;
 bool g_inited = false;
+// Platform encoders must not start inside STREAMING_STARTING: OBS has not
+// connected to this proxy yet, and sleeping there blocks that connection.
+QTimer *g_arm = nullptr;
+bool g_arm_pending = false;
+int g_arm_waited_ms = 0;
 
 void EnableCustomServerVodTrack()
 {
@@ -323,6 +330,25 @@ void Rebuild(bool restart_live)
 	}
 }
 
+std::string WhyStartFailed(const DestOutput &o)
+{
+	if (!o.output)
+		return "no output object";
+	if (const char *err = obs_output_get_last_error(o.output); err && *err)
+		return err;
+	if (o.video)
+		if (const char *err = obs_encoder_get_last_error(o.video); err && *err)
+			return err;
+	if (!obs_output_get_service(o.output))
+		return "no service";
+	if (!o.video || !obs_output_get_video_encoder(o.output))
+		return "no video encoder";
+	if (!g_audio || !obs_output_get_audio_encoder(o.output, 0))
+		return "no audio encoder";
+	const char *id = o.video ? obs_encoder_get_id(o.video) : nullptr;
+	return std::string("OBS refused and did not say why") + (id ? std::string(" (") + id + ")" : "");
+}
+
 bool StartIndex(size_t i)
 {
 	if (i >= g_outs.size())
@@ -339,22 +365,88 @@ bool StartIndex(size_t i)
 		o.want = true;
 		return true;
 	}
-	// Retry: stock OBS may still be finishing handshake on 127.0.0.1:1935.
-	for (int attempt = 1; attempt <= 6; ++attempt) {
-		if (obs_output_start(o.output)) {
-			o.want = true;
-			if (attempt > 1)
-				blog(LOG_INFO, "[livedelay] started encode for %s (retry %d)", o.name.c_str(), attempt);
-			else
-				blog(LOG_INFO, "[livedelay] started encode for %s", o.name.c_str());
-			return true;
-		}
-		const char *err = obs_output_get_last_error(o.output);
-		blog(LOG_WARNING, "[livedelay] start %s attempt %d/6 failed: %s", o.name.c_str(), attempt,
-		     err ? err : "?");
-		os_sleep_ms(150u * (unsigned)attempt);
+	if (obs_output_start(o.output)) {
+		o.want = true;
+		blog(LOG_INFO, "[livedelay] started encode for %s", o.name.c_str());
+		return true;
 	}
+	const std::string why = WhyStartFailed(o);
+	blog(LOG_WARNING, "[livedelay] start %s failed: %s", o.name.c_str(), why.c_str());
 	return false;
+}
+
+bool ProxyHasInput()
+{
+	int status = 0;
+	const std::string body = Request("GET", "/state", &status);
+	return status == 200 && JsonBool(body, "input");
+}
+
+void StopArmTimer()
+{
+	g_arm_pending = false;
+	if (g_arm)
+		g_arm->stop();
+}
+
+void StartReadyPlatforms()
+{
+	Settings s = Settings::Load(ConfigPath());
+	bool any_left = false;
+	for (size_t i = 0; i < s.dests.size() && i < g_outs.size(); ++i) {
+		Destination &d = s.dests[i];
+		d.enhanced_broadcasting = false;
+		const bool ready = d.enabled && !d.url.empty() && !d.key.empty();
+		if (!ready && !g_outs[i].want)
+			continue;
+		if (g_outs[i].want && g_outs[i].output && obs_output_active(g_outs[i].output))
+			continue;
+		if (!StartIndex(i)) {
+			any_left = true;
+			continue;
+		}
+		const std::string path = "/dest/start?i=" + std::to_string(i);
+		int status = 0;
+		Request("POST", path, &status);
+		if (status != 200)
+			blog(LOG_WARNING, "[livedelay] dest/start i=%zu HTTP %d", i, status);
+	}
+	if (!any_left)
+		StopArmTimer();
+}
+
+void OnArmTick()
+{
+	if (!g_arm_pending) {
+		StopArmTimer();
+		return;
+	}
+	g_arm_waited_ms += 250;
+	const bool streaming = obs_frontend_streaming_active();
+	const bool input = ProxyHasInput();
+	if (!streaming && !input && g_arm_waited_ms >= 1500) {
+		blog(LOG_INFO, "[livedelay] OBS did not stay live; platform start cancelled");
+		StopArmTimer();
+		return;
+	}
+	if (!input && g_arm_waited_ms < 4000)
+		return;
+	if (!input)
+		blog(LOG_WARNING, "[livedelay] starting platforms without a signal from OBS (waited %d ms)", g_arm_waited_ms);
+	StartReadyPlatforms();
+	if (g_arm_pending && g_arm_waited_ms >= 4000) {
+		blog(LOG_WARNING, "[livedelay] platform start still failing after %d ms", g_arm_waited_ms);
+		StopArmTimer();
+	}
+}
+
+void EnsureArmTimer()
+{
+	if (g_arm)
+		return;
+	g_arm = new QTimer;
+	g_arm->setInterval(250);
+	QObject::connect(g_arm, &QTimer::timeout, g_arm, [] { OnArmTick(); });
 }
 
 void StopIndex(size_t i)
@@ -402,6 +494,9 @@ void OutputsShutdown()
 	if (!g_inited)
 		return;
 	obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
+	StopArmTimer();
+	delete g_arm;
+	g_arm = nullptr;
 	ReleaseAll();
 	g_inited = false;
 }
@@ -409,34 +504,21 @@ void OutputsShutdown()
 void OutputsOnStreamingStarting()
 {
 	// Last chance before we encode to platforms: stock Multitrack off + key=_idle.
+	// Do not start encoders or sleep here. This callback runs before OBS connects
+	// to LiveDelay; blocking it is why platform start failed and _idle arrived after.
 	HardenObsForLiveDelay();
 	if (g_outs.empty())
 		Rebuild(false);
-	// Let stock OBS finish publishing to _idle before ld0… connect (avoids race).
-	os_sleep_ms(350);
-	Settings s = Settings::Load(ConfigPath());
-	for (size_t i = 0; i < s.dests.size() && i < g_outs.size(); ++i) {
-		Destination &d = s.dests[i];
-		// Never honor enhanced_broadcasting on the wire (see BuildOne).
-		d.enhanced_broadcasting = false;
-		// Enabled + URL + key → always follow OBS Start Streaming.
-		// (autostart=no used to leave only _idle discard → dock "no signal".)
-		const bool ready = d.enabled && !d.url.empty() && !d.key.empty();
-		if (!ready && !(g_outs[i].want))
-			continue;
-		if (!StartIndex(i))
-			continue;
-		// Turn on Rust egress (Dest.want); encode alone only fills the delay buffer.
-		const std::string path = "/dest/start?i=" + std::to_string(i);
-		int status = 0;
-		Request("POST", path, &status);
-		if (status != 200)
-			blog(LOG_WARNING, "[livedelay] dest/start i=%zu HTTP %d", i, status);
-	}
+	g_arm_pending = true;
+	g_arm_waited_ms = 0;
+	EnsureArmTimer();
+	blog(LOG_INFO, "[livedelay] OBS is starting — platforms connect after the stream reaches LiveDelay");
+	g_arm->start();
 }
 
 void OutputsOnStreamingStopping()
 {
+	StopArmTimer();
 	for (size_t i = 0; i < g_outs.size(); ++i)
 		StopIndex(i);
 }

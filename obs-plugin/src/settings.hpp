@@ -13,6 +13,8 @@ enum class EncodeMode { Auto, Recommended, TwitchPartner, Obs, Manual };
 // livedelay.ini as the settings window sees it. The proxy reads the same file.
 struct Destination {
 	std::string name, url, key;
+	/// "auto", the ingest's display name, or empty. Not the dial address.
+	std::string server_pick;
 	bool enabled = true;
 	bool autostart = true;
 	std::string service; // name from OBS's service list, empty = custom server

@@ -1,4 +1,5 @@
 #include "settings.hpp"
+#include "serverpick.hpp"
 #include "hotkeys.hpp"
 #include "update.hpp"
 #include "version.hpp"
@@ -119,6 +120,8 @@ Settings Settings::Load(const std::string &path)
 		if (dest) {
 			if (k == "url")
 				dest->url = v;
+			else if (k == "server")
+				dest->server_pick = v;
 			else if (k == "service")
 				dest->service = v;
 			else if (k == "key")
@@ -215,7 +218,10 @@ std::string Settings::Text() const
 	for (size_t i = 0; i < dests.size(); ++i) {
 		const Destination &d = dests[i];
 		const std::string ingest = d.ingest_key.empty() ? ("ld" + std::to_string(i)) : d.ingest_key;
-		o << "\n[dest " << d.name << "]\nservice = " << d.service << "\nurl = " << d.url << "\nkey = " << d.key
+		o << "\n[dest " << d.name << "]\nservice = " << d.service << "\nurl = " << d.url;
+		if (!d.server_pick.empty())
+			o << "\nserver = " << d.server_pick;
+		o << "\nkey = " << d.key
 		  << "\ningest_key = " << ingest << "\nencode_mode = " << EncodeModeKey(d.encode_mode)
 		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\nautostart = " << (d.autostart ? "yes" : "no");
 		if (d.encode_mode == EncodeMode::Manual) {
@@ -767,7 +773,7 @@ public:
 		connect(show, &QCheckBox::toggled, this,
 			[this](bool on) { key_->setEchoMode(on ? QLineEdit::Normal : QLineEdit::Password); });
 		connect(service_, &QComboBox::activated, this, [this](int i) {
-			FillServers(i > 0 ? service_->itemText(i) : QString(), QString());
+			FillServers(i > 0 ? service_->itemText(i) : QString(), QString(), QString());
 			if (i > 0 && server_->count() > 0)
 				url_->setText(server_->itemData(0).toString());
 			if (i > 0 && (name_->text().trimmed().isEmpty() || name_->text() == T("Settings.NewPlatform"))) {
@@ -896,8 +902,10 @@ private:
 			overlay_ = next;
 	}
 
-	// Lists the servers (regions) of `service`, selecting the one matching `url`.
-	void FillServers(const QString &service, const QString &url)
+	// Lists the servers (regions) of `service`. `pick` is the saved row
+	// ("auto" or a server name). Auto shares its URL with the closest ingest,
+	// so a URL match alone would snap the combo back to that ingest.
+	void FillServers(const QString &service, const QString &url, const QString &pick)
 	{
 		server_->clear();
 		const Service *sv = service.isEmpty() ? nullptr : FindService(service);
@@ -905,19 +913,25 @@ private:
 		url_->setReadOnly(false);
 		keyLink_->setVisible(sv && !sv->key_link.isEmpty());
 		if (!sv) {
-			server_->addItem(T("Settings.CustomServer"));
+			server_->addItem(T("Settings.CustomServer"), url);
+			server_->setItemData(0, QString("custom"), Qt::UserRole + 1);
 			return;
 		}
 		if (!sv->key_link.isEmpty())
 			keyLink_->setText(QString("<a href=\"%1\">%2</a>").arg(sv->key_link, T("Settings.GetKey")));
-		int match = -1;
+		std::vector<ServerRow> rows;
+		const QString autoName = T("Settings.AutoServer");
 		for (const Server &srv : sv->servers) {
-			if (srv.url == url)
-				match = server_->count();
+			const bool isAuto = srv.name == autoName;
+			const int i = server_->count();
 			server_->addItem(srv.name, srv.url);
+			server_->setItemData(i, isAuto ? QString("auto") : srv.name, Qt::UserRole + 1);
+			rows.push_back({isAuto, S(srv.name), S(srv.url)});
 		}
+		int match = PickServerRow(rows, S(pick), S(url));
 		if (match < 0 && !url.isEmpty()) {
 			server_->insertItem(0, T("Settings.CustomServer"), url);
+			server_->setItemData(0, QString("custom"), Qt::UserRole + 1);
 			match = 0;
 		}
 		server_->setCurrentIndex(match < 0 ? 0 : match);
@@ -930,6 +944,9 @@ private:
 		Destination &d = s_.dests[current_];
 		d.name = S(name_->text()).empty() ? "Platform" : S(name_->text());
 		d.url = S(url_->text());
+		d.server_pick = S(server_->currentData(Qt::UserRole + 1).toString());
+		if (d.server_pick == "custom")
+			d.server_pick.clear();
 		d.key = S(key_->text());
 		d.service = service_->currentIndex() > 0 ? S(service_->currentText()) : "";
 		d.enabled = true;
@@ -1084,7 +1101,14 @@ private:
 				svc = found->name;
 		int idx = svc.isEmpty() ? 0 : service_->findText(svc);
 		service_->setCurrentIndex(idx < 0 ? 0 : idx);
-		FillServers(idx > 0 ? svc : QString(), Q(d.url));
+		FillServers(idx > 0 ? svc : QString(), Q(d.url), Q(d.server_pick));
+		// Auto's saved address is a snapshot of whichever ingest was closest.
+		// Show the current one, so the next save follows "Automatycznie".
+		if (server_->currentData(Qt::UserRole + 1).toString() == "auto") {
+			const QString resolved = server_->currentData().toString();
+			if (!resolved.isEmpty())
+				url_->setText(resolved);
+		}
 		key_->setText(Q(d.key));
 		enabled_->setChecked(d.enabled);
 		autostart_->setChecked(d.autostart && d.enabled);
