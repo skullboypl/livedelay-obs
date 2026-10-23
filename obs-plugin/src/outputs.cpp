@@ -26,6 +26,7 @@ struct DestOutput {
 	obs_encoder_t *vod_audio = nullptr;
 	obs_service_t *service = nullptr;
 	bool want = false;
+	bool tried_x264 = false;
 };
 
 std::vector<DestOutput> g_outs;
@@ -36,6 +37,7 @@ bool g_inited = false;
 QTimer *g_arm = nullptr;
 bool g_arm_pending = false;
 int g_arm_waited_ms = 0;
+int g_arm_noted = 0;
 
 void EnableCustomServerVodTrack()
 {
@@ -230,13 +232,17 @@ bool EnsureVodAudio(DestOutput &o, int kbps)
 	return true;
 }
 
-bool BuildOne(DestOutput &o, const Destination &d, size_t index)
+bool BuildOne(DestOutput &o, const Destination &d, size_t index, const char *force_encoder = nullptr)
 {
+	const bool keep_fallback = o.tried_x264;
 	ReleaseOne(o);
+	o.tried_x264 = keep_fallback;
 	o.name = d.name;
 	o.ingest_key = d.ingest_key.empty() ? ("ld" + std::to_string(index)) : d.ingest_key;
 
-	const EncodeSettings enc = ResolveEncode(d);
+	EncodeSettings enc = ResolveEncode(d);
+	if (force_encoder)
+		enc.video_encoder_id = QString::fromUtf8(force_encoder);
 	if (!EnsureAudio(enc.audio_kbps))
 		return false;
 
@@ -302,6 +308,7 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index)
 }
 
 bool StartIndex(size_t i);
+bool ProxyHasInput();
 
 void Rebuild(bool restart_live)
 {
@@ -330,23 +337,50 @@ void Rebuild(bool restart_live)
 	}
 }
 
-std::string WhyStartFailed(const DestOutput &o)
+std::string StartFacts(const DestOutput &o, bool input, bool streaming)
 {
-	if (!o.output)
-		return "no output object";
-	if (const char *err = obs_output_get_last_error(o.output); err && *err)
-		return err;
-	if (o.video)
-		if (const char *err = obs_encoder_get_last_error(o.video); err && *err)
-			return err;
-	if (!obs_output_get_service(o.output))
-		return "no service";
-	if (!o.video || !obs_output_get_video_encoder(o.output))
-		return "no video encoder";
-	if (!g_audio || !obs_output_get_audio_encoder(o.output, 0))
-		return "no audio encoder";
-	const char *id = o.video ? obs_encoder_get_id(o.video) : nullptr;
-	return std::string("OBS refused and did not say why") + (id ? std::string(" (") + id + ")" : "");
+	std::string s;
+	s += input ? "input=yes" : "input=no";
+	s += streaming ? " streaming=yes" : " streaming=no";
+	s += obs_get_video() ? " mix=yes" : " mix=NO";
+	s += obs_get_audio() ? " audio_mix=yes" : " audio_mix=NO";
+	if (!o.video) {
+		s += " enc=NONE";
+	} else {
+		const char *id = obs_encoder_get_id(o.video);
+		s += " enc=";
+		s += id ? id : "?";
+		s += obs_encoder_video(o.video) ? " enc_video=yes" : " enc_video=NO";
+		if (const char *err = obs_encoder_get_last_error(o.video); err && *err) {
+			s += " enc_err=\"";
+			s += err;
+			s += "\"";
+		}
+	}
+	if (!g_audio)
+		s += " aenc=NONE";
+	else if (const char *id = obs_encoder_get_id(g_audio)) {
+		s += " aenc=";
+		s += id;
+	}
+	const char *url = o.service ? obs_service_get_connect_info(o.service, OBS_SERVICE_CONNECT_INFO_SERVER_URL) : nullptr;
+	s += (url && *url) ? " service=yes" : " service=NO";
+	s += obs_nv12_tex_active() ? " nv12tex=yes" : " nv12tex=no";
+	if (o.output)
+		if (const char *err = obs_output_get_last_error(o.output); err && *err) {
+			s += " out_err=\"";
+			s += err;
+			s += "\"";
+		}
+	return s;
+}
+
+void RebindMedia(DestOutput &o)
+{
+	if (o.video && obs_get_video() && !obs_encoder_video(o.video))
+		obs_encoder_set_video(o.video, obs_get_video());
+	if (g_audio && obs_get_audio())
+		obs_encoder_set_audio(g_audio, obs_get_audio());
 }
 
 bool StartIndex(size_t i)
@@ -365,14 +399,34 @@ bool StartIndex(size_t i)
 		o.want = true;
 		return true;
 	}
+	RebindMedia(o);
 	if (obs_output_start(o.output)) {
 		o.want = true;
 		blog(LOG_INFO, "[livedelay] started encode for %s", o.name.c_str());
 		return true;
 	}
-	const std::string why = WhyStartFailed(o);
-	blog(LOG_WARNING, "[livedelay] start %s failed: %s", o.name.c_str(), why.c_str());
+	const bool input = ProxyHasInput();
+	const std::string facts = StartFacts(o, input, obs_frontend_streaming_active());
+	blog(LOG_WARNING, "[livedelay] start %s failed: %s", o.name.c_str(), facts.c_str());
 	return false;
+}
+
+bool FallbackX264(size_t i)
+{
+	if (i >= g_outs.size() || g_outs[i].tried_x264)
+		return false;
+	const char *id = g_outs[i].video ? obs_encoder_get_id(g_outs[i].video) : nullptr;
+	if (id && std::string(id) == "obs_x264")
+		return false;
+	if (!obs_encoder_get_display_name("obs_x264"))
+		return false;
+	Settings s = Settings::Load(ConfigPath());
+	if (i >= s.dests.size())
+		return false;
+	g_outs[i].tried_x264 = true;
+	blog(LOG_WARNING, "[livedelay] %s: retrying on obs_x264 after %s refused", g_outs[i].name.c_str(),
+	     id ? id : "?");
+	return BuildOne(g_outs[i], s.dests[i], i, "obs_x264");
 }
 
 bool ProxyHasInput()
@@ -402,8 +456,12 @@ void StartReadyPlatforms()
 		if (g_outs[i].want && g_outs[i].output && obs_output_active(g_outs[i].output))
 			continue;
 		if (!StartIndex(i)) {
-			any_left = true;
-			continue;
+			if (FallbackX264(i) && StartIndex(i)) {
+				// x264 accepted the output; fall through and arm egress.
+			} else {
+				any_left = true;
+				continue;
+			}
 		}
 		const std::string path = "/dest/start?i=" + std::to_string(i);
 		int status = 0;
@@ -424,17 +482,29 @@ void OnArmTick()
 	g_arm_waited_ms += 250;
 	const bool streaming = obs_frontend_streaming_active();
 	const bool input = ProxyHasInput();
-	if (!streaming && !input && g_arm_waited_ms >= 1500) {
-		blog(LOG_INFO, "[livedelay] OBS did not stay live; platform start cancelled");
-		StopArmTimer();
+	if (!streaming && !input) {
+		if (g_arm_waited_ms >= 2000) {
+			blog(LOG_INFO, "[livedelay] OBS did not stay live; platform start cancelled");
+			StopArmTimer();
+		}
 		return;
 	}
-	if (!input && g_arm_waited_ms < 4000)
+	// No picture from OBS yet. Starting an encoder now fails with an empty
+	// reason and looks like an NVENC error. Keep waiting while OBS is live.
+	if (!input) {
+		if ((g_arm_waited_ms >= 4000 && g_arm_noted < 1) || (g_arm_waited_ms >= 12000 && g_arm_noted < 2)) {
+			g_arm_noted = g_arm_waited_ms >= 12000 ? 2 : 1;
+			blog(LOG_WARNING, "[livedelay] OBS shows streaming but LiveDelay has no video yet (waited %d ms)",
+			     g_arm_waited_ms);
+		}
+		if (g_arm_waited_ms >= 20000) {
+			blog(LOG_WARNING, "[livedelay] giving up: no video from OBS after %d ms", g_arm_waited_ms);
+			StopArmTimer();
+		}
 		return;
-	if (!input)
-		blog(LOG_WARNING, "[livedelay] starting platforms without a signal from OBS (waited %d ms)", g_arm_waited_ms);
+	}
 	StartReadyPlatforms();
-	if (g_arm_pending && g_arm_waited_ms >= 4000) {
+	if (g_arm_pending && g_arm_waited_ms >= 20000) {
 		blog(LOG_WARNING, "[livedelay] platform start still failing after %d ms", g_arm_waited_ms);
 		StopArmTimer();
 	}
@@ -511,6 +581,7 @@ void OutputsOnStreamingStarting()
 		Rebuild(false);
 	g_arm_pending = true;
 	g_arm_waited_ms = 0;
+	g_arm_noted = 0;
 	EnsureArmTimer();
 	blog(LOG_INFO, "[livedelay] OBS is starting — platforms connect after the stream reaches LiveDelay");
 	g_arm->start();
