@@ -73,7 +73,7 @@ void OnLog(int level, const char *format, va_list args, void *)
 	const bool ours = std::strstr(buf, "[livedelay]") != nullptr;
 	const bool obs_hint = std::strstr(buf, "obs-nvenc") || std::strstr(buf, "NVENC") || std::strstr(buf, "no media") ||
 			      std::strstr(buf, "nv12") || std::strstr(buf, "Too many") || std::strstr(buf, "x264");
-	const bool obs_warn = level <= LOG_WARNING && (std::strstr(buf, "encoder") || std::strstr(buf, "Output"));
+	const bool obs_warn = level <= LOG_WARNING && (std::strstr(buf, "ncoder") || std::strstr(buf, "Output"));
 	if (!ours && !obs_hint && !obs_warn)
 		return;
 	const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();

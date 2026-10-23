@@ -359,9 +359,19 @@ std::string StartFacts(const DestOutput &o, bool input, bool streaming)
 	}
 	if (!g_audio)
 		s += " aenc=NONE";
-	else if (const char *id = obs_encoder_get_id(g_audio)) {
+	else {
+		const char *id = obs_encoder_get_id(g_audio);
+		const char *codec = obs_encoder_get_codec(g_audio);
 		s += " aenc=";
-		s += id;
+		s += id ? id : "?";
+		s += " aenc_codec=";
+		s += codec && *codec ? codec : "NONE";
+		s += obs_encoder_audio(g_audio) ? " aenc_audio=yes" : " aenc_audio=NO";
+		if (const char *err = obs_encoder_get_last_error(g_audio); err && *err) {
+			s += " aenc_err=\"";
+			s += err;
+			s += "\"";
+		}
 	}
 	const char *url = o.service ? obs_service_get_connect_info(o.service, OBS_SERVICE_CONNECT_INFO_SERVER_URL) : nullptr;
 	s += (url && *url) ? " service=yes" : " service=NO";

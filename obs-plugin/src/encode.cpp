@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
+#include <initializer_list>
 
 namespace livedelay {
 
@@ -160,18 +162,45 @@ QString ForceClassicH264(const QString &id)
 	return QStringLiteral("obs_x264");
 }
 
+// True when `id` is a registered encoder of `type`. OBS still returns an
+// encoder object for an unknown id, and that object can never start.
+bool RealEncoder(const char *id, obs_encoder_type type)
+{
+	return id && *id && obs_get_encoder_codec(id) && obs_get_encoder_type(id) == type;
+}
+
+QString FirstAudioEncoder(std::initializer_list<const char *> prefer)
+{
+	for (const char *id : prefer)
+		if (RealEncoder(id, OBS_ENCODER_AUDIO))
+			return QString::fromUtf8(id);
+	const char *id = nullptr;
+	for (size_t i = 0; obs_enum_encoder_types(i, &id); ++i)
+		if (RealEncoder(id, OBS_ENCODER_AUDIO) && std::strcmp(obs_get_encoder_codec(id), "aac") == 0)
+			return QString::fromUtf8(id);
+	return QStringLiteral("ffmpeg_aac");
+}
+
 QString ObsStreamAudioEncoderId()
 {
 	config_t *cfg = obs_frontend_get_profile_config();
 	if (!cfg)
-		return "ffmpeg_aac";
+		return FirstAudioEncoder({"ffmpeg_aac", "libfdk_aac", "CoreAudio_AAC"});
 	const char *mode = config_get_string(cfg, "Output", "Mode");
-	if (mode && std::string(mode) == "Advanced") {
-		const char *id = config_get_string(cfg, "AdvOut", "AudioEncoder");
-		return id && *id ? QString::fromUtf8(id) : QString("ffmpeg_aac");
-	}
-	const char *id = config_get_string(cfg, "SimpleOutput", "StreamAudioEncoder");
-	return id && *id ? QString::fromUtf8(id) : QString("ffmpeg_aac");
+	const bool advanced = mode && std::string(mode) == "Advanced";
+	const char *raw = advanced ? config_get_string(cfg, "AdvOut", "AudioEncoder")
+				   : config_get_string(cfg, "SimpleOutput", "StreamAudioEncoder");
+	// Simple mode stores the codec name ("aac" / "opus"), not an encoder id.
+	// Passing "aac" to obs_audio_encoder_create builds a dead encoder, so every
+	// platform start fails after the video encoder with no error text.
+	if (!advanced && raw && std::strcmp(raw, "opus") == 0)
+		return FirstAudioEncoder({"ffmpeg_opus"});
+	if (RealEncoder(raw, OBS_ENCODER_AUDIO))
+		return QString::fromUtf8(raw);
+	const QString resolved = FirstAudioEncoder({"ffmpeg_aac", "libfdk_aac", "CoreAudio_AAC"});
+	blog(LOG_INFO, "[livedelay] audio setting \"%s\" is not an encoder id, using %s", raw ? raw : "",
+	     resolved.toUtf8().constData());
+	return resolved;
 }
 
 EncodeSettings ResolveEncode(const Destination &d)
