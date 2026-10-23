@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(livedelay-obs VERSION 1.0.27 LANGUAGES CXX)
+project(livedelay-obs VERSION 1.0.28 LANGUAGES CXX)
 
 # Built against OBS 31 headers and import libraries generated from the installed
 # obs.dll / obs-frontend-api.dll (see ../../deps), plus OBS's own prebuilt Qt 6.6.3.
