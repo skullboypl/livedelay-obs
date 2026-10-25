@@ -23,14 +23,20 @@ struct DestOutput {
 	obs_output_t *output = nullptr;
 	obs_encoder_t *video = nullptr;
 	std::vector<obs_encoder_t *> extra_video; // EB ladder (idx 1…)
-	obs_encoder_t *vod_audio = nullptr;
+	obs_encoder_t *audio = nullptr; // pooled, not owned
 	obs_service_t *service = nullptr;
 	bool want = false;
 	bool tried_x264 = false;
 };
 
+struct PooledAudio {
+	size_t mixer = 0;
+	int kbps = 0;
+	obs_encoder_t *enc = nullptr;
+};
+
 std::vector<DestOutput> g_outs;
-obs_encoder_t *g_audio = nullptr;
+std::vector<PooledAudio> g_audio;
 bool g_inited = false;
 // Platform encoders must not start inside STREAMING_STARTING: OBS has not
 // connected to this proxy yet, and sleeping there blocks that connection.
@@ -52,43 +58,12 @@ void EnableCustomServerVodTrack()
 	}
 }
 
-// When a dest wants VOD audio, also flip AdvOut VodTrack on (Advanced mode only).
-void EnsureAdvOutVodTrack()
-{
-	config_t *cfg = obs_frontend_get_profile_config();
-	if (!cfg)
-		return;
-	const char *mode = config_get_string(cfg, "Output", "Mode");
-	if (!(mode && std::string(mode) == "Advanced")) {
-		blog(LOG_WARNING, "[livedelay] VOD audio needs OBS Output mode Advanced + Vod Track");
-		return;
-	}
-	bool changed = false;
-	if (!config_get_bool(cfg, "AdvOut", "VodTrackEnabled")) {
-		config_set_bool(cfg, "AdvOut", "VodTrackEnabled", true);
-		changed = true;
-	}
-	int live = int(config_get_int(cfg, "AdvOut", "TrackIndex"));
-	int vod = int(config_get_int(cfg, "AdvOut", "VodTrackIndex"));
-	if (vod < 1 || vod > 6)
-		vod = 2;
-	if (vod == live) {
-		vod = live == 2 ? 1 : 2;
-		config_set_int(cfg, "AdvOut", "VodTrackIndex", vod);
-		changed = true;
-	}
-	if (changed) {
-		config_save_safe(cfg, "tmp", nullptr);
-		blog(LOG_INFO, "[livedelay] enabled AdvOut VodTrack (live=%d vod=%d)", live, vod);
-	}
-	EnableCustomServerVodTrack();
-}
-
 void ReleaseOne(DestOutput &o)
 {
 	if (o.output) {
 		if (obs_output_active(o.output))
 			obs_output_force_stop(o.output);
+		obs_output_set_audio_encoder(o.output, nullptr, 0);
 		obs_output_set_audio_encoder(o.output, nullptr, 1);
 		obs_output_release(o.output);
 		o.output = nullptr;
@@ -102,10 +77,7 @@ void ReleaseOne(DestOutput &o)
 			obs_encoder_release(e);
 	}
 	o.extra_video.clear();
-	if (o.vod_audio) {
-		obs_encoder_release(o.vod_audio);
-		o.vod_audio = nullptr;
-	}
+	o.audio = nullptr;
 	if (o.service) {
 		obs_service_release(o.service);
 		o.service = nullptr;
@@ -117,10 +89,11 @@ void ReleaseAll()
 	for (DestOutput &o : g_outs)
 		ReleaseOne(o);
 	g_outs.clear();
-	if (g_audio) {
-		obs_encoder_release(g_audio);
-		g_audio = nullptr;
+	for (PooledAudio &p : g_audio) {
+		if (p.enc)
+			obs_encoder_release(p.enc);
 	}
+	g_audio.clear();
 }
 
 obs_data_t *VideoSettings(const EncodeSettings &e, int kbps_override = 0)
@@ -195,41 +168,61 @@ bool VodMixer(size_t &out_mixer)
 	return true;
 }
 
-bool EnsureAudio(int kbps)
+bool DestIsTwitch(const Destination &d)
 {
-	if (g_audio)
-		return true;
-	const QString id = ObsStreamAudioEncoderId();
-	obs_data_t *as = AudioSettings(kbps > 0 ? kbps : 160);
-	g_audio = obs_audio_encoder_create(id.toUtf8().constData(), "livedelay_audio", as, LiveAudioMixer(), nullptr);
-	obs_data_release(as);
-	if (!g_audio) {
-		blog(LOG_ERROR, "[livedelay] could not create audio encoder %s", id.toUtf8().constData());
-		return false;
-	}
-	obs_encoder_set_audio(g_audio, obs_get_audio());
-	return true;
+	const QString svc = QString::fromStdString(d.service);
+	const QString url = QString::fromStdString(d.url);
+	return svc.contains(QStringLiteral("twitch"), Qt::CaseInsensitive) ||
+	       url.contains(QStringLiteral("twitch"), Qt::CaseInsensitive) ||
+	       url.contains(QStringLiteral("live-video.net"), Qt::CaseInsensitive);
 }
 
-bool EnsureVodAudio(DestOutput &o, int kbps)
+size_t ResolveLiveMixer(const Destination &d)
 {
-	if (o.vod_audio)
-		return true;
-	size_t mixer = 0;
-	if (!VodMixer(mixer)) {
-		blog(LOG_WARNING, "[livedelay] VOD audio requested but OBS AdvOut VodTrack is off or same as live track");
-		return false;
+	if (d.audio_track >= 1 && d.audio_track <= 6)
+		return size_t(d.audio_track - 1);
+	return LiveAudioMixer();
+}
+
+// Twitch stores audio encoder index 1 as the VOD. It must be a different mixer than live.
+int ResolveVodTrack(const Destination &d, int live_track)
+{
+	if (!DestIsTwitch(d))
+		return 0;
+	int vod = d.vod_track;
+	if (vod < 0) {
+		size_t mixer = 0;
+		if (VodMixer(mixer))
+			vod = int(mixer) + 1;
+		else
+			vod = live_track == 2 ? 1 : 2;
 	}
-	EnableCustomServerVodTrack();
+	if (vod < 1 || vod > 6 || vod == live_track)
+		return 0;
+	return vod;
+}
+
+obs_encoder_t *AudioOn(size_t mixer, int kbps)
+{
+	if (kbps <= 0)
+		kbps = 160;
+	for (const PooledAudio &p : g_audio) {
+		if (p.mixer == mixer && p.kbps == kbps && p.enc)
+			return p.enc;
+	}
 	const QString id = ObsStreamAudioEncoderId();
-	obs_data_t *as = AudioSettings(kbps > 0 ? kbps : 160);
-	const std::string name = "livedelay_vod_" + o.ingest_key;
-	o.vod_audio = obs_audio_encoder_create(id.toUtf8().constData(), name.c_str(), as, mixer, nullptr);
+	obs_data_t *as = AudioSettings(kbps);
+	const std::string name = "livedelay_a" + std::to_string(mixer) + "_" + std::to_string(kbps);
+	obs_encoder_t *enc = obs_audio_encoder_create(id.toUtf8().constData(), name.c_str(), as, mixer, nullptr);
 	obs_data_release(as);
-	if (!o.vod_audio)
-		return false;
-	obs_encoder_set_audio(o.vod_audio, obs_get_audio());
-	return true;
+	if (!enc) {
+		blog(LOG_ERROR, "[livedelay] could not create audio encoder %s mixer %d", id.toUtf8().constData(),
+		     int(mixer) + 1);
+		return nullptr;
+	}
+	obs_encoder_set_audio(enc, obs_get_audio());
+	g_audio.push_back(PooledAudio{mixer, kbps, enc});
+	return enc;
 }
 
 bool BuildOne(DestOutput &o, const Destination &d, size_t index, const char *force_encoder = nullptr)
@@ -243,8 +236,17 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index, const char *for
 	EncodeSettings enc = ResolveEncode(d);
 	if (force_encoder)
 		enc.video_encoder_id = QString::fromUtf8(force_encoder);
-	if (!EnsureAudio(enc.audio_kbps))
+	const size_t liveMixer = ResolveLiveMixer(d);
+	const int vodTrack = ResolveVodTrack(d, int(liveMixer) + 1);
+	o.audio = AudioOn(liveMixer, enc.audio_kbps);
+	if (!o.audio)
 		return false;
+	obs_encoder_t *vodEnc = nullptr;
+	if (vodTrack > 0) {
+		vodEnc = AudioOn(size_t(vodTrack - 1), enc.audio_kbps);
+		if (!vodEnc)
+			blog(LOG_WARNING, "[livedelay] VOD track %d encoder failed for %s", vodTrack, o.name.c_str());
+	}
 
 	obs_data_t *vs = VideoSettings(enc);
 	const std::string vname = "livedelay_v_" + o.ingest_key;
@@ -282,7 +284,7 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index, const char *for
 	}
 	obs_output_set_service(o.output, o.service);
 	obs_output_set_video_encoder(o.output, o.video);
-	obs_output_set_audio_encoder(o.output, g_audio, 0);
+	obs_output_set_audio_encoder(o.output, o.audio, 0);
 
 	// NEVER attach obs_output_set_video_encoder2 for stock Twitch/YouTube RTMP.
 	// Multi-video Enhanced RTMP without Twitch GoLive produces unplayable media
@@ -295,15 +297,13 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index, const char *for
 		     o.name.c_str());
 	}
 
-	if (d.vod_audio) {
-		EnsureAdvOutVodTrack();
-		if (EnsureVodAudio(o, enc.audio_kbps))
-			obs_output_set_audio_encoder(o.output, o.vod_audio, 1);
-	}
+	if (vodEnc)
+		obs_output_set_audio_encoder(o.output, vodEnc, 1);
 
-	blog(LOG_INFO, "[livedelay] ready %s → %s key=%s (%s %d kb/s)%s%s", o.name.c_str(), server.c_str(),
-	     o.ingest_key.c_str(), enc.video_encoder_id.toUtf8().constData(), enc.video_kbps,
-	     d.vod_audio ? " +VOD" : "", d.enhanced_broadcasting ? " +EB(ignored)" : "");
+	blog(LOG_INFO, "[livedelay] ready %s → %s key=%s (%s %d kb/s) audio=%d%s%s", o.name.c_str(), server.c_str(),
+	     o.ingest_key.c_str(), enc.video_encoder_id.toUtf8().constData(), enc.video_kbps, int(liveMixer) + 1,
+	     vodEnc ? (std::string(" vod=") + std::to_string(vodTrack)).c_str() : "",
+	     d.enhanced_broadcasting ? " +EB(ignored)" : "");
 	return true;
 }
 
@@ -357,17 +357,17 @@ std::string StartFacts(const DestOutput &o, bool input, bool streaming)
 			s += "\"";
 		}
 	}
-	if (!g_audio)
+	if (!o.audio)
 		s += " aenc=NONE";
 	else {
-		const char *id = obs_encoder_get_id(g_audio);
-		const char *codec = obs_encoder_get_codec(g_audio);
+		const char *id = obs_encoder_get_id(o.audio);
+		const char *codec = obs_encoder_get_codec(o.audio);
 		s += " aenc=";
 		s += id ? id : "?";
 		s += " aenc_codec=";
 		s += codec && *codec ? codec : "NONE";
-		s += obs_encoder_audio(g_audio) ? " aenc_audio=yes" : " aenc_audio=NO";
-		if (const char *err = obs_encoder_get_last_error(g_audio); err && *err) {
+		s += obs_encoder_audio(o.audio) ? " aenc_audio=yes" : " aenc_audio=NO";
+		if (const char *err = obs_encoder_get_last_error(o.audio); err && *err) {
 			s += " aenc_err=\"";
 			s += err;
 			s += "\"";
@@ -389,8 +389,12 @@ void RebindMedia(DestOutput &o)
 {
 	if (o.video && obs_get_video() && !obs_encoder_video(o.video))
 		obs_encoder_set_video(o.video, obs_get_video());
-	if (g_audio && obs_get_audio())
-		obs_encoder_set_audio(g_audio, obs_get_audio());
+	if (obs_get_audio()) {
+		for (PooledAudio &p : g_audio) {
+			if (p.enc)
+				obs_encoder_set_audio(p.enc, obs_get_audio());
+		}
+	}
 }
 
 bool StartIndex(size_t i)

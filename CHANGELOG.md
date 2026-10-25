@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.30 – 2026-10-25
+
+- **No presence ping.** The plugin no longer phones home, and the site no longer shows how many copies are open.
+- **Audio track per platform.** Each destination picks OBS track 1–6 for what viewers hear. “Same as OBS” keeps Settings → Output → Audio Track.
+- **Twitch VOD track.** A different track is sent as the second AAC, so Twitch can keep it in the VOD and out of the way of the live mix. The sequence header is sent again after Arm / Activate / Cut.
+- **Tracks per source.** Settings → Audio assigns each OBS audio source to tracks 1–6.
+
 ## 1.0.9 – 2026-10-21
 
 - **One-command install:** `irm https://livedelay.vxh.pl/install.ps1 | iex` downloads the latest zip and installs into ProgramData (detects OBS / Steam / portable).

@@ -15,7 +15,6 @@
 #include "i18n.hpp"
 #include "log.hpp"
 #include "outputs.hpp"
-#include "presence.hpp"
 #include "settings.hpp"
 
 extern "C" {
@@ -87,14 +86,12 @@ bool obs_module_load(void)
 		if (dock)
 			dock->Retranslate();
 	});
-	livedelay::StartPresence();
 	blog(LOG_INFO, "[livedelay] loaded");
 	return true;
 }
 
 void obs_module_unload(void)
 {
-	livedelay::StopPresence();
 	obs_frontend_remove_save_callback(OnSave, nullptr);
 	livedelay::UnregisterHotkeys();
 	// OBS owns and deletes the dock widget.

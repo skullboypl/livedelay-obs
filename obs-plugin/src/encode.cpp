@@ -253,8 +253,6 @@ EncodeSettings ResolveEncode(const Destination &d)
 		e.summary = T("Encode.SummaryTwitchPartner").arg(e.video_kbps).arg(e.audio_kbps);
 		if (d.enhanced_broadcasting)
 			e.summary += " · " + T("Encode.SummaryEnhancedOn");
-		if (d.vod_audio)
-			e.summary += " · " + T("Encode.SummaryVodOn");
 		break;
 	}
 	case EncodeMode::Auto: {
@@ -303,6 +301,10 @@ EncodeSettings ResolveEncode(const Destination &d)
 			e.summary += QStringLiteral(" · %1x%2").arg(e.width).arg(e.height);
 		}
 	}
+	if (d.audio_track >= 1 && d.audio_track <= 6)
+		e.summary += QStringLiteral(" · ") + T("Encode.TrackN").arg(d.audio_track);
+	if (d.vod_track > 0 || d.vod_track < 0 || d.vod_audio)
+		e.summary += QStringLiteral(" · ") + T("Encode.SummaryVodOn");
 	return e;
 }
 

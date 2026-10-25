@@ -26,7 +26,14 @@ struct Destination {
 	std::string rate_control = "CBR";
 	uint32_t width = 0;
 	uint32_t height = 0;
-	/// Second AAC track for Twitch VOD (mixer from OBS AdvOut VodTrackIndex).
+	/// 0 = OBS Settings → Output stream track. 1–6 = that mixer is what viewers hear.
+	int audio_track = 0;
+	/// 0 = no VOD track. 1–6 = that mixer is Twitch's VOD AAC (output audio index 1).
+	/// -1 = old ini had vod_audio=yes and no explicit track.
+	int vod_track = 0;
+	/// True once the ini contained vod_track, so vod_audio=yes does not mean "legacy".
+	bool vod_track_set = false;
+	/// Kept in sync with vod_track > 0 so older builds still see the flag.
 	bool vod_audio = false;
 	/// Multiple video encodes (Partner ladder / Enhanced Broadcasting path).
 	bool enhanced_broadcasting = false;

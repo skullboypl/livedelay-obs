@@ -52,6 +52,33 @@ pub enum Mode {
     Delayed,
 }
 
+/// Legacy AAC sequence header, or Enhanced RTMP sequence start (track 0 or multitrack).
+fn push_audio_cfg(out: &mut Vec<Arc<Vec<u8>>>, data: &Arc<Vec<u8>>) {
+    if out.len() >= 6 || out.iter().any(|d| d.as_slice() == data.as_slice()) {
+        return;
+    }
+    out.push(data.clone());
+}
+
+fn audio_is_config(d: &[u8]) -> bool {
+    let b0 = d.first().copied().unwrap_or(0);
+    let fmt = b0 >> 4;
+    if fmt == 10 && d.get(1) == Some(&0) {
+        return true;
+    }
+    if fmt == 9 {
+        let pkt = b0 & 0x0f;
+        if pkt == 0 {
+            return true;
+        }
+        // Multitrack: inner packet type is the low nibble of the next byte. 0 = sequence start.
+        if pkt == 5 {
+            return d.get(1).copied().unwrap_or(0xff) & 0x0f == 0;
+        }
+    }
+    false
+}
+
 fn classify(kind: u8, d: &[u8]) -> (bool, bool) {
     let b0 = d.first().copied().unwrap_or(0);
     match kind {
@@ -66,11 +93,7 @@ fn classify(kind: u8, d: &[u8]) -> (bool, bool) {
             let config = avc_or_hevc && d.get(1) == Some(&0);
             (config, !config && b0 >> 4 == 1)
         }
-        MSG_AUDIO => {
-            let fmt = b0 >> 4;
-            let config = (fmt == 10 && d.get(1) == Some(&0)) || (fmt == 9 && b0 & 0x0f == 0);
-            (config, false)
-        }
+        MSG_AUDIO => (audio_is_config(d), false),
         _ => (true, false), // script data (onMetaData)
     }
 }
@@ -380,22 +403,35 @@ impl Engine {
         }
         // Metadata is not repeated: players treat a second onMetaData as a new data stream.
         cfg[0] = None;
-        let audios = self.sent_audio_cfgs.clone();
-        let fallback_audio = cfg[2].clone();
+        // Every distinct AAC sequence header (live track + Twitch VOD track) must go out
+        // again after a jump, or the second track never decodes.
+        let mut audio_cfgs: Vec<Arc<Vec<u8>>> = Vec::new();
+        for t in self.tags.range(..idx) {
+            if t.kind == MSG_AUDIO && t.config {
+                push_audio_cfg(&mut audio_cfgs, &t.data);
+            }
+        }
+        if let Some(t) = &self.evicted_cfg[2] {
+            if t.kind == MSG_AUDIO && t.config {
+                push_audio_cfg(&mut audio_cfgs, &t.data);
+            }
+        }
+        for a in &self.sent_audio_cfgs {
+            push_audio_cfg(&mut audio_cfgs, &a.data);
+        }
+        if audio_cfgs.is_empty() {
+            if let Some(t) = cfg[2].clone() {
+                push_audio_cfg(&mut audio_cfgs, &t.data);
+            }
+        }
         for t in cfg.into_iter().flatten() {
             if t.kind == MSG_AUDIO {
                 continue;
             }
             self.emit(OutTag { kind: t.kind, ts: next_out, key: false, config: true, data: t.data });
         }
-        if audios.is_empty() {
-            if let Some(t) = fallback_audio {
-                self.emit(OutTag { kind: t.kind, ts: next_out, key: false, config: true, data: t.data });
-            }
-        } else {
-            for a in audios {
-                self.emit(OutTag { kind: a.kind, ts: next_out, key: false, config: true, data: a.data });
-            }
+        for data in audio_cfgs {
+            self.emit(OutTag { kind: MSG_AUDIO, ts: next_out, key: false, config: true, data });
         }
     }
 
@@ -601,6 +637,23 @@ mod tests {
             e.push(MSG_VIDEO, ms as u32, video(f % 30 == 0), now);
             e.pump(now);
         }
+    }
+
+    #[test]
+    fn vod_sequence_header_is_resent_after_activate() {
+        let (mut e, mut rx) = setup();
+        let t0 = Instant::now();
+        e.push(MSG_AUDIO, 0, vec![0xaf, 0, 0x11, 0x90], t0);
+        // Enhanced RTMP multitrack sequence start, track id 1 (Twitch VOD).
+        e.push(MSG_AUDIO, 0, vec![0x95, 0x00, b'm', b'p', b'4', b'a', 1], t0);
+        e.push(MSG_VIDEO, 0, vec![0x17, 0, 0, 0, 0, 1], t0);
+        e.arm(Duration::from_secs(2)).unwrap();
+        feed(&mut e, t0, 0, 4);
+        e.activate(t0 + Duration::from_secs(4)).unwrap();
+        e.pump(t0 + Duration::from_secs(4));
+        let out = drain(&mut rx);
+        let vod = out.iter().filter(|t| t.config && t.data.first() == Some(&0x95)).count();
+        assert!(vod >= 2, "VOD sequence header resent on the delay jump, got {vod}");
     }
 
     #[test]

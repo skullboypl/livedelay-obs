@@ -146,8 +146,18 @@ Settings Settings::Load(const std::string &path)
 				dest->width = uint32_t(std::atoi(v.c_str()));
 			else if (k == "height")
 				dest->height = uint32_t(std::atoi(v.c_str()));
-			else if (k == "vod_audio")
+			else if (k == "audio_track") {
+				const int n = std::atoi(v.c_str());
+				dest->audio_track = (n >= 1 && n <= 6) ? n : 0;
+			} else if (k == "vod_track") {
+				const int n = std::atoi(v.c_str());
+				dest->vod_track = (n >= 1 && n <= 6) ? n : 0;
+				dest->vod_track_set = true;
+			} else if (k == "vod_audio") {
 				dest->vod_audio = Yes(v);
+				if (dest->vod_audio && !dest->vod_track_set)
+					dest->vod_track = -1;
+			}
 			else if (k == "enhanced_broadcasting" || k == "enhanced")
 				// Ignored until GoLive: multi-video RTMP breaks Twitch (#1000).
 				dest->enhanced_broadcasting = false;
@@ -229,7 +239,10 @@ std::string Settings::Text() const
 			  << "\nkeyint_sec = " << d.keyint_sec << "\nrate_control = " << d.rate_control
 			  << "\nwidth = " << d.width << "\nheight = " << d.height;
 		}
-		o << "\nvod_audio = " << (d.vod_audio ? "yes" : "no")
+		const int vod = d.vod_track > 0 ? d.vod_track : 0;
+		o << "\naudio_track = " << (d.audio_track >= 1 && d.audio_track <= 6 ? d.audio_track : 0)
+		  << "\nvod_track = " << vod
+		  << "\nvod_audio = " << (vod > 0 ? "yes" : "no")
 		  << "\nenhanced_broadcasting = " << (d.enhanced_broadcasting ? "yes" : "no") << "\n";
 	}
 	return o.str();
@@ -444,6 +457,36 @@ QScrollArea *ScrollWrap(QWidget *inner)
 	return scroll;
 }
 
+// OBS Settings → Output → Audio Track. Simple mode is always track 1.
+int ObsStreamTrackNumber()
+{
+	config_t *cfg = obs_frontend_get_profile_config();
+	if (!cfg)
+		return 1;
+	const char *mode = config_get_string(cfg, "Output", "Mode");
+	if (mode && std::string(mode) == "Advanced") {
+		const int track = int(config_get_int(cfg, "AdvOut", "TrackIndex"));
+		if (track >= 1 && track <= 6)
+			return track;
+	}
+	return 1;
+}
+
+// Old "vod_audio = yes" with no vod_track: use OBS's VOD track, else the other of 1 and 2.
+int LegacyVodTrack()
+{
+	config_t *cfg = obs_frontend_get_profile_config();
+	if (cfg) {
+		const char *mode = config_get_string(cfg, "Output", "Mode");
+		if (mode && std::string(mode) == "Advanced" && config_get_bool(cfg, "AdvOut", "VodTrackEnabled")) {
+			const int vod = int(config_get_int(cfg, "AdvOut", "VodTrackIndex"));
+			if (vod >= 1 && vod <= 6)
+				return vod;
+		}
+	}
+	return ObsStreamTrackNumber() == 2 ? 1 : 2;
+}
+
 class SettingsDialog : public QDialog {
 public:
 	explicit SettingsDialog(QWidget *parent) : QDialog(parent), s_(Settings::Load(ConfigPath()))
@@ -550,9 +593,17 @@ public:
 		height_ = new QSpinBox;
 		height_->setRange(0, 4320);
 		height_->setSpecialValueText(T("Encode.Canvas"));
-		vodAudio_ = new QCheckBox(T("Encode.VodAudio"));
-		vodAudio_->setToolTip(T("Encode.VodAudioTip"));
-		vodHelp_ = Hint(T("Encode.VodAudioHelp"));
+		liveTrack_ = new QComboBox;
+		liveTrack_->setToolTip(T("Encode.LiveTrackTip"));
+		liveTrack_->addItem(T("Encode.LiveTrackObs"), 0);
+		for (int i = 1; i <= 6; ++i)
+			liveTrack_->addItem(T("Encode.TrackN").arg(i), i);
+		vodTrack_ = new QComboBox;
+		vodTrack_->setToolTip(T("Encode.VodTrackTip"));
+		vodTrack_->addItem(T("Encode.VodTrackOff"), 0);
+		for (int i = 1; i <= 6; ++i)
+			vodTrack_->addItem(T("Encode.TrackN").arg(i), i);
+		vodHelp_ = Hint(T("Encode.VodTrackHelp"));
 		vodHelp_->hide();
 		enhanced_ = new QCheckBox(T("Encode.Enhanced"));
 		enhanced_->setToolTip(T("Encode.EnhancedTip"));
@@ -578,7 +629,8 @@ public:
 		form->addRow(T("Encode.RateControl"), rateControl_);
 		form->addRow(T("Encode.Width"), width_);
 		form->addRow(T("Encode.Height"), height_);
-		form->addRow(QString(), vodAudio_);
+		form->addRow(T("Encode.LiveTrack"), liveTrack_);
+		form->addRow(T("Encode.VodTrack"), vodTrack_);
 		form->addRow(QString(), vodHelp_);
 		form->addRow(QString(), enhanced_);
 		form->addRow(QString(), allObs);
@@ -754,6 +806,7 @@ public:
 		tabs->addTab(ScrollWrap(generalPage), T("Settings.TabGeneral"));
 		tabs->addTab(ScrollWrap(hotkeyPage), T("Settings.TabHotkeys"));
 		tabs->addTab(destPage, T("Settings.TabPlatforms"));
+		tabs->addTab(ScrollWrap(BuildAudioPage()), T("Settings.TabAudio"));
 		tabs->addTab(ScrollWrap(ovPage), T("Settings.TabOverlay"));
 		tabs->addTab(MakeLogPage(), T("Settings.TabLogs"));
 		tabs->addTab(ScrollWrap(aboutPage), T("Settings.TabAbout"));
@@ -788,7 +841,8 @@ public:
 			UpdateEncodeFields();
 		});
 		connect(url_, &QLineEdit::textChanged, this, [this] { UpdateEncodeFields(); });
-		connect(vodAudio_, &QCheckBox::toggled, this, [this] { UpdateEncodeFields(); });
+		connect(liveTrack_, &QComboBox::currentIndexChanged, this, [this] { UpdateEncodeFields(); });
+		connect(vodTrack_, &QComboBox::currentIndexChanged, this, [this] { UpdateEncodeFields(); });
 		connect(enhanced_, &QCheckBox::toggled, this, [this] { UpdateEncodeFields(); });
 		connect(add, &QPushButton::clicked, this, [this] {
 			Destination d;
@@ -958,7 +1012,17 @@ private:
 		d.rate_control = S(rateControl_->currentText());
 		d.width = uint32_t(width_->value());
 		d.height = uint32_t(height_->value());
-		d.vod_audio = vodAudio_->isChecked();
+		d.audio_track = liveTrack_->currentData().toInt();
+		const bool twitch = service_->currentText().contains("Twitch", Qt::CaseInsensitive) ||
+				    url_->text().contains("twitch", Qt::CaseInsensitive) ||
+				    url_->text().contains("live-video.net", Qt::CaseInsensitive);
+		int vod = twitch ? vodTrack_->currentData().toInt() : 0;
+		int live = d.audio_track >= 1 && d.audio_track <= 6 ? d.audio_track : ObsStreamTrackNumber();
+		if (vod == live)
+			vod = 0;
+		d.vod_track = vod;
+		d.vod_track_set = true;
+		d.vod_audio = vod > 0;
 		d.enhanced_broadcasting = enhanced_->isChecked();
 		if (d.ingest_key.empty() && current_ >= 0)
 			d.ingest_key = "ld" + std::to_string(current_);
@@ -974,13 +1038,27 @@ private:
 		const bool twitch = service_->currentText().contains("Twitch", Qt::CaseInsensitive) ||
 				    url_->text().contains("twitch", Qt::CaseInsensitive) ||
 				    url_->text().contains("live-video.net", Qt::CaseInsensitive);
-		vodAudio_->setEnabled(twitch);
+		vodTrack_->setEnabled(twitch);
 		vodHelp_->setVisible(twitch);
+		if (!twitch && vodTrack_->currentIndex() != 0) {
+			vodTrack_->blockSignals(true);
+			vodTrack_->setCurrentIndex(0);
+			vodTrack_->blockSignals(false);
+		}
+		const int livePick = liveTrack_->currentData().toInt();
+		const int liveNow = livePick >= 1 && livePick <= 6 ? livePick : ObsStreamTrackNumber();
+		const int vodNow = vodTrack_->currentData().toInt();
+		if (twitch && vodNow > 0 && vodNow == liveNow) {
+			vodTrack_->blockSignals(true);
+			vodTrack_->setCurrentIndex(0);
+			vodTrack_->blockSignals(false);
+			vodHelp_->setText(T("Encode.VodSame"));
+		} else {
+			vodHelp_->setText(T("Encode.VodTrackHelp"));
+		}
 		// Multi-video EB without GoLive breaks Twitch (#1000) — keep UI off until GoLive ships.
 		enhanced_->setEnabled(false);
 		enhanced_->setChecked(false);
-		if (!twitch)
-			vodAudio_->setChecked(false);
 		if (current_ < 0 || current_ >= int(s_.dests.size())) {
 			encodeSummary_->clear();
 			return;
@@ -993,7 +1071,9 @@ private:
 		tmp.rate_control = S(rateControl_->currentText());
 		tmp.width = uint32_t(width_->value());
 		tmp.height = uint32_t(height_->value());
-		tmp.vod_audio = vodAudio_->isChecked();
+		tmp.audio_track = liveTrack_->currentData().toInt();
+		tmp.vod_track = vodTrack_->currentData().toInt();
+		tmp.vod_audio = tmp.vod_track > 0;
 		tmp.enhanced_broadcasting = enhanced_->isChecked();
 		tmp.service = service_->currentIndex() > 0 ? S(service_->currentText()) : tmp.service;
 		tmp.url = S(url_->text());
@@ -1017,7 +1097,9 @@ private:
 				d.rate_control = S(rateControl_->currentText());
 				d.width = uint32_t(width_->value());
 				d.height = uint32_t(height_->value());
-				d.vod_audio = vodAudio_->isChecked();
+				d.audio_track = liveTrack_->currentData().toInt();
+				d.vod_track = vodTrack_->currentData().toInt();
+				d.vod_audio = d.vod_track > 0;
 				d.enhanced_broadcasting = enhanced_->isChecked();
 				d.service = service_->currentIndex() > 0 ? S(service_->currentText()) : d.service;
 				d.url = S(url_->text());
@@ -1123,7 +1205,20 @@ private:
 		rateControl_->setCurrentIndex(rc < 0 ? 0 : rc);
 		width_->setValue(int(d.width));
 		height_->setValue(int(d.height));
-		vodAudio_->setChecked(d.vod_audio);
+		const int at = d.audio_track >= 1 && d.audio_track <= 6 ? d.audio_track : 0;
+		const int atIdx = liveTrack_->findData(at);
+		liveTrack_->blockSignals(true);
+		liveTrack_->setCurrentIndex(atIdx < 0 ? 0 : atIdx);
+		liveTrack_->blockSignals(false);
+		int vt = d.vod_track;
+		if (vt < 0)
+			vt = LegacyVodTrack();
+		if (vt < 0 || vt > 6)
+			vt = 0;
+		const int vtIdx = vodTrack_->findData(vt);
+		vodTrack_->blockSignals(true);
+		vodTrack_->setCurrentIndex(vtIdx < 0 ? 0 : vtIdx);
+		vodTrack_->blockSignals(false);
 		enhanced_->setChecked(d.enhanced_broadcasting);
 		UpdateEncodeFields();
 	}
@@ -1171,8 +1266,8 @@ private:
 	{
 		return a.encode_mode == b.encode_mode && a.video_kbps == b.video_kbps && a.audio_kbps == b.audio_kbps &&
 		       a.keyint_sec == b.keyint_sec && a.rate_control == b.rate_control && a.width == b.width &&
-		       a.height == b.height && a.vod_audio == b.vod_audio &&
-		       a.enhanced_broadcasting == b.enhanced_broadcasting;
+		       a.height == b.height && a.audio_track == b.audio_track && a.vod_track == b.vod_track &&
+		       a.vod_audio == b.vod_audio && a.enhanced_broadcasting == b.enhanced_broadcasting;
 	}
 
 	SaveImpact ClassifySave() const
@@ -1256,9 +1351,87 @@ private:
 	QLabel *encodeSummary_;
 	QSpinBox *videoKbps_, *audioKbps_, *keyint_, *width_, *height_;
 	QComboBox *rateControl_;
-	QCheckBox *vodAudio_;
+	QComboBox *liveTrack_ = nullptr;
+	QComboBox *vodTrack_ = nullptr;
 	QLabel *vodHelp_ = nullptr;
 	QCheckBox *enhanced_;
+	std::vector<obs_source_t *> audioSources_;
+
+	static bool CollectAudioSource(void *param, obs_source_t *source)
+	{
+		auto *out = static_cast<std::vector<obs_source_t *> *>(param);
+		if (!(obs_source_get_output_flags(source) & OBS_SOURCE_AUDIO))
+			return true;
+		const char *name = obs_source_get_name(source);
+		if (!name || !*name)
+			return true;
+		if (obs_source_get_ref(source))
+			out->push_back(source);
+		return true;
+	}
+
+	QWidget *BuildAudioPage()
+	{
+		obs_enum_sources(CollectAudioSource, &audioSources_);
+		std::sort(audioSources_.begin(), audioSources_.end(), [](obs_source_t *a, obs_source_t *b) {
+			const char *na = obs_source_get_name(a);
+			const char *nb = obs_source_get_name(b);
+			return QString::fromUtf8(na ? na : "").localeAwareCompare(QString::fromUtf8(nb ? nb : "")) < 0;
+		});
+		auto *page = new QWidget;
+		auto *lay = new QVBoxLayout(page);
+		lay->addWidget(Hint(T("Audio.About")));
+		if (audioSources_.empty()) {
+			lay->addWidget(new QLabel(T("Audio.Empty")));
+			lay->addStretch(1);
+			return page;
+		}
+		auto *grid = new QGridLayout;
+		grid->addWidget(new QLabel(T("Audio.Source")), 0, 0);
+		for (int t = 1; t <= 6; ++t) {
+			auto *h = new QLabel(QString::number(t));
+			h->setAlignment(Qt::AlignCenter);
+			grid->addWidget(h, 0, t);
+		}
+		for (int row = 0; row < int(audioSources_.size()); ++row) {
+			obs_source_t *source = audioSources_[size_t(row)];
+			const char *raw = obs_source_get_name(source);
+			auto *name = new QLabel(QString::fromUtf8(raw ? raw : ""));
+			name->setToolTip(name->text());
+			grid->addWidget(name, row + 1, 0);
+			const uint32_t mix = obs_source_get_audio_mixers(source);
+			for (int t = 0; t < 6; ++t) {
+				auto *box = new QCheckBox;
+				box->setChecked((mix & (1u << t)) != 0);
+				auto *cell = new QWidget;
+				auto *cellLay = new QHBoxLayout(cell);
+				cellLay->setContentsMargins(0, 0, 0, 0);
+				cellLay->addStretch(1);
+				cellLay->addWidget(box);
+				cellLay->addStretch(1);
+				grid->addWidget(cell, row + 1, t + 1);
+				connect(box, &QCheckBox::toggled, this, [source, t](bool on) {
+					uint32_t bits = obs_source_get_audio_mixers(source);
+					if (on)
+						bits |= (1u << t);
+					else
+						bits &= ~(1u << t);
+					obs_source_set_audio_mixers(source, bits);
+				});
+			}
+		}
+		lay->addLayout(grid);
+		lay->addStretch(1);
+		return page;
+	}
+
+public:
+	~SettingsDialog() override
+	{
+		for (obs_source_t *source : audioSources_)
+			obs_source_release(source);
+		audioSources_.clear();
+	}
 };
 
 } // namespace
