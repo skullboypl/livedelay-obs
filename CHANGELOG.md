@@ -6,6 +6,7 @@
 - **Audio track per platform.** Each destination picks OBS track 1–6 for what viewers hear. “Same as OBS” keeps Settings → Output → Audio Track.
 - **Twitch VOD track.** A different track is sent as the second AAC, so Twitch can keep it in the VOD and out of the way of the live mix. The sequence header is sent again after Arm / Activate / Cut.
 - **Tracks per source.** Settings → Audio assigns each OBS audio source to tracks 1–6.
+- **What's new, once.** After an update, OBS shows that release's notes a single time. A fresh install stays quiet.
 
 ## 1.0.9 – 2026-10-21
 

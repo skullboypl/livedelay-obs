@@ -1,5 +1,6 @@
 #include "update.hpp"
 #include "i18n.hpp"
+#include "settings.hpp"
 #include "version.hpp"
 
 Q_DECLARE_METATYPE(livedelay::UpdateInfo)
@@ -10,6 +11,7 @@ Q_DECLARE_METATYPE(livedelay::UpdateInfo)
 #include <QApplication>
 #include <QDesktopServices>
 #include <QDialog>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -26,6 +28,7 @@ Q_DECLARE_METATYPE(livedelay::UpdateInfo)
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
+#include <QTextBrowser>
 #include <QThread>
 #include <QTimer>
 #include <QUrl>
@@ -800,6 +803,134 @@ void AttachUpdateBanner(QWidget *dockParent, QVBoxLayout *layout)
 	timer->start();
 
 	banner->setProperty("ldUpdateChecker", QVariant::fromValue(static_cast<QObject *>(checker)));
+}
+
+namespace {
+
+bool VersionAfter(const QString &a, const QString &b)
+{
+	auto parts = [](QString v) {
+		if (v.startsWith('v', Qt::CaseInsensitive))
+			v = v.mid(1);
+		const QStringList s = v.split('.', Qt::SkipEmptyParts);
+		std::vector<int> out;
+		for (int i = 0; i < 3; i++)
+			out.push_back(i < s.size() ? s[i].toInt() : 0);
+		return out;
+	};
+	const auto left = parts(a);
+	const auto right = parts(b);
+	for (int i = 0; i < 3; i++) {
+		if (left[size_t(i)] != right[size_t(i)])
+			return left[size_t(i)] > right[size_t(i)];
+	}
+	return false;
+}
+
+struct ReleaseNote {
+	const char *version;
+	const char *key;
+};
+
+// Newest last. A jump across versions shows every note after the one they had.
+const ReleaseNote kReleaseNotes[] = {
+	{"1.0.30", "WhatsNew.Body1030"},
+};
+
+QString SeenVersionPath()
+{
+	const QFileInfo ini(QString::fromStdString(ConfigPath()));
+	return ini.dir().filePath(QStringLiteral("seen-version.txt"));
+}
+
+QString ReadSeenVersion()
+{
+	QFile file(SeenVersionPath());
+	if (!file.open(QIODevice::ReadOnly))
+		return {};
+	return QString::fromUtf8(file.readAll()).trimmed();
+}
+
+void WriteSeenVersion(const QString &version)
+{
+	QFile file(SeenVersionPath());
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+		return;
+	file.write(version.toUtf8());
+	file.write("\n");
+}
+
+bool HadPluginBefore()
+{
+	const QDir dir = QFileInfo(QString::fromStdString(ConfigPath())).dir();
+	if (QFileInfo(dir.filePath(QStringLiteral("livedelay.ini"))).size() > 0)
+		return true;
+	// Written by builds before 1.0.30 on every OBS start.
+	return QFileInfo::exists(dir.filePath(QStringLiteral("install.id")));
+}
+
+} // namespace
+
+void ShowWhatsNewOnce(QWidget *parent)
+{
+	static bool decided = false;
+	if (decided)
+		return;
+
+	const QString current = UpdateChecker::CurrentVersion();
+	const QString seen = ReadSeenVersion();
+	const bool fresh = seen.isEmpty() && !HadPluginBefore();
+	if (fresh || (!seen.isEmpty() && !VersionAfter(current, seen))) {
+		if (seen != current)
+			WriteSeenVersion(current);
+		decided = true;
+		return;
+	}
+
+	QString body;
+	for (const ReleaseNote &note : kReleaseNotes) {
+		const QString ver = QString::fromUtf8(note.version);
+		const bool inRange = seen.isEmpty() ? ver == current : VersionAfter(ver, seen) && !VersionAfter(ver, current);
+		if (!inRange)
+			continue;
+		const QString text = T(note.key);
+		if (text.isEmpty() || text == QLatin1String(note.key))
+			return; // locale not ready yet; the heal callback tries again
+		if (!body.isEmpty())
+			body += QStringLiteral("<hr>");
+		body += text;
+	}
+	if (body.isEmpty()) {
+		WriteSeenVersion(current);
+		decided = true;
+		return;
+	}
+
+	decided = true;
+	QDialog dlg(parent);
+	dlg.setWindowTitle(T("WhatsNew.Title").arg(current));
+	dlg.setMinimumSize(480, 360);
+	dlg.resize(560, 460);
+	auto *lay = new QVBoxLayout(&dlg);
+	auto *title = new QLabel(T("WhatsNew.Title").arg(current));
+	title->setStyleSheet(QStringLiteral("font-size: 16px; font-weight: 700;"));
+	title->setWordWrap(true);
+	lay->addWidget(title);
+	const QString from = seen.isEmpty() ? T("WhatsNew.FromEarlier") : T("WhatsNew.From").arg(seen);
+	auto *sub = new QLabel(from);
+	sub->setWordWrap(true);
+	sub->setStyleSheet(QStringLiteral("color: palette(placeholder-text);"));
+	lay->addWidget(sub);
+	auto *text = new QTextBrowser;
+	text->setOpenExternalLinks(true);
+	text->setHtml(body);
+	lay->addWidget(text, 1);
+	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok);
+	buttons->button(QDialogButtonBox::Ok)->setText(T("WhatsNew.Ok"));
+	QObject::connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
+	lay->addWidget(buttons);
+	dlg.exec();
+	WriteSeenVersion(current);
 }
 
 } // namespace livedelay

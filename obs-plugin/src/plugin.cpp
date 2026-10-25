@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QMainWindow>
 #include <QMetaObject>
+#include <QTimer>
 
 #include <string>
 
@@ -16,6 +17,7 @@
 #include "log.hpp"
 #include "outputs.hpp"
 #include "settings.hpp"
+#include "update.hpp"
 
 extern "C" {
 typedef void (*ld_log_fn)(const char *msg);
@@ -81,11 +83,18 @@ bool obs_module_load(void)
 		"LiveDelay",
 		[](void *) { livedelay::ShowSettings(static_cast<QWidget *>(obs_frontend_get_main_window())); },
 		nullptr);
-	livedelay::StartLocaleHeal([] {
+	auto showNotes = [] {
+		QTimer::singleShot(700, qApp, [] {
+			livedelay::ShowWhatsNewOnce(static_cast<QWidget *>(obs_frontend_get_main_window()));
+		});
+	};
+	livedelay::StartLocaleHeal([showNotes] {
 		livedelay::RefreshHotkeyDescriptions();
 		if (dock)
 			dock->Retranslate();
+		showNotes();
 	});
+	showNotes();
 	blog(LOG_INFO, "[livedelay] loaded");
 	return true;
 }

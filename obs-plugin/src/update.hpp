@@ -50,4 +50,8 @@ private:
 // Blue banner shown in the dock when an update is available.
 void AttachUpdateBanner(QWidget *dockParent, QVBoxLayout *layout);
 
+// Once, after OBS is up: an update from an older copy shows the release notes.
+// A first install only records the version and stays quiet.
+void ShowWhatsNewOnce(QWidget *parent);
+
 } // namespace livedelay
