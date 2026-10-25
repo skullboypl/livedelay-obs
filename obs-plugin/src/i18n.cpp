@@ -31,7 +31,7 @@ namespace {
 const char *kProbes[] = {
 	"Settings.TabHotkeys", "Settings.TabLogs", "Hotkey.None", "Hotkey.Clear", "Hotkey.About",
 	"Update.ProgressTitle", "Update.ProgressWaiting", "Encode.VodAudioHelp", "Settings.StreamDeckText",
-	"Settings.TabAudio", "Encode.VodTrack", "WhatsNew.Title",
+	"Settings.TabAudio", "Encode.VodTrack", "WhatsNew.Title", "WhatsNew.Body1031",
 };
 
 std::unordered_map<std::string, std::string> overlay;

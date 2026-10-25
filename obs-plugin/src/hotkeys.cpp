@@ -1,4 +1,5 @@
 #include "hotkeys.hpp"
+#include "contrast.hpp"
 #include "i18n.hpp"
 #include "settings.hpp"
 
@@ -291,10 +292,10 @@ QWidget *MakeHotkeyPage(std::vector<ComboButton *> &keys, std::vector<QSpinBox *
 	auto *lay = new QVBoxLayout(page);
 	lay->setContentsMargins(4, 4, 4, 4);
 	lay->setSpacing(10);
-	auto *about = new QLabel(T("Hotkey.About"));
+	auto *about = new QLabel(Rich(T("Hotkey.About"), true));
 	about->setWordWrap(true);
 	about->setTextFormat(Qt::RichText);
-	about->setStyleSheet("color: palette(placeholder-text);");
+	about->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
 	lay->addWidget(about);
 
 	auto *grid = new QGridLayout;
@@ -331,7 +332,7 @@ QWidget *MakeHotkeyPage(std::vector<ComboButton *> &keys, std::vector<QSpinBox *
 	header(T("Hotkey.SectionDelay"));
 	auto *note = new QLabel(T("Hotkey.DelayNote"));
 	note->setWordWrap(true);
-	note->setStyleSheet("color: palette(placeholder-text);");
+	note->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
 	grid->addWidget(note, row, 0, 1, 3);
 	++row;
 	for (HotkeyDef &key : g_keys) {

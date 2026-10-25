@@ -52,8 +52,8 @@ pub enum Mode {
     Delayed,
 }
 
-/// Legacy AAC sequence header, or Enhanced RTMP sequence start (track 0 or multitrack).
-fn push_audio_cfg(out: &mut Vec<Arc<Vec<u8>>>, data: &Arc<Vec<u8>>) {
+/// Keeps distinct codec headers (live AAC, VOD AAC, each Enhanced video track).
+fn push_distinct(out: &mut Vec<Arc<Vec<u8>>>, data: &Arc<Vec<u8>>) {
     if out.len() >= 6 || out.iter().any(|d| d.as_slice() == data.as_slice()) {
         return;
     }
@@ -84,8 +84,12 @@ fn classify(kind: u8, d: &[u8]) -> (bool, bool) {
     match kind {
         MSG_VIDEO if b0 & 0x80 != 0 => {
             // Enhanced RTMP: frame type in bits 4-6, packet type in the low nibble.
-            let pkt = b0 & 0x0f;
+            // Multitrack (packet type 6) stores the real packet type in the next byte.
+            let mut pkt = b0 & 0x0f;
             let frame = (b0 >> 4) & 7;
+            if pkt == 6 {
+                pkt = d.get(1).copied().unwrap_or(0xff) & 0x0f;
+            }
             (pkt == 0, frame == 1 && (pkt == 1 || pkt == 3))
         }
         MSG_VIDEO => {
@@ -132,7 +136,8 @@ pub struct Engine {
     cut_after_seq: Option<u64>,
     /// Latest config tags sent, so a destination that (re)connects can start cleanly.
     sent_meta: Option<OutTag>,
-    sent_video_cfg: Option<OutTag>,
+    /// One sequence header per video track (classic track 0 + Enhanced ladder).
+    sent_video_cfgs: Vec<OutTag>,
     /// Live + VOD (and EB) audio configs — re-emitted together on Activate/Cut.
     sent_audio_cfgs: Vec<OutTag>,
 
@@ -227,7 +232,7 @@ impl Engine {
             last_out_ts: 0,
             cut_after_seq: None,
             sent_meta: None,
-            sent_video_cfg: None,
+            sent_video_cfgs: Vec::new(),
             sent_audio_cfgs: Vec::new(),
             evicted_cfg: [None, None, None],
             in_window: (Instant::now(), 0),
@@ -352,14 +357,24 @@ impl Engine {
         (i < self.tags.len()).then_some(i)
     }
 
-    /// Latest video keyframe that arrived at or before `at`.
+    /// Earliest video keyframe of the latest aligned group at or before `at`.
+    /// Enhanced Broadcasting emits one keyframe per quality at the same timestamp;
+    /// starting at the first of them keeps every track on a keyframe.
     fn keyframe_before(&self, at: Instant) -> Option<&Tag> {
-        self.tags.iter().rev().find(|t| t.kind == MSG_VIDEO && t.key && t.arrival <= at)
+        let ts = self.tags.iter().rev().find(|t| t.kind == MSG_VIDEO && t.key && t.arrival <= at)?.ts;
+        self.tags.iter().find(|t| t.kind == MSG_VIDEO && t.key && t.ts == ts)
     }
 
     fn emit(&mut self, mut t: OutTag) {
         if t.kind == MSG_VIDEO && t.config {
-            self.sent_video_cfg = Some(t.clone());
+            if let Some(i) = self.sent_video_cfgs.iter().position(|p| p.data == t.data) {
+                self.sent_video_cfgs[i] = t.clone();
+            } else if self.sent_video_cfgs.len() < 6 {
+                self.sent_video_cfgs.push(t.clone());
+            } else {
+                self.sent_video_cfgs.remove(0);
+                self.sent_video_cfgs.push(t.clone());
+            }
         } else if t.kind == MSG_AUDIO && t.config {
             // Keep distinct audio configs (track 0 live + track 1 VOD, etc.).
             if let Some(i) = self.sent_audio_cfgs.iter().position(|p| p.data == t.data) {
@@ -381,7 +396,7 @@ impl Engine {
     /// Moves the playhead to keyframe `kf` with the given delay and re-sends the
     /// codec config in force at that point, so the decoder never sees a mismatch.
     fn jump_to(&mut self, kf: &Tag, delay: Duration, now: Instant) {
-        let next_out = if self.last_out_ts == 0 && self.sent_video_cfg.is_none() { 0 } else { self.last_out_ts + JUMP_GAP_MS };
+        let next_out = if self.last_out_ts == 0 && self.sent_video_cfgs.is_empty() { 0 } else { self.last_out_ts + JUMP_GAP_MS };
         self.out_offset = next_out as i64 - kf.ts as i64;
         self.cursor = kf.seq;
         self.delay = if delay.is_zero() { Duration::ZERO } else { now.saturating_duration_since(kf.arrival) };
@@ -403,32 +418,45 @@ impl Engine {
         }
         // Metadata is not repeated: players treat a second onMetaData as a new data stream.
         cfg[0] = None;
-        // Every distinct AAC sequence header (live track + Twitch VOD track) must go out
-        // again after a jump, or the second track never decodes.
+        // Every video sequence header (one per Enhanced quality) and every AAC header
+        // (live + Twitch VOD) must go out again after a jump, or that track never decodes.
+        let mut video_cfgs: Vec<Arc<Vec<u8>>> = Vec::new();
         let mut audio_cfgs: Vec<Arc<Vec<u8>>> = Vec::new();
         for t in self.tags.range(..idx) {
-            if t.kind == MSG_AUDIO && t.config {
-                push_audio_cfg(&mut audio_cfgs, &t.data);
+            if t.kind == MSG_VIDEO && t.config {
+                push_distinct(&mut video_cfgs, &t.data);
+            } else if t.kind == MSG_AUDIO && t.config {
+                push_distinct(&mut audio_cfgs, &t.data);
+            }
+        }
+        if let Some(t) = &self.evicted_cfg[1] {
+            if t.kind == MSG_VIDEO && t.config {
+                push_distinct(&mut video_cfgs, &t.data);
             }
         }
         if let Some(t) = &self.evicted_cfg[2] {
             if t.kind == MSG_AUDIO && t.config {
-                push_audio_cfg(&mut audio_cfgs, &t.data);
+                push_distinct(&mut audio_cfgs, &t.data);
             }
         }
+        for v in &self.sent_video_cfgs {
+            push_distinct(&mut video_cfgs, &v.data);
+        }
         for a in &self.sent_audio_cfgs {
-            push_audio_cfg(&mut audio_cfgs, &a.data);
+            push_distinct(&mut audio_cfgs, &a.data);
+        }
+        if video_cfgs.is_empty() {
+            if let Some(t) = cfg[1].clone() {
+                push_distinct(&mut video_cfgs, &t.data);
+            }
         }
         if audio_cfgs.is_empty() {
             if let Some(t) = cfg[2].clone() {
-                push_audio_cfg(&mut audio_cfgs, &t.data);
+                push_distinct(&mut audio_cfgs, &t.data);
             }
         }
-        for t in cfg.into_iter().flatten() {
-            if t.kind == MSG_AUDIO {
-                continue;
-            }
-            self.emit(OutTag { kind: t.kind, ts: next_out, key: false, config: true, data: t.data });
+        for data in video_cfgs {
+            self.emit(OutTag { kind: MSG_VIDEO, ts: next_out, key: false, config: true, data });
         }
         for data in audio_cfgs {
             self.emit(OutTag { kind: MSG_AUDIO, ts: next_out, key: false, config: true, data });
@@ -559,9 +587,7 @@ impl Engine {
         if let Some(m) = &self.sent_meta {
             v.push(m.clone());
         }
-        if let Some(vid) = &self.sent_video_cfg {
-            v.push(vid.clone());
-        }
+        v.extend(self.sent_video_cfgs.iter().cloned());
         v.extend(self.sent_audio_cfgs.iter().cloned());
         v
     }
@@ -654,6 +680,37 @@ mod tests {
         let out = drain(&mut rx);
         let vod = out.iter().filter(|t| t.config && t.data.first() == Some(&0x95)).count();
         assert!(vod >= 2, "VOD sequence header resent on the delay jump, got {vod}");
+    }
+
+    #[test]
+    fn enhanced_ladder_keyframes_and_headers_survive_activate() {
+        // Track 1 sequence start and keyframe: FRAME_HEADER_EX | MULTITRACK | FT_KEY = 0x96,
+        // inner packet type 0 (sequence) or 1 (frames).
+        let seq = vec![0x96, 0x00, b'a', b'v', b'c', b'1', 1, 0x01];
+        let (mut e, mut rx) = setup();
+        let t0 = Instant::now();
+        e.push(MSG_VIDEO, 0, vec![0x17, 0, 0, 0, 0, 1], t0);
+        e.push(MSG_VIDEO, 0, seq.clone(), t0);
+        e.arm(Duration::from_secs(2)).unwrap();
+        for f in 0..90 {
+            let ms = f * 1000 / 30;
+            let now = t0 + Duration::from_millis(ms);
+            let key = f % 30 == 0;
+            e.push(MSG_VIDEO, ms as u32, video(key), now);
+            let ladder = if key {
+                vec![0x96, 0x01, b'a', b'v', b'c', b'1', 1, 0xAA]
+            } else {
+                vec![0xA6, 0x01, b'a', b'v', b'c', b'1', 1, 0xBB]
+            };
+            e.push(MSG_VIDEO, ms as u32, ladder, now);
+            e.pump(now);
+        }
+        e.activate(t0 + Duration::from_secs(3)).unwrap();
+        e.pump(t0 + Duration::from_secs(3));
+        let out = drain(&mut rx);
+        let ladder_hdr = out.iter().filter(|t| t.config && t.data.as_slice() == seq.as_slice()).count();
+        assert!(ladder_hdr >= 2, "ladder sequence header resent on the delay jump, got {ladder_hdr}");
+        assert!(out.iter().any(|t| t.key && t.data.first() == Some(&0x96)), "ladder keyframe is a keyframe");
     }
 
     #[test]

@@ -91,7 +91,7 @@ GET works for the actions too, so the Stream Deck **Website** action can call th
 ## Known limits
 
 - OBS 31 does not let plugins add their own entry to Settings → Stream → Service, so LiveDelay uses a Custom server (`rtmp://127.0.0.1:1935/live`) and sets it for you.
-- No Twitch Enhanced Broadcasting (multitrack). **Route OBS through LiveDelay** switches OBS to a custom server, which turns it off.
+- Twitch Enhanced Broadcasting is the checkbox on a Twitch destination. LiveDelay asks Twitch for a GoLive session and delays that ladder. **Route OBS through LiveDelay** still turns off OBS's own Enhanced Broadcasting, because a custom server has no GoLive address.
 - Closing OBS while delayed ends the stream right away: the last N seconds never air.
 - Saving the settings while live restarts LiveDelay and drops the stream for a few seconds. The dialog asks first.
 

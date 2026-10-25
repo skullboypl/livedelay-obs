@@ -1,4 +1,5 @@
 #include "log.hpp"
+#include "contrast.hpp"
 
 #include "client.hpp"
 #include "i18n.hpp"
@@ -159,11 +160,11 @@ class LogPage : public QWidget {
 public:
 	explicit LogPage(QWidget *parent = nullptr) : QWidget(parent)
 	{
-		auto *hint = new QLabel(T("Logs.Hint"));
+		auto *hint = new QLabel(Rich(T("Logs.Hint"), true));
 		hint->setWordWrap(true);
 		hint->setTextFormat(Qt::RichText);
 		hint->setOpenExternalLinks(true);
-		hint->setStyleSheet(QStringLiteral("color: palette(placeholder-text);"));
+		hint->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
 
 		view_ = new QPlainTextEdit;
 		view_->setReadOnly(true);

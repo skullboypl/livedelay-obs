@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.31 – 2026-10-25
+
+- **Twitch Enhanced Broadcasting (beta).** A Twitch destination can ask Twitch for a GoLive session and send that quality ladder through the delay. Arm, Activate and Cut move every quality together. If Twitch does not return a session, that destination stays on one video track and the normal ingest. Kick and YouTube stay on one track. OBS's own Enhanced Broadcasting checkbox stays off.
+- **Dark theme contrast.** Hints, dock status and help text follow the OBS theme color. They no longer render black on the dark theme.
+
 ## 1.0.30 – 2026-10-25
 
 - **No presence ping.** The plugin no longer phones home, and the site no longer shows how many copies are open.

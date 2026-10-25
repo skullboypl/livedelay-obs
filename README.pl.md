@@ -91,7 +91,7 @@ Akcje działają też przez GET, więc zadziała akcja **Website** w Stream Deck
 ## Ograniczenia
 
 - OBS 31 nie pozwala wtyczkom dodać własnej pozycji w Ustawienia → Transmisja → Usługa, więc LiveDelay używa serwera Własnego (`rtmp://127.0.0.1:1935/live`) i sam go ustawia.
-- Brak Enhanced Broadcasting Twitcha (wiele ścieżek). **Przełącz OBS na LiveDelay** ustawia własny serwer, co je wyłącza.
+- Enhanced Broadcasting Twitcha to checkbox przy celu Twitch. LiveDelay pyta Twitcha o sesję GoLive i opóźnia tę drabinkę. **Przełącz OBS na LiveDelay** nadal wyłącza własne Enhanced Broadcasting w OBS, bo własny serwer nie ma adresu GoLive.
 - Zamknięcie OBS w trybie opóźnienia kończy stream od razu: ostatnie N sekund nie zostanie wyemitowane.
 - Zapis ustawień w trakcie streamu uruchamia LiveDelay ponownie i przerywa stream na kilka sekund. Okno pyta o to wcześniej.
 

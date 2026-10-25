@@ -1,4 +1,5 @@
 #include "settings.hpp"
+#include "contrast.hpp"
 #include "serverpick.hpp"
 #include "hotkeys.hpp"
 #include "update.hpp"
@@ -159,8 +160,7 @@ Settings Settings::Load(const std::string &path)
 					dest->vod_track = -1;
 			}
 			else if (k == "enhanced_broadcasting" || k == "enhanced")
-				// Ignored until GoLive: multi-video RTMP breaks Twitch (#1000).
-				dest->enhanced_broadcasting = false;
+				dest->enhanced_broadcasting = Yes(v);
 			continue;
 		}
 		if (k == "listen")
@@ -439,10 +439,10 @@ constexpr const char *kSmoothWizardUrl = "https://smoothwizard.com/?utm_source=l
 
 QLabel *Hint(const QString &text)
 {
-	auto *l = new QLabel(text);
+	auto *l = new QLabel(Rich(text, true));
 	l->setWordWrap(true);
 	l->setTextFormat(Qt::RichText);
-	l->setStyleSheet("color: palette(placeholder-text);");
+	l->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
 	return l;
 }
 
@@ -575,7 +575,7 @@ public:
 		encodeMode_->setToolTip(T("Encode.ModeTip"));
 		encodeSummary_ = new QLabel;
 		encodeSummary_->setWordWrap(true);
-		encodeSummary_->setStyleSheet("color: palette(placeholder-text);");
+		encodeSummary_->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
 		videoKbps_ = new QSpinBox;
 		videoKbps_->setRange(100, 100000);
 		videoKbps_->setSuffix(" kb/s");
@@ -929,7 +929,7 @@ private:
 		r.preview->setText(on ? QString("<span style='color:%1'>&#9679;</span>&nbsp;%2").arg(r.color, t.toHtmlEscaped())
 				      : T("Settings.StateHidden"));
 		r.preview->setStyleSheet(on ? "background: rgba(20,22,29,.9); color: #f3f4f7; border-radius: 10px; padding: 3px 10px; font-weight: 600;"
-					    : "color: palette(placeholder-text); padding: 3px 10px; font-style: italic;");
+					    : QString("color: %1; padding: 3px 10px; font-style: italic;").arg(ThemeColor(true)));
 	}
 
 	// Texts and on/off go straight to the running overlay; no restart needed.
@@ -1052,13 +1052,16 @@ private:
 			vodTrack_->blockSignals(true);
 			vodTrack_->setCurrentIndex(0);
 			vodTrack_->blockSignals(false);
-			vodHelp_->setText(T("Encode.VodSame"));
+			vodHelp_->setText(Rich(T("Encode.VodSame"), true));
 		} else {
-			vodHelp_->setText(T("Encode.VodTrackHelp"));
+			vodHelp_->setText(Rich(T("Encode.VodTrackHelp"), true));
 		}
-		// Multi-video EB without GoLive breaks Twitch (#1000) — keep UI off until GoLive ships.
-		enhanced_->setEnabled(false);
-		enhanced_->setChecked(false);
+		enhanced_->setEnabled(twitch);
+		if (!twitch && enhanced_->isChecked()) {
+			enhanced_->blockSignals(true);
+			enhanced_->setChecked(false);
+			enhanced_->blockSignals(false);
+		}
 		if (current_ < 0 || current_ >= int(s_.dests.size())) {
 			encodeSummary_->clear();
 			return;
@@ -1153,16 +1156,17 @@ private:
 			line = T("Settings.BufferEstimate").arg(need).arg(delay_s).arg(peak);
 		QString status;
 		QString color;
+		const bool dark = Luminance(QApplication::palette().color(QPalette::Window)) < 0.4;
 		if (limit < need) {
 			status = T("Settings.BufferLow");
-			color = "#c44";
+			color = dark ? QStringLiteral("#ff8a80") : QStringLiteral("#a32020");
 		} else if (limit < int(std::ceil(need * 1.15))) {
 			status = T("Settings.BufferTight");
-			color = "#b26a00";
+			color = dark ? QStringLiteral("#ffbf3c") : QStringLiteral("#8a5200");
 		} else {
 			const double head = need > 0 ? double(limit) / double(need) : 99.0;
 			status = T("Settings.BufferOk").arg(head, 0, 'f', 1);
-			color = "#2a7";
+			color = dark ? QStringLiteral("#3ddc84") : QStringLiteral("#0d7a45");
 		}
 		bufferHint_->setText(line + "\n" + status);
 		bufferHint_->setStyleSheet(QString("color: %1; font-size: 11px;").arg(color));
@@ -1508,9 +1512,10 @@ void ShowHelp(QWidget *parent)
 	QDialog dlg(parent);
 	dlg.setWindowTitle(T("Help.Title"));
 	dlg.setMinimumWidth(560);
-	auto *body = new QLabel(T("Help.Body").arg(Q(OverlayUrl())));
+	auto *body = new QLabel(Rich(T("Help.Body").arg(Q(OverlayUrl()))));
 	body->setWordWrap(true);
 	body->setTextFormat(Qt::RichText);
+	body->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor()));
 	body->setTextInteractionFlags(Qt::TextBrowserInteraction);
 	body->setOpenExternalLinks(true);
 	auto *route = new QPushButton(T("Help.RouteNow"));

@@ -51,6 +51,29 @@ fn esc(s: &str) -> String {
     o
 }
 
+/// One string field from a tiny JSON object. Enough for `{"url":"...","key":"..."}`.
+fn json_string(body: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{key}\"");
+    let rest = body.get(body.find(&pat)? + pat.len()..)?.trim_start();
+    let rest = rest.strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next()? {
+                '"' => out.push('"'),
+                '\\' => out.push('\\'),
+                '/' => out.push('/'),
+                'n' => out.push('\n'),
+                other => out.push(other),
+            },
+            '"' => return Some(out),
+            _ => out.push(c),
+        }
+    }
+    None
+}
+
 pub fn state_json(ctx: &Ctx) -> String {
     let st = ctx.hub.status(Instant::now());
     let mode = if st.mode == Mode::Delayed { "delayed" } else { "live" };
@@ -218,6 +241,28 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
             match shared {
                 Some(s) => crate::preview::serve(sock, &s, crate::preview::Feed::Input).await,
                 None => respond(&mut sock, "404 Not Found", "{\"error\":\"no_slot\"}").await,
+            }
+        }
+        ("POST", "/dest/target") => {
+            let i = query_i(query);
+            let text = String::from_utf8_lossy(&body);
+            let url = json_string(&text, "url");
+            let key = json_string(&text, "key");
+            match (i, url, key) {
+                (Some(i), Some(url), Some(key)) => match ctx.dests.get(i) {
+                    Some(d) => match crate::rtmp::client::parse_url(&url, &key) {
+                        Ok(t) => {
+                            let host = t.host.clone();
+                            d.set_target(t);
+                            log!("{}: egress → {host}", d.status.lock().unwrap().name);
+                            ctx.hub.bump();
+                            respond(&mut sock, "200 OK", &state_json(ctx)).await
+                        }
+                        Err(e) => respond(&mut sock, "400 Bad Request", &format!("{{\"error\":\"{}\"}}", esc(&e))).await,
+                    },
+                    None => respond(&mut sock, "404 Not Found", "{\"error\":\"unknown_destination\"}").await,
+                },
+                _ => respond(&mut sock, "400 Bad Request", "{\"error\":\"url and key required\"}").await,
             }
         }
         ("GET" | "POST", "/dest/start" | "/dest/stop") => {

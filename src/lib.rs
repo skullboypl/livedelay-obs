@@ -86,13 +86,13 @@ impl Proxy {
                 Ok(t) => {
                     // Keep real autostart flag for the dock; want follows enabled+autostart
                     // until OBS Start Streaming / Live button turns egress on.
-                    let dest = rtmp::client::Dest::new(&d.name, d.autostart);
+                    let dest = rtmp::client::Dest::new(&d.name, d.autostart, t);
                     if !(d.enabled && d.autostart) {
                         dest.set_on(false);
                     }
                     dests.push(dest.clone());
                     if let Some(slot) = hub.slot(i) {
-                        targets.push((t, dest, slot.shared.clone()));
+                        targets.push((dest, slot.shared.clone()));
                     }
                 }
                 Err(e) => log!("{}: {e}", d.name),
@@ -119,8 +119,8 @@ impl Proxy {
                 };
                 rt.block_on(async move {
                     hub.spawn_state_forwarders();
-                    for (target, dest, shared) in targets {
-                        tokio::spawn(rtmp::client::run(target, shared, dest));
+                    for (dest, shared) in targets {
+                        tokio::spawn(rtmp::client::run(dest, shared));
                     }
                     for slot in &hub.slots {
                         tokio::spawn(engine::run_pump(slot.shared.clone()));

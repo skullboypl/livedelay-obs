@@ -59,21 +59,30 @@ pub struct DestStatus {
     pub kbps: f64,
 }
 
-/// One destination as the rest of the app sees it: its status and an on/off switch.
+/// One destination as the rest of the app sees it: its status, an on/off switch, and the ingest it dials.
 pub struct Dest {
     pub status: Mutex<DestStatus>,
     pub autostart: bool,
     want: watch::Sender<bool>,
+    target: watch::Sender<Target>,
 }
 
 impl Dest {
-    pub fn new(name: &str, autostart: bool) -> Arc<Self> {
+    pub fn new(name: &str, autostart: bool, target: Target) -> Arc<Self> {
         let (want, _) = watch::channel(autostart);
+        let (target_tx, _) = watch::channel(target);
         Arc::new(Self {
             status: Mutex::new(DestStatus { name: name.to_string(), state: "waiting", ..Default::default() }),
             autostart,
             want,
+            target: target_tx,
         })
+    }
+
+    /// Point the next connection at a different ingest. An open publish drops and redials.
+    /// Used for Twitch GoLive: the ladder must not go out on the classic RTMP url.
+    pub fn set_target(&self, target: Target) {
+        self.target.send_replace(target);
     }
 
     pub fn is_on(&self) -> bool {
@@ -259,11 +268,11 @@ async fn stream(
         };
         if tag.config {
             if need_key {
-                // Keep one video/meta config; keep distinct AAC configs (live + VOD).
-                if tag.kind == MSG_AUDIO {
-                    if let Some(i) = pending.iter().position(|p| p.kind == MSG_AUDIO && p.data == tag.data) {
+                // Keep distinct video headers (one per Enhanced quality) and AAC headers (live + VOD).
+                if tag.kind == MSG_AUDIO || tag.kind == MSG_VIDEO {
+                    if let Some(i) = pending.iter().position(|p| p.kind == tag.kind && p.data == tag.data) {
                         pending[i] = tag;
-                    } else {
+                    } else if pending.iter().filter(|p| p.kind == tag.kind).count() < 6 {
                         pending.push(tag);
                     }
                 } else {
@@ -319,8 +328,49 @@ async fn stream(
     result
 }
 
+enum SessionEnd {
+    Clean,
+    Fail { connected: bool, err: io::Error },
+}
+
+async fn session(
+    target: Target,
+    rx: &mut broadcast::Receiver<OutMsg>,
+    want: &mut watch::Receiver<bool>,
+    shared: &Shared,
+    dest: &Dest,
+    name: &str,
+) -> SessionEnd {
+    match publish(&target).await {
+        Ok((conn, sid)) => {
+            log!("{name}: connected (waiting for keyframe before live)");
+            // Stay "connecting" until stream() has sent a keyframe — avoids
+            // Twitch announcing LIVE with an empty/broken publish (#1000).
+            match stream(conn, sid, rx, want, shared, &dest.status).await {
+                Ended::StreamEnd => {
+                    log!("{name}: stream ended");
+                    dest.set_on(dest.autostart);
+                    SessionEnd::Clean
+                }
+                Ended::Stopped => {
+                    log!("{name}: stopped from LiveDelay");
+                    SessionEnd::Clean
+                }
+                Ended::Error(e) => {
+                    log!("{name}: dropped: {e}");
+                    SessionEnd::Fail { connected: true, err: e }
+                }
+            }
+        }
+        Err(e) => {
+            log!("{name}: could not connect: {e}");
+            SessionEnd::Fail { connected: false, err: e }
+        }
+    }
+}
+
 /// Keeps one destination connected while it is switched on and there is something to send.
-pub async fn run(target: Target, shared: Arc<Shared>, dest: Arc<Dest>) {
+pub async fn run(dest: Arc<Dest>, shared: Arc<Shared>) {
     let name = dest.status.lock().unwrap().name.clone();
     let set = |state: &'static str, error: String| {
         let mut s = dest.status.lock().unwrap();
@@ -333,6 +383,7 @@ pub async fn run(target: Target, shared: Arc<Shared>, dest: Arc<Dest>) {
         shared.state.send_modify(|v| *v += 1);
     };
     let mut want = dest.want.subscribe();
+    let mut target_rx = dest.target.subscribe();
     let mut rx = shared.out.subscribe();
     let mut backoff = Duration::from_secs(2);
     loop {
@@ -369,48 +420,36 @@ pub async fn run(target: Target, shared: Arc<Shared>, dest: Arc<Dest>) {
                     Err(broadcast::error::RecvError::Closed) => return,
                 },
                 _ = want.changed() => if !*want.borrow_and_update() { break false },
+                _ = target_rx.changed() => break false,
             }
         };
         if !go {
             continue;
         }
+        let target = target_rx.borrow_and_update().clone();
         set("connecting", String::new());
-        let failure = match publish(&target).await {
-            Ok((conn, sid)) => {
-                log!("{name}: connected (waiting for keyframe before live)");
-                backoff = Duration::from_secs(2);
-                // Stay "connecting" until stream() has sent a keyframe — avoids
-                // Twitch announcing LIVE with an empty/broken publish (#1000).
-                match stream(conn, sid, &mut rx, &mut want, &shared, &dest.status).await {
-                    Ended::StreamEnd => {
-                        log!("{name}: stream ended");
-                        // A manually started destination is manual again next time.
-                        dest.set_on(dest.autostart);
-                        continue;
-                    }
-                    Ended::Stopped => {
-                        log!("{name}: stopped from LiveDelay");
-                        continue;
-                    }
-                    Ended::Error(e) => {
-                        log!("{name}: dropped: {e}");
-                        e
-                    }
-                }
-            }
-            Err(e) => {
-                log!("{name}: could not connect: {e}");
-                e
-            }
-        };
-        set("error", failure.to_string());
         tokio::select! {
-            _ = tokio::time::sleep(backoff) => {}
-            _ = want.changed() => {}
+            _ = target_rx.changed() => {
+                log!("{name}: ingest changed, reconnecting");
+                rx = rx.resubscribe();
+            }
+            end = session(target, &mut rx, &mut want, &shared, &dest, &name) => match end {
+                SessionEnd::Clean => {}
+                SessionEnd::Fail { connected, err } => {
+                    if connected {
+                        backoff = Duration::from_secs(2);
+                    }
+                    set("error", err.to_string());
+                    tokio::select! {
+                        _ = tokio::time::sleep(backoff) => {}
+                        _ = want.changed() => {}
+                        _ = target_rx.changed() => {}
+                    }
+                    backoff = (backoff * 2).min(Duration::from_secs(30));
+                    rx = rx.resubscribe();
+                }
+            },
         }
-        backoff = (backoff * 2).min(Duration::from_secs(30));
-        // Anything queued while we slept is stale; resync to the next keyframe.
-        rx = rx.resubscribe();
     }
 }
 

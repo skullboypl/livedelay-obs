@@ -1,4 +1,5 @@
 #include "dock.hpp"
+#include "contrast.hpp"
 
 #include <cstdlib>
 #include "client.hpp"
@@ -369,7 +370,7 @@ void Dock::ShowDestinations(const std::string &j)
 		dot->setStyleSheet(QString("color: %1;").arg(input ? "#5ac8fa" : "#7a7f8c"));
 		auto *name = new QLabel(T("Dock.InputRow"));
 		auto *rate = new QLabel(input ? QString("%1 kb/s").arg(kbps, 0, 'f', 0) : T("Dock.NoSignalShort"));
-		rate->setStyleSheet("color: palette(placeholder-text);");
+		rate->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
 		destGrid_->addWidget(dot, row, 0);
 		destGrid_->addWidget(name, row, 1);
 		destGrid_->addWidget(new Sparkline(history("in", kbps), QColor("#5ac8fa")), row, 2);
@@ -393,7 +394,7 @@ void Dock::ShowDestinations(const std::string &j)
 		if (kbps > 0)
 			st += QString(" · %1 kb/s").arg(kbps, 0, 'f', 0);
 		auto *stateLabel = new QLabel(st);
-		stateLabel->setStyleSheet("color: palette(placeholder-text);");
+		stateLabel->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
 		if (!error.empty())
 			stateLabel->setToolTip(QString::fromStdString(error));
 		auto *toggle = new QPushButton(on ? T("Dock.DestStop") : T("Dock.DestStart"));

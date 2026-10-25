@@ -1,4 +1,5 @@
 #include "update.hpp"
+#include "contrast.hpp"
 #include "i18n.hpp"
 #include "settings.hpp"
 #include "version.hpp"
@@ -835,6 +836,7 @@ struct ReleaseNote {
 // Newest last. A jump across versions shows every note after the one they had.
 const ReleaseNote kReleaseNotes[] = {
 	{"1.0.30", "WhatsNew.Body1030"},
+	{"1.0.31", "WhatsNew.Body1031"},
 };
 
 QString SeenVersionPath()
@@ -919,10 +921,11 @@ void ShowWhatsNewOnce(QWidget *parent)
 	const QString from = seen.isEmpty() ? T("WhatsNew.FromEarlier") : T("WhatsNew.From").arg(seen);
 	auto *sub = new QLabel(from);
 	sub->setWordWrap(true);
-	sub->setStyleSheet(QStringLiteral("color: palette(placeholder-text);"));
+	sub->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
 	lay->addWidget(sub);
 	auto *text = new QTextBrowser;
 	text->setOpenExternalLinks(true);
+	text->document()->setDefaultStyleSheet(QStringLiteral("body, p, li, b, span, h3 { color: %1; }").arg(ThemeColor()));
 	text->setHtml(body);
 	lay->addWidget(text, 1);
 	auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok);

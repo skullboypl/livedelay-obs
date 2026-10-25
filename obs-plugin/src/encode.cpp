@@ -251,8 +251,6 @@ EncodeSettings ResolveEncode(const Destination &d)
 		e.keyint_sec = 2;
 		e.rate_control = "CBR";
 		e.summary = T("Encode.SummaryTwitchPartner").arg(e.video_kbps).arg(e.audio_kbps);
-		if (d.enhanced_broadcasting)
-			e.summary += " · " + T("Encode.SummaryEnhancedOn");
 		break;
 	}
 	case EncodeMode::Auto: {
@@ -288,7 +286,7 @@ EncodeSettings ResolveEncode(const Destination &d)
 		const bool manual_size = d.encode_mode == EncodeMode::Manual && d.width > 0 && d.height > 0;
 		uint32_t out_w = e.width > 0 ? e.width : cw;
 		uint32_t out_h = e.height > 0 ? e.height : ch;
-		if (!manual_size && (out_w > 1920 || out_h > 1080)) {
+		if (!d.enhanced_broadcasting && !manual_size && (out_w > 1920 || out_h > 1080)) {
 			const double scale = std::min(1920.0 / double(out_w), 1080.0 / double(out_h));
 			e.width = uint32_t(std::lround(out_w * scale)) & ~1u;
 			e.height = uint32_t(std::lround(out_h * scale)) & ~1u;
@@ -305,6 +303,8 @@ EncodeSettings ResolveEncode(const Destination &d)
 		e.summary += QStringLiteral(" · ") + T("Encode.TrackN").arg(d.audio_track);
 	if (d.vod_track > 0 || d.vod_track < 0 || d.vod_audio)
 		e.summary += QStringLiteral(" · ") + T("Encode.SummaryVodOn");
+	if (d.enhanced_broadcasting)
+		e.summary += QStringLiteral(" · ") + T("Encode.SummaryEnhancedOn");
 	return e;
 }
 

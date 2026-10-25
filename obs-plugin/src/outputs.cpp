@@ -1,6 +1,7 @@
 #include "outputs.hpp"
 #include "client.hpp"
 #include "encode.hpp"
+#include "golive.hpp"
 #include "settings.hpp"
 
 #include <obs-frontend-api.h>
@@ -8,8 +9,11 @@
 #include <util/config-file.h>
 #include <util/platform.h>
 
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTimer>
 
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -23,10 +27,14 @@ struct DestOutput {
 	obs_output_t *output = nullptr;
 	obs_encoder_t *video = nullptr;
 	std::vector<obs_encoder_t *> extra_video; // EB ladder (idx 1…)
+	obs_encoder_group_t *group = nullptr;
 	obs_encoder_t *audio = nullptr; // pooled, not owned
 	obs_service_t *service = nullptr;
 	bool want = false;
 	bool tried_x264 = false;
+	bool golive = false;
+	std::string egress_url;
+	std::string egress_key;
 };
 
 struct PooledAudio {
@@ -77,6 +85,13 @@ void ReleaseOne(DestOutput &o)
 			obs_encoder_release(e);
 	}
 	o.extra_video.clear();
+	if (o.group) {
+		obs_encoder_group_destroy(o.group);
+		o.group = nullptr;
+	}
+	o.golive = false;
+	o.egress_url.clear();
+	o.egress_key.clear();
 	o.audio = nullptr;
 	if (o.service) {
 		obs_service_release(o.service);
@@ -286,24 +301,15 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index, const char *for
 	obs_output_set_video_encoder(o.output, o.video);
 	obs_output_set_audio_encoder(o.output, o.audio, 0);
 
-	// NEVER attach obs_output_set_video_encoder2 for stock Twitch/YouTube RTMP.
-	// Multi-video Enhanced RTMP without Twitch GoLive produces unplayable media
-	// (Twitch player error #1000). Ladder stays off until GoLive ingest exists.
-	if (d.enhanced_broadcasting) {
-		blog(LOG_WARNING,
-		     "[livedelay] Enhanced Broadcasting requested for %s but ignored — "
-		     "multi-video RTMP breaks Twitch without GoLive (player #1000). "
-		     "Publishing single video track only.",
-		     o.name.c_str());
-	}
+	// Extra video tracks are attached in StartIndex, and only after Twitch returns a
+	// GoLive ingest. Multi-video on the classic RTMP url breaks the player (#1000).
 
 	if (vodEnc)
 		obs_output_set_audio_encoder(o.output, vodEnc, 1);
 
-	blog(LOG_INFO, "[livedelay] ready %s → %s key=%s (%s %d kb/s) audio=%d%s%s", o.name.c_str(), server.c_str(),
+	blog(LOG_INFO, "[livedelay] ready %s → %s key=%s (%s %d kb/s) audio=%d%s", o.name.c_str(), server.c_str(),
 	     o.ingest_key.c_str(), enc.video_encoder_id.toUtf8().constData(), enc.video_kbps, int(liveMixer) + 1,
-	     vodEnc ? (std::string(" vod=") + std::to_string(vodTrack)).c_str() : "",
-	     d.enhanced_broadcasting ? " +EB(ignored)" : "");
+	     vodEnc ? (std::string(" vod=") + std::to_string(vodTrack)).c_str() : "");
 	return true;
 }
 
@@ -397,6 +403,128 @@ void RebindMedia(DestOutput &o)
 	}
 }
 
+bool EncoderAvailable(const char *type)
+{
+	const char *id = nullptr;
+	for (size_t n = 0; obs_enum_encoder_types(n, &id); ++n) {
+		if (id && type && std::strcmp(id, type) == 0)
+			return true;
+	}
+	return false;
+}
+
+obs_scale_type ScaleOf(const std::string &s)
+{
+	if (s.find("LANCZOS") != std::string::npos)
+		return OBS_SCALE_LANCZOS;
+	if (s.find("BILINEAR") != std::string::npos)
+		return OBS_SCALE_BILINEAR;
+	if (s.find("POINT") != std::string::npos)
+		return OBS_SCALE_POINT;
+	if (s.find("AREA") != std::string::npos)
+		return OBS_SCALE_AREA;
+	if (s.find("DISABLE") != std::string::npos)
+		return OBS_SCALE_DISABLE;
+	return OBS_SCALE_BICUBIC;
+}
+
+uint32_t FpsDivisor(const obs_video_info &ovi, uint32_t num, uint32_t den)
+{
+	if (!num || !den || (ovi.fps_num == num && ovi.fps_den == den))
+		return 1;
+	const uint64_t target = uint64_t(num) * ovi.fps_den;
+	if (!target)
+		return 1;
+	const uint32_t div = uint32_t((uint64_t(ovi.fps_num) * den) / target);
+	return div < 1 ? 1 : div;
+}
+
+void PushEgress(size_t index, const std::string &url, const std::string &key)
+{
+	if (url.empty() || key.empty())
+		return;
+	QJsonObject body;
+	body.insert(QStringLiteral("url"), QString::fromStdString(url));
+	body.insert(QStringLiteral("key"), QString::fromStdString(key));
+	const std::string json = QJsonDocument(body).toJson(QJsonDocument::Compact).toStdString();
+	int status = 0;
+	Request("POST", "/dest/target?i=" + std::to_string(index), json, &status);
+	if (status != 200)
+		blog(LOG_WARNING, "[livedelay] dest/target i=%zu HTTP %d", index, status);
+}
+
+bool TryAttachGoLive(DestOutput &o, const Destination &d)
+{
+	if (!o.output || o.golive)
+		return o.golive;
+	GoLivePlan plan;
+	std::string err;
+	if (!FetchGoLive(d, plan, err)) {
+		blog(LOG_WARNING,
+		     "[livedelay] %s: Enhanced Broadcasting left off (%s). One video track on the normal ingest.",
+		     o.name.c_str(), err.c_str());
+		return false;
+	}
+	obs_encoder_group_t *group = obs_encoder_group_create();
+	if (!group)
+		return false;
+	std::vector<obs_encoder_t *> made;
+	obs_video_info ovi{};
+	obs_get_video_info(&ovi);
+	for (size_t n = 0; n < plan.rungs.size() && n < 6; ++n) {
+		const GoLiveRung &r = plan.rungs[n];
+		if (!EncoderAvailable(r.type.c_str())) {
+			blog(LOG_WARNING, "[livedelay] %s: encoder %s is not available", o.name.c_str(), r.type.c_str());
+			break;
+		}
+		obs_data_t *settings = obs_data_create_from_json(r.settings_json.empty() ? "{}" : r.settings_json.c_str());
+		if (!settings)
+			settings = obs_data_create();
+		obs_data_set_bool(settings, "disable_scenecut", true);
+		const std::string name = "livedelay_eb_" + o.ingest_key + "_" + std::to_string(n);
+		obs_encoder_t *enc = obs_video_encoder_create(r.type.c_str(), name.c_str(), settings, nullptr);
+		obs_data_release(settings);
+		if (!enc) {
+			blog(LOG_WARNING, "[livedelay] %s: failed to create %s", o.name.c_str(), r.type.c_str());
+			break;
+		}
+		obs_encoder_set_video(enc, obs_get_video());
+		if (r.width && r.height && (r.width != ovi.output_width || r.height != ovi.output_height)) {
+			obs_encoder_set_scaled_size(enc, r.width, r.height);
+			obs_encoder_set_gpu_scale_type(enc, ScaleOf(r.scale));
+			obs_encoder_set_preferred_video_format(enc, VIDEO_FORMAT_NV12);
+		}
+		const uint32_t div = FpsDivisor(ovi, r.fps_num, r.fps_den);
+		if (div > 1)
+			obs_encoder_set_frame_rate_divisor(enc, div);
+		if (!obs_encoder_set_group(enc, group)) {
+			obs_encoder_release(enc);
+			break;
+		}
+		made.push_back(enc);
+	}
+	if (made.empty()) {
+		obs_encoder_group_destroy(group);
+		blog(LOG_WARNING,
+		     "[livedelay] %s: Enhanced Broadcasting left off (ladder encoders failed). One video track.",
+		     o.name.c_str());
+		return false;
+	}
+	if (o.video)
+		obs_encoder_release(o.video);
+	o.video = made[0];
+	for (size_t n = 1; n < made.size(); ++n)
+		o.extra_video.push_back(made[n]);
+	o.group = group;
+	for (size_t n = 0; n < made.size(); ++n)
+		obs_output_set_video_encoder2(o.output, made[n], n);
+	o.golive = true;
+	o.egress_url = std::move(plan.url);
+	o.egress_key = std::move(plan.key);
+	blog(LOG_INFO, "[livedelay] %s: Enhanced Broadcasting %zu video tracks", o.name.c_str(), made.size());
+	return true;
+}
+
 bool StartIndex(size_t i)
 {
 	if (i >= g_outs.size())
@@ -413,11 +541,41 @@ bool StartIndex(size_t i)
 		o.want = true;
 		return true;
 	}
+	Settings live = Settings::Load(ConfigPath());
+	if (i < live.dests.size()) {
+		const Destination &d = live.dests[i];
+		const bool wantEb = d.enhanced_broadcasting && DestIsTwitch(d);
+		bool retarget = false;
+		if (wantEb && !o.golive) {
+			retarget = TryAttachGoLive(o, d);
+		} else if (!wantEb && o.golive) {
+			blog(LOG_INFO, "[livedelay] %s: Enhanced Broadcasting off, one video track", o.name.c_str());
+			if (!BuildOne(o, d, i))
+				return false;
+			retarget = true;
+		}
+		if (o.golive)
+			PushEgress(i, o.egress_url, o.egress_key);
+		else if (retarget)
+			PushEgress(i, d.url, d.key);
+	}
 	RebindMedia(o);
-	if (obs_output_start(o.output)) {
+	if (o.output && obs_output_start(o.output)) {
 		o.want = true;
-		blog(LOG_INFO, "[livedelay] started encode for %s", o.name.c_str());
+		blog(LOG_INFO, "[livedelay] started encode for %s%s", o.name.c_str(), o.golive ? " (GoLive)" : "");
 		return true;
+	}
+	if (o.golive && i < live.dests.size()) {
+		blog(LOG_WARNING, "[livedelay] %s: GoLive output failed, falling back to one video track", o.name.c_str());
+		if (BuildOne(o, live.dests[i], i)) {
+			PushEgress(i, live.dests[i].url, live.dests[i].key);
+			RebindMedia(o);
+			if (o.output && obs_output_start(o.output)) {
+				o.want = true;
+				blog(LOG_INFO, "[livedelay] started encode for %s", o.name.c_str());
+				return true;
+			}
+		}
 	}
 	const bool input = ProxyHasInput();
 	const std::string facts = StartFacts(o, input, obs_frontend_streaming_active());
@@ -463,7 +621,6 @@ void StartReadyPlatforms()
 	bool any_left = false;
 	for (size_t i = 0; i < s.dests.size() && i < g_outs.size(); ++i) {
 		Destination &d = s.dests[i];
-		d.enhanced_broadcasting = false;
 		const bool ready = d.enabled && !d.url.empty() && !d.key.empty();
 		if (!ready && !g_outs[i].want)
 			continue;
