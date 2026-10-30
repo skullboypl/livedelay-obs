@@ -106,8 +106,10 @@ QVector<Service> Load()
 	auto has = [&](const char *n) {
 		return std::any_of(list.begin(), list.end(), [&](const Service &s) { return s.name == n; });
 	};
+	// Kick hands every channel its own ingest host, so there is no address to
+	// ship: a shared one accepts the connection and then drops the stream.
 	if (!has("Kick"))
-		list.push_back({"Kick", {{"Default", "rtmps://fa723fc1b171.global-contribute.live-video.net/app"}},
+		list.push_back({"Kick", {{T("Settings.ServerFromDashboard"), ""}},
 				"https://dashboard.kick.com/settings/stream", true, 8000, 320, 2});
 	if (!has("Twitch"))
 		list.push_back({"Twitch", {{T("Settings.AutoServer"), "rtmp://live.twitch.tv/app"}},

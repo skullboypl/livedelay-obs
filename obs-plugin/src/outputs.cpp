@@ -621,7 +621,10 @@ void StartReadyPlatforms()
 	bool any_left = false;
 	for (size_t i = 0; i < s.dests.size() && i < g_outs.size(); ++i) {
 		Destination &d = s.dests[i];
-		const bool ready = d.enabled && !d.url.empty() && !d.key.empty();
+		// "Start automatically with the OBS stream" off means exactly that: the
+		// platform waits for Start in the panel. Only `want` (someone pressed
+		// Start) gets a platform going from here.
+		const bool ready = d.enabled && d.autostart && !d.url.empty() && !d.key.empty();
 		if (!ready && !g_outs[i].want)
 			continue;
 		if (g_outs[i].want && g_outs[i].output && obs_output_active(g_outs[i].output))
