@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.32 – 2026-10-30
+
+- **The dock looks like the rest of LiveDelay.** It draws from the product palette, where the three accents are named after what they mean, and fills exactly one button: the action the current state is waiting for. The rest stay outlined. Settings gains a Dock look — same as OBS, LiveDelay dark, or high contrast. The viewer overlay is not repeated there; it keeps its own editor.
+- **Web panel from the dock.** A new button opens the full settings page in the browser, the same one the standalone app uses, even though the engine is embedded in OBS.
+- **Settings changed elsewhere arrive without a restart.** The dock watches `livedelay.ini`, so a save from the web panel or the app shows up as it happens. A changed platform list or address restarts the engine, but only while nothing is streaming.
+- **A platform without autostart really waits.** Start Streaming in OBS no longer starts platforms whose "Start automatically with the OBS stream" is off; they wait for Start in the panel. This reverses the blunt fix from 1.0.7, which started everything so the dock would not sit on "no signal" — that symptom no longer appears, because the dock shows the stream arriving from OBS either way. ([#2](https://github.com/skullboypl/livedelay-obs/issues/2))
+- **Kick asks for your own address.** The shipped "Default" was one channel's ingest host, so anyone else connected, briefly looked live, and then failed in a loop — including straight from OBS. Kick gives every channel its own host, so the field is empty and points at your dashboard. An SRT endpoint cannot pass through an RTMP proxy and now says so instead of failing silently. ([#2](https://github.com/skullboypl/livedelay-obs/issues/2))
+- **The limits warning stays hidden.** "Hide" is remembered in `livedelay.ini`, keyed to the settings it warned about, so it survives an OBS restart but returns if a genuinely different problem appears. ([#2](https://github.com/skullboypl/livedelay-obs/issues/2))
+- **The app's global hotkeys survive a save from OBS.** The settings window rewrote the ini from its own model and dropped `hotkey_*`; those are now carried through untouched.
+
 ## 1.0.31 – 2026-10-25
 
 - **Twitch Enhanced Broadcasting (beta).** A Twitch destination can ask Twitch for a GoLive session and send that quality ladder through the delay. Arm, Activate and Cut move every quality together. If Twitch does not return a session, that destination stays on one video track and the normal ingest. Kick and YouTube stay on one track. OBS's own Enhanced Broadcasting checkbox stays off.

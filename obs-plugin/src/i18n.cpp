@@ -31,7 +31,7 @@ namespace {
 const char *kProbes[] = {
 	"Settings.TabHotkeys", "Settings.TabLogs", "Hotkey.None", "Hotkey.Clear", "Hotkey.About",
 	"Update.ProgressTitle", "Update.ProgressWaiting", "Encode.VodAudioHelp", "Settings.StreamDeckText",
-	"Settings.TabAudio", "Encode.VodTrack", "WhatsNew.Title", "WhatsNew.Body1031", "Danger.Title",
+	"Settings.TabAudio", "Encode.VodTrack", "WhatsNew.Title", "WhatsNew.Body1032", "Danger.Title",
 	"Dock.Panel", "Settings.DockTheme", "Settings.ServerFromDashboard", "Settings.NotRtmp",
 };
 
