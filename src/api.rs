@@ -9,16 +9,26 @@
 //! POST /disarm           stop keeping the buffer
 //! GET  /overlay          status text for an OBS Browser source (?preview shows every state)
 //! GET  /live-preview     what OBS sends vs. what viewers get, side by side
+//! GET  /dock             compact Arm / Activate / Cut panel for a browser dock
+//! GET  /edit-theme       visual editor for the overlay
 //! POST /dest/start?i=0   start / stop one destination (/dest/stop?i=0)
 //! POST /settings         hot-apply delay / max_buffer_mb without restarting
 //! GET  /overlay/config   overlay look and texts as JSON; POST replaces it
 //! GET  /edit-theme       visual editor for the overlay
+//! GET  /panel            settings page (keys only readable from this machine)
+//! GET  /config           the ini as JSON; localhost only
+//! POST /config           patch the ini; localhost only
+//! GET  /services         OBS platform list (servers and stream-key links)
+//! GET  /obs-import       stream target saved in OBS profiles; localhost only
 
+use crate::config::{self, DestUpdate, IniUpdate};
 use crate::engine::Mode;
 use crate::hub::Hub;
-use crate::rtmp::client::Dest;
+use crate::rtmp::client::{self, Dest};
 use std::fmt::Write as _;
 use std::io;
+use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -30,11 +40,30 @@ pub struct Ctx {
     /// Updated live via POST /settings — Arm without ?delay= uses this.
     pub default_delay: std::sync::Mutex<Duration>,
     pub overlay: crate::overlay::OverlayStore,
+    /// livedelay.ini. Empty when the engine was started without a file.
+    pub ini_path: PathBuf,
+}
+
+const PANEL_HTML: &str = include_str!("panel.html");
+
+fn panel_font(path: &str) -> Option<&'static [u8]> {
+    Some(match path {
+        "/fonts/archivo-latin.woff2" => include_bytes!("fonts/archivo-latin.woff2"),
+        "/fonts/archivo-latin-ext.woff2" => include_bytes!("fonts/archivo-latin-ext.woff2"),
+        "/fonts/archivo-italic-latin.woff2" => include_bytes!("fonts/archivo-italic-latin.woff2"),
+        "/fonts/archivo-italic-latin-ext.woff2" => include_bytes!("fonts/archivo-italic-latin-ext.woff2"),
+        "/fonts/jetbrainsmono-latin.woff2" => include_bytes!("fonts/jetbrainsmono-latin.woff2"),
+        "/fonts/jetbrainsmono-latin-ext.woff2" => include_bytes!("fonts/jetbrainsmono-latin-ext.woff2"),
+        _ => return None,
+    })
 }
 
 const OVERLAY_HTML: &str = include_str!("overlay.html");
 const PREVIEW_HTML: &str = include_str!("preview.html");
 const EDITOR_HTML: &str = include_str!("edit-theme.html");
+const DOCK_HTML: &str = include_str!("dock.html");
+const NAV_JS: &str = include_str!("nav.js");
+const CHROME_CSS: &str = include_str!("chrome.css");
 
 fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
@@ -78,7 +107,8 @@ pub fn state_json(ctx: &Ctx) -> String {
     let st = ctx.hub.status(Instant::now());
     let mode = if st.mode == Mode::Delayed { "delayed" } else { "live" };
     let mut j = format!(
-        "{{\"mode\":\"{mode}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},\"dests\":[",
+        "{{\"mode\":\"{mode}\",\"host\":\"{}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},\"dests\":[",
+        esc(&crate::ffi::host()),
         st.input,
         st.delay_s,
         st.buffer_s,
@@ -158,6 +188,15 @@ pub async fn run(addr: String, ctx: Arc<Ctx>) -> io::Result<()> {
     }
 }
 
+async fn respond_bytes(sock: &mut TcpStream, ctype: &str, body: &[u8]) -> io::Result<()> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    sock.write_all(head.as_bytes()).await?;
+    sock.write_all(body).await
+}
+
 async fn respond_typed(sock: &mut TcpStream, code: &str, ctype: &str, body: &str) -> io::Result<()> {
     let r = format!(
         "HTTP/1.1 {code}\r\nContent-Type: {ctype}; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{body}",
@@ -172,6 +211,280 @@ async fn respond(sock: &mut TcpStream, code: &str, body: &str) -> io::Result<()>
 
 fn query_i(query: &str) -> Option<usize> {
     query.split('&').find_map(|kv| kv.strip_prefix("i=")).and_then(|v| v.parse().ok())
+}
+
+fn loopback(sock: &TcpStream) -> bool {
+    match sock.peer_addr() {
+        Ok(addr) => match addr.ip() {
+            IpAddr::V4(ip) => ip.is_loopback(),
+            IpAddr::V6(ip) => ip.is_loopback(),
+        },
+        Err(_) => false,
+    }
+}
+
+/// A JSON value that is not a string: number, bool or null, copied as text.
+fn json_raw(body: &str, key: &str) -> Option<String> {
+    let pat = format!("\"{key}\"");
+    let rest = body.get(body.find(&pat)? + pat.len()..)?.trim_start().strip_prefix(':')?.trim_start();
+    if rest.starts_with('"') {
+        return None;
+    }
+    let end = rest.find([',', '}', ']']).unwrap_or(rest.len());
+    let v = rest[..end].trim();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v.to_string())
+    }
+}
+
+fn json_objects<'a>(body: &'a str, key: &str) -> Vec<&'a str> {
+    let pat = format!("\"{key}\"");
+    let Some(at) = body.find(&pat) else { return Vec::new() };
+    let Some(rel) = body[at..].find('[') else { return Vec::new() };
+    let bytes = body.as_bytes();
+    let mut i = at + rel + 1;
+    let mut out = Vec::new();
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() || bytes[i] == b']' {
+            break;
+        }
+        if bytes[i] != b'{' {
+            break;
+        }
+        let start = i;
+        let mut depth = 0;
+        let mut in_str = false;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if in_str {
+                if c == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if c == b'"' {
+                    in_str = false;
+                }
+                i += 1;
+                continue;
+            }
+            match c {
+                b'"' => in_str = true,
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        i += 1;
+                        out.push(&body[start..i]);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        while i < bytes.len() && (bytes[i] == b',' || bytes[i].is_ascii_whitespace()) {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn ini_value(text: &str, key: &str) -> String {
+    for line in text.lines() {
+        let t = line.trim().trim_end_matches('\r');
+        let Some((k, v)) = t.split_once('=') else { continue };
+        if k.trim() == key {
+            return v.trim().to_string();
+        }
+    }
+    String::new()
+}
+
+fn config_json(ctx: &Ctx) -> Result<String, String> {
+    if ctx.ini_path.as_os_str().is_empty() {
+        return Err("no ini".into());
+    }
+    let text = std::fs::read_to_string(&ctx.ini_path).map_err(|e| e.to_string())?;
+    let cfg = config::parse(&text)?;
+    let mut j = format!(
+        "{{\"delay\":{},\"max_buffer_mb\":{},\"listen\":\"{}\",\"api\":\"{}\",\"host\":\"{}\",\"language\":\"{}\",\"dock_theme\":\"{}\",\"hotkey_arm\":\"{}\",\"hotkey_activate\":\"{}\",\"hotkey_cut\":\"{}\",\"hotkey_cut_after\":\"{}\",\"arm_slots\":[{}],\"dests\":[",
+        json_number_or(&text, "delay", cfg.delay_s),
+        cfg.max_buffer_mb,
+        esc(&cfg.listen),
+        esc(&cfg.api),
+        esc(&crate::ffi::host()),
+        esc(&ini_value(&text, "language")),
+        esc(&ini_value(&text, "dock_theme")),
+        esc(&ini_value(&text, "hotkey_arm")),
+        esc(&ini_value(&text, "hotkey_activate")),
+        esc(&ini_value(&text, "hotkey_cut")),
+        esc(&ini_value(&text, "hotkey_cut_after")),
+        (0..6)
+            .map(|i| {
+                let v = ini_value(&text, &format!("arm_slot_{i}"));
+                if v.is_empty() { "\"\"".into() } else { format!("\"{}\"", esc(&v)) }
+            })
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    for (i, d) in cfg.dests.iter().enumerate() {
+        let _ = write!(
+            j,
+            "{}{{\"name\":\"{}\",\"service\":\"{}\",\"server\":\"{}\",\"url\":\"{}\",\"key\":\"{}\",\"ingest_key\":\"{}\",\"autostart\":{},\"enabled\":{},\"encode_mode\":\"{}\",\"video_kbps\":{},\"audio_kbps\":{},\"keyint_sec\":{},\"rate_control\":\"{}\",\"width\":{},\"height\":{},\"audio_track\":{},\"vod_track\":{},\"enhanced\":{}}}",
+            if i > 0 { "," } else { "" },
+            esc(&d.name),
+            esc(&d.service),
+            esc(&d.server),
+            esc(&d.url),
+            esc(&d.key),
+            esc(&d.ingest_key),
+            if d.autostart { "true" } else { "false" },
+            if d.enabled { "true" } else { "false" },
+            d.encode_mode.as_str(),
+            d.video_kbps,
+            d.audio_kbps,
+            d.keyint_sec,
+            esc(&d.rate_control),
+            d.width,
+            d.height,
+            d.audio_track,
+            d.vod_track,
+            if d.enhanced_broadcasting { "true" } else { "false" },
+        );
+    }
+    j.push_str("]}");
+    Ok(j)
+}
+
+fn json_number_or(text: &str, key: &str, fallback: f64) -> String {
+    let raw = ini_value(text, key);
+    if raw.parse::<f64>().is_ok() {
+        raw
+    } else {
+        format!("{fallback}")
+    }
+}
+
+fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
+    if ctx.ini_path.as_os_str().is_empty() {
+        return Err("no ini".into());
+    }
+    let text = std::fs::read_to_string(&ctx.ini_path).map_err(|e| e.to_string())?;
+    let before = config::parse(&text)?;
+    let delay: f64 = json_raw(body, "delay").ok_or("delay")?.parse().map_err(|_| "delay")?;
+    let buffer: usize = json_raw(body, "max_buffer_mb").ok_or("max_buffer_mb")?.parse().map_err(|_| "max_buffer_mb")?;
+    if !(1.0..=3600.0).contains(&delay) {
+        return Err("delay_range".into());
+    }
+    if !(64..=16384).contains(&buffer) {
+        return Err("buffer_range".into());
+    }
+    let listen = json_string(body, "listen").filter(|s| !s.is_empty()).ok_or("listen")?;
+    let api = json_string(body, "api").filter(|s| !s.is_empty()).ok_or("api")?;
+    let dock_theme = json_string(body, "dock_theme").filter(|s| !s.is_empty());
+    if let Some(t) = &dock_theme {
+        if !["obs", "dark", "contrast"].contains(&t.as_str()) {
+            return Err("dock_theme".into());
+        }
+    }
+    let mut upd = IniUpdate {
+        delay: Some(json_raw(body, "delay").unwrap_or_else(|| format!("{delay}"))),
+        max_buffer_mb: Some(buffer.to_string()),
+        listen: Some(listen.clone()),
+        api: Some(api.clone()),
+        hotkey_arm: json_string(body, "hotkey_arm"),
+        hotkey_activate: json_string(body, "hotkey_activate"),
+        hotkey_cut: json_string(body, "hotkey_cut"),
+        hotkey_cut_after: json_string(body, "hotkey_cut_after"),
+        language: json_string(body, "language"),
+        dock_theme,
+        arm_slots: std::array::from_fn(|i| json_string(body, &format!("arm_slot_{i}"))),
+        replace_dests: body.contains("\"dests\""),
+        dests: Vec::new(),
+    };
+    for obj in json_objects(body, "dests") {
+        let name = json_string(obj, "name").unwrap_or_default();
+        if name.contains([']', '\n', '\r']) || name.trim().is_empty() {
+            return Err("dest_name".into());
+        }
+        let mode = json_string(obj, "encode_mode").unwrap_or_else(|| "obs".into());
+        if config::EncodeMode::parse(&mode).is_none() {
+            return Err("encode_mode".into());
+        }
+        let track = |key: &str| -> Result<i32, String> {
+            let n: i32 = json_raw(obj, key).unwrap_or_else(|| "0".into()).parse().map_err(|_| key.to_string())?;
+            if !(0..=6).contains(&n) {
+                return Err(key.into());
+            }
+            Ok(n)
+        };
+        let audio_track = track("audio_track")?;
+        let vod_track = track("vod_track")?;
+        let video: u32 = json_raw(obj, "video_kbps").unwrap_or_else(|| "0".into()).parse().map_err(|_| "video_kbps")?;
+        let audio: u32 = json_raw(obj, "audio_kbps").unwrap_or_else(|| "0".into()).parse().map_err(|_| "audio_kbps")?;
+        let keyint: u32 = json_raw(obj, "keyint_sec").unwrap_or_else(|| "0".into()).parse().map_err(|_| "keyint_sec")?;
+        let width: u32 = json_raw(obj, "width").unwrap_or_else(|| "0".into()).parse().map_err(|_| "width")?;
+        let height: u32 = json_raw(obj, "height").unwrap_or_else(|| "0".into()).parse().map_err(|_| "height")?;
+        if video > 100_000 || audio > 512 || keyint > 10 || width > 7680 || height > 4320 {
+            return Err("encode_range".into());
+        }
+        upd.dests.push(DestUpdate {
+            name: Some(name),
+            service: json_string(obj, "service"),
+            server: json_string(obj, "server"),
+            url: json_string(obj, "url"),
+            key: json_string(obj, "key"),
+            enabled: json_raw(obj, "enabled").map(|v| v == "true"),
+            autostart: json_raw(obj, "autostart").map(|v| v == "true"),
+            encode_mode: Some(mode),
+            video_kbps: Some(video.to_string()),
+            audio_kbps: Some(audio.to_string()),
+            keyint_sec: Some(keyint.to_string()),
+            rate_control: json_string(obj, "rate_control").or(Some("CBR".into())),
+            width: Some(width.to_string()),
+            height: Some(height.to_string()),
+            audio_track: Some(audio_track.to_string()),
+            vod_track: Some(vod_track.to_string()),
+            enhanced: json_raw(obj, "enhanced").map(|v| v == "true"),
+        });
+    }
+    let structural = listen != before.listen
+        || api != before.api
+        || before.dests.len() != upd.dests.len()
+        || upd.dests.iter().enumerate().any(|(i, p)| {
+            let Some(old) = before.dests.get(i) else { return true };
+            let audio = old.audio_track.to_string();
+            let vod = old.vod_track.to_string();
+            p.encode_mode.as_deref() != Some(old.encode_mode.as_str())
+                || p.enhanced.is_some_and(|v| v != old.enhanced_broadcasting)
+                || p.audio_track.as_deref() != Some(audio.as_str())
+                || p.vod_track.as_deref() != Some(vod.as_str())
+        });
+    let next = config::update_ini(&text, &upd);
+    let bak = ctx.ini_path.with_extension("ini.bak");
+    let _ = std::fs::copy(&ctx.ini_path, &bak);
+    std::fs::write(&ctx.ini_path, &next).map_err(|e| e.to_string())?;
+
+    *ctx.default_delay.lock().unwrap_or_else(|e| e.into_inner()) = Duration::from_secs_f64(delay);
+    let n = ctx.hub.slots.len().max(1);
+    let per = (buffer * 1024 * 1024) / n;
+    for slot in &ctx.hub.slots {
+        slot.shared.set_max_bytes(per);
+    }
+    for (i, patch) in upd.dests.iter().enumerate() {
+        let (Some(url), Some(key)) = (&patch.url, &patch.key) else { continue };
+        let Some(dest) = ctx.dests.get(i) else { break };
+        if let Ok(target) = client::parse_url(url, key) {
+            dest.set_target(target);
+        }
+    }
+    ctx.hub.bump();
+    Ok(structural)
 }
 
 async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
@@ -213,6 +526,11 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
         return respond(&mut sock, "403 Forbidden", "{\"error\":\"cross-site\"}").await;
     }
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
+    if method == "GET" {
+        if let Some(bytes) = panel_font(path) {
+            return respond_bytes(&mut sock, "font/woff2", bytes).await;
+        }
+    }
     let delay = query.split('&').find_map(|kv| kv.strip_prefix("delay=")).and_then(|v| v.parse::<f64>().ok());
     let slot_i = query_i(query).unwrap_or(0);
     match (method, path) {
@@ -220,6 +538,42 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
         ("GET", "/events") => events(sock, ctx).await,
         ("GET", "/overlay") => respond_typed(&mut sock, "200 OK", "text/html", OVERLAY_HTML).await,
         ("GET", "/edit-theme") => respond_typed(&mut sock, "200 OK", "text/html", EDITOR_HTML).await,
+        ("GET", "/dock") => respond_typed(&mut sock, "200 OK", "text/html", DOCK_HTML).await,
+        ("GET", "/nav.js") => respond_typed(&mut sock, "200 OK", "text/javascript", NAV_JS).await,
+        ("GET", "/chrome.css") => respond_typed(&mut sock, "200 OK", "text/css", CHROME_CSS).await,
+        ("GET", "/panel") => respond_typed(&mut sock, "200 OK", "text/html", PANEL_HTML).await,
+        ("GET", "/logs") => {
+            if !loopback(&sock) {
+                return respond_typed(&mut sock, "403 Forbidden", "text/plain", "local_only\n").await;
+            }
+            let body = crate::recent_logs();
+            respond_typed(&mut sock, "200 OK", "text/plain", &body).await
+        }
+        ("GET", "/services") => respond(&mut sock, "200 OK", &crate::catalog::services_json()).await,
+        ("GET", "/obs-import") => {
+            if !loopback(&sock) {
+                return respond(&mut sock, "403 Forbidden", "{\"error\":\"local_only\"}").await;
+            }
+            respond(&mut sock, "200 OK", &crate::catalog::obs_import_json()).await
+        }
+        ("GET", "/config") => {
+            if !loopback(&sock) {
+                return respond(&mut sock, "403 Forbidden", "{\"error\":\"local_only\"}").await;
+            }
+            match config_json(ctx) {
+                Ok(body) => respond(&mut sock, "200 OK", &body).await,
+                Err(e) => respond(&mut sock, "500 Internal Server Error", &format!("{{\"error\":\"{}\"}}", esc(&e))).await,
+            }
+        }
+        ("POST", "/config") => {
+            if !loopback(&sock) {
+                return respond(&mut sock, "403 Forbidden", "{\"error\":\"local_only\"}").await;
+            }
+            match apply_config(ctx, &String::from_utf8_lossy(&body)) {
+                Ok(reload) => respond(&mut sock, "200 OK", &format!("{{\"ok\":true,\"reload\":{reload}}}")).await,
+                Err(e) => respond(&mut sock, "400 Bad Request", &format!("{{\"error\":\"{}\"}}", esc(&e))).await,
+            }
+        }
         ("GET", "/overlay/config") => respond(&mut sock, "200 OK", &ctx.overlay.get()).await,
         ("POST", "/overlay/config") => match ctx.overlay.set(&String::from_utf8_lossy(&body)) {
             Ok(()) => {

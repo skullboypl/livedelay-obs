@@ -79,6 +79,8 @@ pub struct Dest {
     /// ingest that happens to share Auto's address.
     pub server: String,
     pub key: String,
+    /// OBS service name (`Twitch`, `Kick`, …). Empty means a custom server.
+    pub service: String,
     pub enabled: bool,
     /// Start sending as soon as OBS streams; otherwise wait for Start in LiveDelay.
     pub autostart: bool,
@@ -93,6 +95,10 @@ pub struct Dest {
     pub height: u32,
     pub vod_audio: bool,
     pub enhanced_broadcasting: bool,
+    /// 0 = whatever OBS uses for the stream. 1–6 = that mixer.
+    pub audio_track: i32,
+    /// 0 = no Twitch VOD track. 1–6 = that mixer is the second AAC.
+    pub vod_track: i32,
 }
 
 impl Default for Dest {
@@ -102,6 +108,7 @@ impl Default for Dest {
             url: String::new(),
             server: String::new(),
             key: String::new(),
+            service: String::new(),
             enabled: true,
             autostart: true,
             ingest_key: String::new(),
@@ -114,6 +121,8 @@ impl Default for Dest {
             height: 0,
             vod_audio: false,
             enhanced_broadcasting: false,
+            audio_track: 0,
+            vod_track: 0,
         }
     }
 }
@@ -149,6 +158,8 @@ pub struct Config {
     pub overlay: Overlay,
     /// overlay.json next to the ini; empty when the config came from a string.
     pub overlay_file: std::path::PathBuf,
+    /// The ini this config was loaded from. Empty when it came from a string.
+    pub ini_path: std::path::PathBuf,
 }
 
 impl Default for Config {
@@ -162,6 +173,7 @@ impl Default for Config {
             hotkeys: vec![],
             overlay: Overlay::default(),
             overlay_file: Default::default(),
+            ini_path: Default::default(),
         }
     }
 }
@@ -233,6 +245,7 @@ pub fn parse_report(text: &str) -> ParseReport {
                     "url" => d.url = v.into(),
                     "server" => d.server = v.into(),
                     "key" => d.key = v.into(),
+                    "service" => d.service = v.into(),
                     "enabled" => d.enabled = yes(v),
                     "autostart" => d.autostart = yes(v),
                     "ingest_key" => d.ingest_key = v.into(),
@@ -283,8 +296,20 @@ pub fn parse_report(text: &str) -> ParseReport {
                     },
                     "vod_audio" => d.vod_audio = yes(v),
                     "enhanced_broadcasting" | "enhanced" => d.enhanced_broadcasting = yes(v),
-                    // Which OBS service the URL came from; only the settings window uses it.
-                    "service" => {}
+                    "audio_track" => match v.parse() {
+                        Ok(n) => d.audio_track = n,
+                        Err(_) => {
+                            keep = false;
+                            dropped.push(note("audio_track must be a number"));
+                        }
+                    },
+                    "vod_track" => match v.parse() {
+                        Ok(n) => d.vod_track = n,
+                        Err(_) => {
+                            keep = false;
+                            dropped.push(note("vod_track must be a number"));
+                        }
+                    },
                     _ => {}
                 }
             }
@@ -350,7 +375,195 @@ pub fn parse(text: &str) -> Result<Config, String> {
 
 fn finish(path: &Path, mut c: Config) -> Config {
     c.overlay_file = path.with_file_name("overlay.json");
+    c.ini_path = path.to_path_buf();
     c
+}
+
+/// Fields the web panel may change. `None` leaves that line as it is.
+/// When `replace_dests` is set, `dests` is the whole list: extra blocks are
+/// dropped and missing ones are appended. Unknown keys inside a block that
+/// stays are still copied through.
+#[derive(Default)]
+pub struct IniUpdate {
+    pub delay: Option<String>,
+    pub max_buffer_mb: Option<String>,
+    pub listen: Option<String>,
+    pub api: Option<String>,
+    pub language: Option<String>,
+    /// Look of the OBS dock: "obs", "dark" or "contrast". The engine only
+    /// carries it; the plugin is what reads it.
+    pub dock_theme: Option<String>,
+    pub hotkey_arm: Option<String>,
+    pub hotkey_activate: Option<String>,
+    pub hotkey_cut: Option<String>,
+    pub hotkey_cut_after: Option<String>,
+    pub arm_slots: [Option<String>; 6],
+    pub replace_dests: bool,
+    pub dests: Vec<DestUpdate>,
+}
+
+#[derive(Default)]
+pub struct DestUpdate {
+    pub name: Option<String>,
+    pub service: Option<String>,
+    pub server: Option<String>,
+    pub url: Option<String>,
+    pub key: Option<String>,
+    pub enabled: Option<bool>,
+    pub autostart: Option<bool>,
+    pub encode_mode: Option<String>,
+    pub video_kbps: Option<String>,
+    pub audio_kbps: Option<String>,
+    pub keyint_sec: Option<String>,
+    pub rate_control: Option<String>,
+    pub width: Option<String>,
+    pub height: Option<String>,
+    pub audio_track: Option<String>,
+    pub vod_track: Option<String>,
+    pub enhanced: Option<bool>,
+}
+
+fn split_key(line: &str) -> Option<(String, String)> {
+    let t = line.trim();
+    if t.is_empty() || t.starts_with('#') || t.starts_with(';') || t.starts_with('[') {
+        return None;
+    }
+    let (k, v) = t.split_once('=')?;
+    let k = k.trim();
+    if k.is_empty() {
+        return None;
+    }
+    Some((k.to_string(), v.trim().to_string()))
+}
+
+fn set_line(lines: &mut Vec<String>, key: &str, value: &str) {
+    for line in lines.iter_mut() {
+        if let Some((k, _)) = split_key(line) {
+            if k == key {
+                *line = format!("{key} = {value}");
+                return;
+            }
+        }
+    }
+    let mut at = lines.len();
+    while at > 0 && lines[at - 1].trim().is_empty() {
+        at -= 1;
+    }
+    lines.insert(at, format!("{key} = {value}"));
+}
+
+/// Rewrites the ini text. Comments, unknown keys and every platform block the
+/// patch does not mention are copied through.
+pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
+    let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
+    let mut global = Vec::new();
+    let mut dests: Vec<(String, Vec<String>)> = Vec::new();
+    for raw in text.split('\n') {
+        let line = raw.strip_suffix('\r').unwrap_or(raw).to_string();
+        let t = line.trim();
+        if t.starts_with("[dest") && t.ends_with(']') {
+            dests.push((line, Vec::new()));
+        } else if let Some((_, lines)) = dests.last_mut() {
+            lines.push(line);
+        } else {
+            global.push(line);
+        }
+    }
+    let setg = |lines: &mut Vec<String>, key: &str, value: &Option<String>| {
+        if let Some(v) = value {
+            set_line(lines, key, v);
+        }
+    };
+    setg(&mut global, "delay", &upd.delay);
+    setg(&mut global, "max_buffer_mb", &upd.max_buffer_mb);
+    setg(&mut global, "listen", &upd.listen);
+    setg(&mut global, "api", &upd.api);
+    setg(&mut global, "hotkey_arm", &upd.hotkey_arm);
+    setg(&mut global, "hotkey_activate", &upd.hotkey_activate);
+    setg(&mut global, "hotkey_cut", &upd.hotkey_cut);
+    setg(&mut global, "hotkey_cut_after", &upd.hotkey_cut_after);
+    setg(&mut global, "language", &upd.language);
+    setg(&mut global, "dock_theme", &upd.dock_theme);
+    for i in 0..6 {
+        setg(&mut global, &format!("arm_slot_{i}"), &upd.arm_slots[i]);
+    }
+
+    let apply = |lines: &mut Vec<String>, patch: &DestUpdate| {
+        let set = |lines: &mut Vec<String>, key: &str, value: &Option<String>| {
+            if let Some(v) = value {
+                set_line(lines, key, v);
+            }
+        };
+        set(lines, "service", &patch.service);
+        set(lines, "server", &patch.server);
+        set(lines, "url", &patch.url);
+        set(lines, "key", &patch.key);
+        set(lines, "encode_mode", &patch.encode_mode);
+        set(lines, "video_kbps", &patch.video_kbps);
+        set(lines, "audio_kbps", &patch.audio_kbps);
+        set(lines, "keyint_sec", &patch.keyint_sec);
+        set(lines, "rate_control", &patch.rate_control);
+        set(lines, "width", &patch.width);
+        set(lines, "height", &patch.height);
+        set(lines, "audio_track", &patch.audio_track);
+        if let Some(v) = &patch.vod_track {
+            set_line(lines, "vod_track", v);
+            let on = v != "0" && !v.is_empty();
+            set_line(lines, "vod_audio", if on { "yes" } else { "no" });
+        }
+        if let Some(on) = patch.enabled {
+            set_line(lines, "enabled", if on { "yes" } else { "no" });
+        }
+        if let Some(on) = patch.autostart {
+            set_line(lines, "autostart", if on { "yes" } else { "no" });
+        }
+        if let Some(on) = patch.enhanced {
+            set_line(lines, "enhanced_broadcasting", if on { "yes" } else { "no" });
+        }
+    };
+
+    if upd.replace_dests {
+        dests.truncate(upd.dests.len());
+    }
+    for (i, patch) in upd.dests.iter().enumerate() {
+        if i >= dests.len() {
+            if !upd.replace_dests {
+                break;
+            }
+            let name = patch.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| format!("Platforma {}", i + 1));
+            let mut lines = Vec::new();
+            apply(&mut lines, patch);
+            set_line(&mut lines, "ingest_key", &format!("ld{i}"));
+            dests.push((format!("[dest {name}]"), lines));
+            continue;
+        }
+        let (header, lines) = &mut dests[i];
+        if let Some(name) = &patch.name {
+            let name = name.trim();
+            if !name.is_empty() {
+                *header = format!("[dest {name}]");
+            }
+        }
+        apply(lines, patch);
+    }
+
+    let mut out = String::new();
+    for line in &global {
+        out.push_str(line);
+        out.push_str(eol);
+    }
+    for (header, lines) in &dests {
+        out.push_str(header);
+        out.push_str(eol);
+        for line in lines {
+            out.push_str(line);
+            out.push_str(eol);
+        }
+    }
+    if !text.ends_with('\n') && out.ends_with(eol) {
+        out.truncate(out.len() - eol.len());
+    }
+    out
 }
 
 fn read_text(path: &Path) -> Result<String, String> {
@@ -522,5 +735,33 @@ server = auto
         assert!(now.contains("server = auto"));
         assert_eq!(std::fs::read_to_string(dir.join("livedelay.ini.bak")).unwrap(), original);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn update_ini_keeps_comments_and_encoder_keys() {
+        let src = "# keep me\r\ndelay = 15\r\nhotkey_arm =\r\n\r\n[dest Twitch]\r\nurl = rtmp://old/app\r\nkey = secret\r\nenabled = yes\r\nencode_mode = obs\r\n";
+        let upd = IniUpdate {
+            delay: Some("9".into()),
+            max_buffer_mb: Some("640".into()),
+            hotkey_arm: Some("Ctrl+Alt+F13".into()),
+            dests: vec![DestUpdate {
+                url: Some("rtmp://new/app".into()),
+                key: Some("next".into()),
+                autostart: Some(false),
+                ..DestUpdate::default()
+            }],
+            ..IniUpdate::default()
+        };
+        let out = update_ini(src, &upd);
+        assert!(out.contains("# keep me"));
+        assert!(out.contains("delay = 9"));
+        assert!(out.contains("max_buffer_mb = 640"));
+        assert!(out.contains("hotkey_arm = Ctrl+Alt+F13"));
+        assert!(out.contains("enabled = yes"));
+        assert!(out.contains("encode_mode = obs"));
+        assert!(out.contains("url = rtmp://new/app"));
+        assert!(out.contains("key = next"));
+        assert!(out.contains("autostart = no"));
+        assert!(!out.contains("secret"));
     }
 }

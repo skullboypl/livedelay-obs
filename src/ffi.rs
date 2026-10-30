@@ -1,4 +1,7 @@
-//! C API for the OBS plugin, which links this crate as a static library.
+//! C API of the shared engine.
+//! The OBS plugin links these symbols from the staticlib (`livedelay.lib`).
+//! The standalone app loads the same symbols from the cdylib (`livedelay.dll`).
+//! Both files are built only in this repository.
 
 use crate::{config, Proxy};
 use std::ffi::{c_char, c_int, CStr, CString};
@@ -7,6 +10,13 @@ use std::sync::Mutex;
 
 static PROXY: Mutex<Option<Proxy>> = Mutex::new(None);
 static LAST_ERROR: Mutex<String> = Mutex::new(String::new());
+/// Who started the engine. Empty until the host says so; the web panel uses it
+/// to hide settings only the OBS plugin can act on.
+static HOST: Mutex<String> = Mutex::new(String::new());
+
+pub fn host() -> String {
+    HOST.lock().unwrap_or_else(|p| p.into_inner()).clone()
+}
 
 pub type LogFn = extern "C" fn(msg: *const c_char);
 
@@ -25,6 +35,20 @@ pub extern "C" fn ld_set_logger(f: Option<LogFn>) {
             }
         });
     }
+}
+
+/// Names the host the engine runs in: "obs" from the plugin, anything else (or
+/// nothing at all) from another host. Call it before `ld_start`.
+///
+/// # Safety
+/// `name` must be a valid NUL-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn ld_set_host(name: *const c_char) {
+    if name.is_null() {
+        return;
+    }
+    let name = CStr::from_ptr(name).to_string_lossy().into_owned();
+    *HOST.lock().unwrap_or_else(|p| p.into_inner()) = name;
 }
 
 /// Starts the proxy with the ini at `config_path` (UTF-8), stopping a running one first.

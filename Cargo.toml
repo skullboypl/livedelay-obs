@@ -4,6 +4,13 @@ version = "1.0.31"
 license = "GPL-2.0-or-later"
 edition = "2021"
 description = "Lekki przełącznik opóźnienia streamu dla OBS (proxy RTMP z buforem w RAM)."
+autobins = false
+
+# Old Rust tray host. The new window is livedelay-standalone-app. A separate
+# name so its pdb does not collide with livedelay.dll.
+[[bin]]
+name = "livedelay-tray"
+path = "src/main.rs"
 
 [dependencies]
 tokio = { version = "1", default-features = false, features = ["rt", "net", "io-util", "sync", "time", "macros"] }
@@ -11,8 +18,11 @@ tokio = { version = "1", default-features = false, features = ["rt", "net", "io-
 tokio-native-tls = "0.3"
 
 [lib]
-# staticlib: linked into the OBS plugin DLL; rlib: used by the tray app.
-crate-type = ["staticlib", "rlib"]
+# staticlib: linked into the OBS plugin DLL.
+# rlib: used by the old Rust tray binary in this repo.
+# cdylib: livedelay.dll, the same engine loaded by livedelay-standalone-app.
+# Do not copy this crate into the app repo. See AGENTS.md.
+crate-type = ["staticlib", "rlib", "cdylib"]
 
 [profile.release]
 opt-level = "s"

@@ -5,23 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LiveDelay preview</title>
 <style>
-  :root { --bg: #0f1115; --card: #171a21; --line: #262a33; --text: #e8eaef; --muted: #8b90a0;
-          --live: #34c759; --amber: #ffb300; --red: #ff453a; }
+  :root { --bg: #070707; --card: #0b0b0c; --line: #1e1e21; --text: #ebe8e3; --muted: #8a8780;
+          --live: #3ddc84; --amber: #ffbf3c; --red: #ff3b2f; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 "Segoe UI", system-ui, sans-serif; }
-  header { display: flex; align-items: center; gap: 14px; padding: 18px 24px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
-  h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: .02em; }
-  #state { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px;
-           background: #20242c; font-weight: 600; font-size: 13px; letter-spacing: .04em; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 "Archivo", "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 16px 22px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  h1 { font-size: 17px; font-weight: 800; margin: 0; letter-spacing: -.02em; font-stretch: 112%; }
+  #state { display: inline-flex; align-items: center; gap: 8px; font: 500 11px/1 "JetBrains Mono", ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
   #state i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
   #state.live i { background: var(--live); } #state.delayed i { background: var(--red); }
   #state.arming i, #state.armed i { background: var(--amber); }
   #dests { color: var(--muted); font-size: 13px; margin-left: auto; }
-  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 20px; padding: 24px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-  .card h2 { margin: 0; padding: 12px 16px; font-size: 14px; font-weight: 600; display: flex; justify-content: space-between; gap: 12px; }
-  .card h2 span { color: var(--muted); font-weight: 400; }
+  main { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; padding: 18px 22px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 0; overflow: hidden; }
+  .card h2 { margin: 0; padding: 12px 16px; font-size: 13px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; display: flex; justify-content: space-between; gap: 12px; }
+  .card h2 span { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
   video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; }
   .note { color: var(--muted); font-size: 13px; padding: 0 24px 24px; max-width: 900px; }
   .chart { grid-column: 1 / -1; }
@@ -31,8 +30,16 @@
   .legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
   .off { display: grid; place-items: center; aspect-ratio: 16 / 9; color: var(--muted); background: #0b0c0f; }
 </style>
+<link rel="stylesheet" href="/chrome.css">
 </head>
 <body>
+<div class="app">
+  <div class="ribbon"><b>Podgląd</b><span>To, co wchodzi, i to, co idzie do widzów</span></div>
+  <aside class="side">
+    <a class="brand" href="/panel"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><circle cx="19.5" cy="16" r="7" fill="none" stroke="#ebe8e3" stroke-width="2"/><circle cx="12.5" cy="16" r="7" fill="#ff3b2f"/></svg><span>Live<em>Delay</em></span></a>
+    <nav class="nav" id="appnav" aria-label="LiveDelay"></nav>
+  </aside>
+  <div class="work">
 <header>
   <h1>LiveDelay</h1>
   <span id="state"><i></i><b id="stateText">…</b></span>
@@ -56,6 +63,9 @@
   </section>
 </main>
 <p class="note" data-t="note"></p>
+  </div>
+</div>
+<script src="/nav.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.js"></script>
 <script>
   const I18N = {

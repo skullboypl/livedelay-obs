@@ -13,6 +13,7 @@ Copy-Item $dllSrc "$stage\obs-plugins\64bit"
 Copy-Item "$PSScriptRoot\obs-plugin\data\*" "$stage\data\obs-plugins\livedelay-obs" -Recurse
 Copy-Item "$PSScriptRoot\LICENSE" "$stage\LICENSE.txt"
 Copy-Item "$PSScriptRoot\Install-LiveDelay.ps1" "$stage\Install-LiveDelay.ps1"
+Copy-Item "$PSScriptRoot\obs-plugin\data\Uninstall-LiveDelay.ps1" "$stage\Uninstall-LiveDelay.ps1"
 # BOM for Windows PowerShell 5.1 -File. Do NOT put BOM on web/public/install.ps1 (breaks irm|iex).
 $utf8bom = New-Object System.Text.UTF8Encoding $true
 [System.IO.File]::WriteAllText("$stage\Install-LiveDelay.ps1", [System.IO.File]::ReadAllText("$stage\Install-LiveDelay.ps1"), $utf8bom)
@@ -49,8 +50,9 @@ Manual install (legacy)
   "The following OBS plugins failed to load".
 
 Uninstall
-  Delete %ProgramData%\obs-studio\plugins\livedelay-obs
-  (and obs-plugins\64bit\livedelay-obs.dll if you used the manual path).
+  In OBS: LiveDelay settings, About, Danger zone, Uninstall plugin.
+  Or close OBS and run Uninstall-LiveDelay.ps1 from this zip.
+  Settings and stream keys in %AppData%\LiveDelay are kept.
 
 If the plugin still fails to load
   - OBS Studio 31+ x64 required
@@ -65,7 +67,7 @@ $zip = Join-Path $PSScriptRoot "dist\$name.zip"
 Remove-Item $zip -ErrorAction SilentlyContinue
 # tar (bsdtar, built into Windows 10+) writes forward-slash paths; Compress-Archive on
 # Windows PowerShell 5 writes backslashes that some unzip tools mangle.
-& "$env:SystemRoot\System32\tar.exe" -a -c -f $zip -C $stage obs-plugins data INSTALL.txt LICENSE.txt Install-LiveDelay.ps1
+& "$env:SystemRoot\System32\tar.exe" -a -c -f $zip -C $stage obs-plugins data INSTALL.txt LICENSE.txt Install-LiveDelay.ps1 Uninstall-LiveDelay.ps1
 if ($LASTEXITCODE -ne 0) { throw "tar failed" }
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
 "$hash  $name.zip" | Set-Content -Encoding ascii "$zip.sha256"

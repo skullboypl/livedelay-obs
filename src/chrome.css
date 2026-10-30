@@ -1,0 +1,42 @@
+@font-face { font-family: "Archivo"; font-style: normal; font-weight: 100 900; font-stretch: 62% 125%; font-display: swap;
+  src: url(/fonts/archivo-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Archivo"; font-style: normal; font-weight: 100 900; font-stretch: 62% 125%; font-display: swap;
+  src: url(/fonts/archivo-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: "Archivo"; font-style: italic; font-weight: 100 900; font-stretch: 62% 125%; font-display: swap;
+  src: url(/fonts/archivo-italic-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Archivo"; font-style: italic; font-weight: 100 900; font-stretch: 62% 125%; font-display: swap;
+  src: url(/fonts/archivo-italic-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400 600; font-display: swap;
+  src: url(/fonts/jetbrainsmono-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+:root {
+  --ink: #070707; --panel: #0b0b0c; --line: #1e1e21; --line-2: #2d2d31;
+  --text: #ebe8e3; --muted: #8a8780; --dim: #4d4b47;
+  --tally: #ff3b2f; --live: #3ddc84; --arm: #ffbf3c;
+  --sans: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+body { margin: 0; background: var(--ink); color: var(--text); font: 400 15px/1.45 var(--sans); }
+.app { height: 100vh; display: grid; grid-template-columns: 220px 1fr; grid-template-rows: 34px 1fr; }
+.ribbon { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: var(--tally); color: var(--ink); font: 600 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+.ribbon b { background: var(--ink); color: var(--tally); padding: 4px 7px; }
+.side { border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 16px; border-bottom: 1px solid var(--line); font-weight: 800; font-size: 18px; letter-spacing: -.02em; font-stretch: 112%; text-decoration: none; color: inherit; }
+.brand svg { width: 26px; height: 26px; flex: none; }
+.brand span { white-space: nowrap; }
+.brand em { color: var(--tally); font-style: italic; }
+.nav { display: flex; flex-direction: column; padding: 10px 0; overflow: auto; }
+.nav a { display: flex; align-items: center; text-decoration: none; border-left: 2px solid transparent; height: 40px; padding: 0 16px; font: 500 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+.nav a[aria-current="true"] { color: var(--text); border-left-color: var(--tally); background: #101012; }
+.nav a:hover { color: var(--text); }
+.work { min-width: 0; min-height: 0; overflow: auto; }
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 34px auto 1fr; }
+  .side { border-right: 0; border-bottom: 1px solid var(--line); }
+  .nav { flex-direction: row; }
+  .brand { display: none; }
+}

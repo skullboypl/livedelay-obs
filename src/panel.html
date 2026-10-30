@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#070707">
+<title>LiveDelay — panel</title>
+<style>
+@font-face { font-family: "Archivo"; font-style: normal; font-weight: 100 900; font-stretch: 62% 125%; font-display: swap;
+  src: url(/fonts/archivo-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Archivo"; font-style: normal; font-weight: 100 900; font-stretch: 62% 125%; font-display: swap;
+  src: url(/fonts/archivo-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: "Archivo"; font-style: italic; font-weight: 100 900; font-stretch: 62% 125%; font-display: swap;
+  src: url(/fonts/archivo-italic-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "Archivo"; font-style: italic; font-weight: 100 900; font-stretch: 62% 125%; font-display: swap;
+  src: url(/fonts/archivo-italic-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400 600; font-display: swap;
+  src: url(/fonts/jetbrainsmono-latin.woff2) format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD; }
+@font-face { font-family: "JetBrains Mono"; font-style: normal; font-weight: 400 600; font-display: swap;
+  src: url(/fonts/jetbrainsmono-latin-ext.woff2) format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+1E00-1E9F, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF; }
+:root {
+  --ink: #070707; --panel: #0b0b0c; --line: #1e1e21; --line-2: #2d2d31;
+  --text: #ebe8e3; --muted: #8a8780; --dim: #4d4b47;
+  --tally: #ff3b2f; --live: #3ddc84; --arm: #ffbf3c;
+  --sans: "Archivo", "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--ink); color: var(--text); font: 400 15px/1.45 var(--sans); -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+::selection { background: var(--tally); color: var(--ink); }
+:focus-visible { outline: 2px solid var(--tally); outline-offset: 2px; }
+[hidden] { display: none !important; }
+.app { height: 100%; display: grid; grid-template-columns: 220px 1fr; grid-template-rows: 34px 1fr; }
+.ribbon { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; padding: 0 16px; background: var(--tally); color: var(--ink); font: 600 11px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+.ribbon b { background: var(--ink); color: var(--tally); padding: 4px 7px; }
+.ribbon span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side { grid-row: 2; border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+.brand { display: flex; align-items: center; gap: 10px; height: 64px; padding: 0 16px; border-bottom: 1px solid var(--line); font-weight: 800; font-size: 18px; letter-spacing: -.02em; font-stretch: 112%; }
+.brand svg { width: 26px; height: 26px; }
+.brand em { color: var(--tally); font-style: italic; }
+.nav { display: flex; flex-direction: column; padding: 10px 0; }
+.nav button, .nav a {
+  display: flex; align-items: center; text-align: left; text-decoration: none;
+  background: none; border: 0; border-left: 2px solid transparent; height: 40px; padding: 0 16px; cursor: pointer;
+  font: 500 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted);
+}
+.nav button[aria-current="true"], .nav a[aria-current="true"] { color: var(--text); border-left-color: var(--tally); background: #101012; }
+.nav button:hover, .nav a:hover { color: var(--text); }
+.side .chip { margin: auto 16px 16px; }
+.work { grid-row: 2; min-width: 0; min-height: 0; overflow: auto; padding: 22px 28px 92px; }
+.statusbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.statusbar b { font-weight: 800; font-stretch: 112%; letter-spacing: -.02em; }
+.chip { display: inline-flex; align-items: center; gap: 8px; font: 500 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.chip i { width: 7px; height: 7px; border-radius: 50%; background: var(--dim); }
+.chip.live i { background: var(--live); box-shadow: 0 0 8px var(--live); }
+.chip.armed i { background: var(--arm); box-shadow: 0 0 8px var(--arm); }
+.chip.delayed i { background: var(--tally); box-shadow: 0 0 8px var(--tally); }
+h1 { margin: 0 0 6px; font-size: 1.55rem; font-weight: 800; letter-spacing: -.03em; font-stretch: 112%; }
+.hint { margin: 0 0 18px; color: var(--muted); max-width: 46rem; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; max-width: 760px; }
+.field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tag { font: 500 10.5px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+input[type="text"], input[type="number"], input[type="password"], select {
+  height: 40px; width: 100%; padding: 0 12px; background: var(--ink); border: 1px solid var(--line-2); border-radius: 0;
+}
+input:focus, select:focus { outline: none; border-color: var(--tally); }
+input.code { font-family: var(--mono); font-size: 13px; }
+.slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 760px; }
+.check { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.check input { appearance: none; width: 16px; height: 16px; margin: 0; border: 1px solid var(--line-2); background: var(--ink); display: grid; place-items: center; }
+.check input:checked { background: var(--tally); border-color: var(--tally); }
+.check input:checked::after { content: ""; width: 8px; height: 4px; border-left: 2px solid var(--ink); border-bottom: 2px solid var(--ink); transform: translateY(-1px) rotate(-45deg); }
+.check input:disabled { opacity: .4; }
+.plat { display: grid; grid-template-columns: 210px 1fr; border: 1px solid var(--line); background: var(--panel); min-height: 460px; }
+.plist { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.plist ul { list-style: none; margin: 0; padding: 6px; overflow: auto; flex: 1; }
+.plist li button { width: 100%; text-align: left; background: none; border: 0; padding: 10px 10px; cursor: pointer; }
+.plist li button[aria-current="true"] { background: #141416; }
+.plist li small { display: block; color: var(--dim); font: 500 10px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; margin-top: 3px; }
+.plist .tools { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--line); }
+.mini { height: 34px; padding: 0 10px; cursor: pointer; background: transparent; border: 1px solid var(--line-2); font: 600 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+.loghead { display: flex; align-items: center; justify-content: space-between; gap: 12px; max-width: 960px; margin: 0 0 10px; }
+.loghead .hint { margin: 0; }
+.logbox { margin: 0; max-width: 960px; height: calc(100vh - 250px); min-height: 240px; overflow: auto; padding: 14px 16px; background: var(--ink); border: 1px solid var(--line); font: 500 12px/1.55 var(--mono); white-space: pre-wrap; color: var(--muted); }
+.mini:hover { border-color: var(--text); }
+.mini.trash { flex: none; padding: 0 9px; color: var(--muted); }
+.mini.trash:hover { color: var(--tally); border-color: var(--tally); }
+.mini.trash svg { display: block; }
+.pform { padding: 16px 18px 20px; overflow: auto; }
+.pform .grid2 { max-width: none; }
+.keyline { display: flex; gap: 8px; }
+.keyline input { flex: 1; }
+.reveal { flex: none; }
+.manual { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 18px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.manual.off input, .manual.off select { opacity: .4; }
+.summary { margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+.keylink { font: 600 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--tally); text-decoration: none; }
+.keylink:hover { color: var(--text); }
+input.capturing { border-color: var(--tally); color: var(--tally); }
+.importrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 14px; }
+.importrow select { width: auto; min-width: 180px; height: 34px; }
+.rows { width: 100%; border-collapse: collapse; }
+.rows th, .rows td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.rows th { font: 500 10.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); font-weight: 500; }
+.links { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 16px; }
+.links a { height: 34px; display: inline-flex; align-items: center; padding: 0 12px; border: 1px solid var(--line-2); font: 600 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; text-decoration: none; color: var(--text); }
+.links a:hover { border-color: var(--text); }
+.savebar { position: fixed; left: 220px; right: 0; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 28px; background: rgba(7,7,7,.92); border-top: 1px solid var(--line); backdrop-filter: blur(10px); }
+#msg { margin: 0; font: 500 12px/1.4 var(--mono); color: var(--dim); }
+#msg.ok { color: var(--live); }
+#msg.bad { color: var(--tally); }
+.save { height: 44px; padding: 0 22px; cursor: pointer; background: var(--text); color: var(--ink); border: 0; font: 600 12px/1 var(--mono); letter-spacing: .16em; text-transform: uppercase; }
+.save:hover { background: #fff; }
+.save:disabled { opacity: .45; cursor: default; }
+.lock { height: 100%; display: grid; place-items: center; padding: 32px; }
+.lock div { max-width: 28rem; border: 1px solid var(--line); background: var(--panel); padding: 28px; }
+.lock h1 { font-size: 1.6rem; }
+@media (max-width: 860px) {
+  .app { grid-template-columns: 1fr; grid-template-rows: 34px auto 1fr; }
+  .side { grid-row: 2; border-right: 0; border-bottom: 1px solid var(--line); }
+  .nav { flex-direction: row; overflow: auto; }
+  .side .chip, .brand { display: none; }
+  .work { grid-row: 3; }
+  .savebar { left: 0; }
+  .grid2, .slots, .plat, .manual { grid-template-columns: 1fr; }
+  .plist { border-right: 0; border-bottom: 1px solid var(--line); }
+}
+</style>
+</head>
+<body>
+<div id="lock" class="lock" hidden>
+  <div>
+    <p class="tag">Zablokowane</p>
+    <h1>Ten panel jest otwarty spoza tego komputera.</h1>
+    <p class="hint">Klucze streamu nie wychodzą poza maszynę, na której działa LiveDelay.</p>
+  </div>
+</div>
+<div id="app" class="app" hidden>
+  <div class="ribbon"><b>Lokalnie</b><span id="ribbon">Klucze streamu zostają na tym komputerze</span></div>
+  <aside class="side">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><circle cx="19.5" cy="16" r="7" fill="none" stroke="#ebe8e3" stroke-width="2"/><circle cx="12.5" cy="16" r="7" fill="#ff3b2f"/></svg>
+      <span>Live<em>Delay</em></span>
+    </div>
+    <nav class="nav" id="appnav" aria-label="LiveDelay"></nav>
+    <span class="chip wait" id="sidechip"><i></i><b>…</b></span>
+  </aside>
+  <main class="work">
+    <div class="statusbar">
+      <span class="chip wait" id="topchip"><i></i><b>…</b></span>
+      <span class="tag" id="meters">bufor 0.0 s · 0 kb/s</span>
+    </div>
+
+    <section class="page" id="page-general">
+      <h1>Ogólne</h1>
+      <p class="hint">Opóźnienie i limit bufora wchodzą od razu. Zmiana nasłuchu, adresu API albo liczby platform podnosi silnik i na moment urywa transmisję.</p>
+      <div class="grid2">
+        <label class="field"><span class="tag">Domyślne opóźnienie (s)</span><input id="delay" type="number" min="1" max="3600" required></label>
+        <label class="field"><span class="tag">Limit pamięci bufora (MB)</span><input id="buffer" type="number" min="64" max="16384" required></label>
+        <label class="field"><span class="tag">Nasłuch RTMP</span><input class="code" id="listen" type="text" required spellcheck="false" autocomplete="off"></label>
+        <label class="field"><span class="tag">Adres API</span><input class="code" id="api" type="text" required spellcheck="false" autocomplete="off"></label>
+        <label class="field"><span class="tag">Język wtyczki OBS</span>
+          <select id="language">
+            <option value="auto">Jak w OBS</option>
+            <option value="pl-PL">Polski</option>
+            <option value="en-US">English</option>
+            <option value="de-DE">Deutsch</option>
+            <option value="ru-RU">Русский</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="page" id="page-hotkeys" hidden>
+      <h1>Skróty</h1>
+      <p class="hint">Kliknij Ustaw i naciśnij skrót. Escape zostawia poprzedni, Backspace czyści. Kosz obok pola też go kasuje. Działa w aplikacji, także gdy okno jest schowane. Przykład: Ctrl+Alt+F13.</p>
+      <div class="grid2">
+        <div class="field"><span class="tag">Uzbrój</span><span class="keyline"><input class="code" id="hotkey_arm" type="text" spellcheck="false" autocomplete="off" readonly><button type="button" class="mini cap" data-cap="hotkey_arm">Ustaw</button><button type="button" class="mini trash" data-clear="hotkey_arm" title="Usuń skrót" aria-label="Usuń skrót"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 7V5h4v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button></span></div>
+        <div class="field"><span class="tag">Włącz opóźnienie</span><span class="keyline"><input class="code" id="hotkey_activate" type="text" spellcheck="false" autocomplete="off" readonly><button type="button" class="mini cap" data-cap="hotkey_activate">Ustaw</button><button type="button" class="mini trash" data-clear="hotkey_activate" title="Usuń skrót" aria-label="Usuń skrót"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 7V5h4v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button></span></div>
+        <div class="field"><span class="tag">Na żywo</span><span class="keyline"><input class="code" id="hotkey_cut" type="text" spellcheck="false" autocomplete="off" readonly><button type="button" class="mini cap" data-cap="hotkey_cut">Ustaw</button><button type="button" class="mini trash" data-clear="hotkey_cut" title="Usuń skrót" aria-label="Usuń skrót"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 7V5h4v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button></span></div>
+        <div class="field"><span class="tag">Na żywo po emisji</span><span class="keyline"><input class="code" id="hotkey_cut_after" type="text" spellcheck="false" autocomplete="off" readonly><button type="button" class="mini cap" data-cap="hotkey_cut_after">Ustaw</button><button type="button" class="mini trash" data-clear="hotkey_cut_after" title="Usuń skrót" aria-label="Usuń skrót"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 7V5h4v2M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg></button></span></div>
+      </div>
+      <h2 style="margin:28px 0 8px;font-size:1.15rem">Uzbrój na konkretny delay</h2>
+      <p class="hint">Te liczby są dla skrótów we wtyczce OBS (Ustawienia → Skróty klawiszowe). Każdy slot uzbraja tyle sekund, niezależnie od docka. Sam klawisz przypisujesz w OBS.</p>
+      <div class="slots" id="slots"></div>
+    </section>
+
+    <section class="page" id="page-style" hidden>
+      <h1>Styl OBS</h1>
+      <p class="hint">Wygląd doku LiveDelay w OBS. Wchodzi od razu, bez restartu OBS. To, co widzą widzowie, ustawiasz osobno w Motywie nakładki.</p>
+      <div class="grid2">
+        <label class="field"><span class="tag">Wygląd doku we wtyczce OBS</span>
+          <select id="dock_theme">
+            <option value="obs">Jak w OBS</option>
+            <option value="dark">Ciemny LiveDelay</option>
+            <option value="contrast">Kontrastowy</option>
+          </select>
+        </label>
+      </div>
+    </section>
+
+    <section class="page" id="page-platforms" hidden>
+      <h1>Platformy</h1>
+      <p class="hint">Każda platforma ma własny adres, klucz, kodowanie, ścieżki audio i Enhanced Broadcasting. Lista usług jest ta sama co w OBS. Dodanie albo usunięcie platformy podnosi silnik.</p>
+      <div class="importrow">
+        <button type="button" class="mini" id="importObs">Przenieś z OBS</button>
+        <select id="obsProfile" hidden></select>
+        <button type="button" class="mini" id="useObs" hidden>Wstaw tutaj</button>
+        <button type="button" class="mini" id="allObs">Wszystkie jak w OBS</button>
+      </div>
+      <div class="plat">
+        <div class="plist">
+          <ul id="plist"></ul>
+          <div class="tools">
+            <button type="button" class="mini" id="addDest">Dodaj</button>
+            <button type="button" class="mini" id="delDest">Usuń</button>
+          </div>
+        </div>
+        <div class="pform" id="pform"></div>
+      </div>
+    </section>
+
+    <section class="page" id="page-audio" hidden>
+      <h1>Audio</h1>
+      <p class="hint">Tu wybierasz, która z sześciu ścieżek OBS idzie na daną platformę i która jest VOD Twitcha. Przypisanie źródeł do ścieżek (muzyka tylko na live, nie na VOD) jest w OBS: Edycja → Zaawansowane właściwości audio. Ten panel nie widzi źródeł sceny.</p>
+      <table class="rows">
+        <thead><tr><th>Platforma</th><th>Ścieżka na żywo</th><th>Ścieżka VOD</th></tr></thead>
+        <tbody id="audiotable"></tbody>
+      </table>
+      <p class="hint" style="margin-top:16px">VOD działa na Twitchu: w OBS Wyjście → Zaawansowane włącz ścieżkę VOD i wybierz inną niż live. Widzowie słyszą pełny mix, nagranie dostaje drugą ścieżkę. YouTube i Kick to pole ignorują.</p>
+    </section>
+
+    <section class="page" id="page-overlay" hidden>
+      <h1>Overlay</h1>
+      <p class="hint">Tekst na źródle Przeglądarka. {s} to sekundy opóźnienia, {buf} to ile już jest w buforze. Pusty tekst ukrywa dany stan. Motyw, kolory i czcionka są w edytorze.</p>
+      <div class="links">
+        <a href="/overlay" target="_blank" rel="noopener">Otwórz overlay</a>
+        <a href="/overlay?preview=1" target="_blank" rel="noopener">Podgląd stanów</a>
+        <a href="/edit-theme">Edytor motywu</a>
+        <a href="/live-preview">Podgląd obrazu</a>
+        <a href="/dock">Panel sterowania</a>
+      </div>
+      <div id="ovfields" class="grid2"></div>
+      <label class="check" style="margin-top:14px"><input type="checkbox" id="ovArmed"><span>Uzbrajanie i uzbrojone jak Na żywo</span></label>
+    </section>
+
+    <section class="page" id="page-logs" hidden>
+      <div class="loghead">
+        <div>
+          <h1>Logi</h1>
+          <p class="hint">Ostatnie wpisy silnika z tej sesji. Odświeżają się same.</p>
+        </div>
+        <button type="button" class="mini" id="logcopy">Kopiuj</button>
+      </div>
+      <pre id="logbox" class="logbox"></pre>
+    </section>
+  </main>
+  <div class="savebar">
+    <p id="msg" role="status"></p>
+    <button type="button" class="save" id="save">Zapisz</button>
+  </div>
+</div>
+<script src="/nav.js"></script>
+<script>
+const MODES = [
+  ['obs', 'Jak w OBS'],
+  ['auto', 'Auto'],
+  ['recommended', 'Zalecane'],
+  ['twitch_partner', 'Twitch zalecane (Partner)'],
+  ['manual', 'Ręcznie']
+];
+let dests = [];
+let sel = 0;
+let overlay = null;
+let services = [];
+const CAPTURE = 'Naciśnij skrót…';
+
+function svcByName(name) {
+  return services.find(s => s.name === name) || null;
+}
+function serversOf(name) {
+  const s = svcByName(name);
+  return s && s.servers ? s.servers : [];
+}
+
+function say(text, kind) {
+  const msg = document.getElementById('msg');
+  msg.textContent = text;
+  msg.className = kind || '';
+}
+function isTwitch(d) {
+  const s = (d.service || '') + ' ' + (d.url || '');
+  return /twitch|live-video\.net/i.test(s);
+}
+function trackSelect(value, vod) {
+  const s = document.createElement('select');
+  const first = document.createElement('option');
+  first.value = '0';
+  first.textContent = vod ? 'Wyłączona' : 'Jak w OBS';
+  s.append(first);
+  for (let i = 1; i <= 6; i++) {
+    const o = document.createElement('option');
+    o.value = String(i);
+    o.textContent = 'Ścieżka ' + i;
+    s.append(o);
+  }
+  s.value = String(value || 0);
+  return s;
+}
+function field(label, node) {
+  const w = document.createElement('label');
+  w.className = 'field';
+  const t = document.createElement('span');
+  t.className = 'tag';
+  t.textContent = label;
+  w.append(t, node);
+  return w;
+}
+function textIn(value, code) {
+  const i = document.createElement('input');
+  i.type = 'text';
+  i.value = value || '';
+  i.spellcheck = false;
+  i.autocomplete = 'off';
+  if (code) i.className = 'code';
+  return i;
+}
+
+function show(id) {
+  const target = document.getElementById('page-' + id);
+  if (!target || target.dataset.off === '1') id = 'general';
+  document.querySelectorAll('.page').forEach(p => { p.hidden = p.id !== 'page-' + id; });
+  document.querySelectorAll('#appnav a').forEach(a => {
+    const on = a.getAttribute('href') === '/panel#' + id;
+    a.toggleAttribute('aria-current', on);
+    if (on) a.setAttribute('aria-current', 'true');
+  });
+  if (id === 'platforms') renderPlat();
+  if (id === 'audio') renderAudio();
+  if (id === 'logs') refreshLogs();
+  const bar = document.querySelector('.savebar');
+  if (bar) bar.hidden = id === 'logs';
+  if (location.pathname === '/panel' && location.hash !== '#' + id)
+    history.replaceState(null, '', '/panel#' + id);
+}
+
+function renderSlots(values) {
+  const box = document.getElementById('slots');
+  box.replaceChildren();
+  for (let i = 0; i < 6; i++) {
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.max = '3600';
+    input.id = 'arm_slot_' + i;
+    input.value = values && values[i] ? values[i] : '';
+    input.placeholder = 'puste';
+    box.append(field('Slot ' + (i + 1) + ' (s)', input));
+  }
+}
+
+function renderList() {
+  const ul = document.getElementById('plist');
+  ul.replaceChildren();
+  dests.forEach((d, i) => {
+    const li = document.createElement('li');
+    const b = document.createElement('button');
+    b.type = 'button';
+    if (i === sel) b.setAttribute('aria-current', 'true');
+    const name = document.createElement('span');
+    name.textContent = d.name || ('Platforma ' + (i + 1));
+    const sub = document.createElement('small');
+    sub.textContent = (d.ingest_key || ('ld' + i)) + (d.service ? ' · ' + d.service : '');
+    b.append(name, sub);
+    b.addEventListener('click', () => { sel = i; renderPlat(); });
+    li.append(b);
+    ul.append(li);
+  });
+  if (!dests.length) {
+    const li = document.createElement('li');
+    li.style.padding = '12px';
+    li.style.color = '#8a8780';
+    li.textContent = 'Brak platform.';
+    ul.append(li);
+  }
+}
+
+function renderForm() {
+  const box = document.getElementById('pform');
+  box.replaceChildren();
+  const d = dests[sel];
+  if (!d) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = 'Dodaj platformę, żeby ustawić adres, klucz i kodowanie.';
+    box.append(p);
+    return;
+  }
+  const grid = document.createElement('div');
+  grid.className = 'grid2';
+  const name = textIn(d.name);
+  name.addEventListener('input', () => { d.name = name.value; renderList(); });
+  const service = document.createElement('select');
+  const custom = document.createElement('option');
+  custom.value = '';
+  custom.textContent = 'Własny serwer';
+  service.append(custom);
+  const names = services.map(s => s.name);
+  if (d.service && !names.includes(d.service)) {
+    const o = document.createElement('option');
+    o.value = d.service;
+    o.textContent = d.service;
+    service.append(o);
+  }
+  function group(label, items) {
+    if (!items.length) return;
+    const g = document.createElement('optgroup');
+    g.label = label;
+    items.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s.name;
+      o.textContent = s.name;
+      g.append(o);
+    });
+    service.append(g);
+  }
+  group('Częste', services.filter(s => s.common));
+  group('Wszystkie', services.filter(s => !s.common));
+  service.value = names.includes(d.service) || (d.service && !names.includes(d.service)) ? d.service : '';
+  service.addEventListener('change', () => {
+    const prev = serversOf(d.service);
+    d.service = service.value;
+    const next = serversOf(d.service);
+    const urlWasList = !d.url || prev.some(s => s.url === d.url);
+    if (urlWasList && next.length) {
+      d.url = next[0].url;
+      d.server = next[0].name;
+    }
+    if (!d.service) d.server = '';
+    if (!isTwitch(d)) { d.enhanced = false; d.vod_track = 0; }
+    renderForm();
+    renderList();
+  });
+  const server = document.createElement('select');
+  const sv = svcByName(d.service);
+  const own = document.createElement('option');
+  own.value = '';
+  own.textContent = 'Własny adres';
+  server.append(own);
+  (sv ? sv.servers : []).forEach(s => {
+    const o = document.createElement('option');
+    o.value = s.name;
+    o.textContent = s.name;
+    server.append(o);
+  });
+  const named = sv && sv.servers.some(s => s.name === d.server);
+  const hits = sv ? sv.servers.filter(s => s.url === d.url) : [];
+  if (named) server.value = d.server;
+  else if (hits.length === 1) {
+    server.value = hits[0].name;
+    d.server = hits[0].name;
+  } else server.value = '';
+  server.disabled = !sv;
+  server.addEventListener('change', () => {
+    d.server = server.value;
+    const hit = sv && sv.servers.find(s => s.name === server.value);
+    if (hit) d.url = hit.url;
+    renderForm();
+  });
+  const url = textIn(d.url, true);
+  url.addEventListener('input', () => {
+    const was = isTwitch(d);
+    d.url = url.value;
+    const still = sv && sv.servers.some(s => s.name === d.server && s.url === d.url);
+    if (!still) d.server = '';
+    if (isTwitch(d) === was) return;
+    if (!isTwitch(d)) { d.enhanced = false; d.vod_track = 0; }
+    renderForm();
+  });
+  const key = textIn(d.key, true);
+  key.type = 'password';
+  key.addEventListener('input', () => { d.key = key.value; });
+  const reveal = document.createElement('button');
+  reveal.type = 'button';
+  reveal.className = 'mini reveal';
+  reveal.textContent = 'Pokaż';
+  reveal.addEventListener('click', () => {
+    const on = key.type === 'password';
+    key.type = on ? 'text' : 'password';
+    reveal.textContent = on ? 'Ukryj' : 'Pokaż';
+  });
+  const keyline = document.createElement('div');
+  keyline.className = 'keyline';
+  keyline.append(key, reveal);
+  if (sv && sv.key_link) {
+    const a = document.createElement('a');
+    a.className = 'keylink';
+    a.href = sv.key_link;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.textContent = 'Skąd klucz';
+    keyline.append(a);
+  }
+  const mode = document.createElement('select');
+  MODES.forEach(([v, lab]) => {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = lab;
+    mode.append(o);
+  });
+  mode.value = MODES.some(m => m[0] === d.encode_mode) ? d.encode_mode : 'obs';
+  mode.addEventListener('change', () => {
+    d.encode_mode = mode.value;
+    if (mode.value === 'manual') {
+      const rec = svcByName(d.service);
+      if (!d.video_kbps) d.video_kbps = (rec && rec.max_video_kbps) || 6000;
+      if (!d.audio_kbps) d.audio_kbps = (rec && rec.max_audio_kbps) || 160;
+      if (!d.keyint_sec) d.keyint_sec = (rec && rec.keyint_sec) || 2;
+      if (!d.rate_control) d.rate_control = 'CBR';
+    }
+    renderForm();
+  });
+  const live = trackSelect(d.audio_track, false);
+  live.addEventListener('change', () => {
+    d.audio_track = Number(live.value);
+    if (d.vod_track && d.vod_track === d.audio_track) d.vod_track = 0;
+    renderForm();
+  });
+  const vod = trackSelect(d.vod_track, true);
+  vod.disabled = !isTwitch(d);
+  vod.addEventListener('change', () => {
+    let n = Number(vod.value);
+    if (n && n === Number(d.audio_track || 0) && n !== 0) n = 0;
+    d.vod_track = n;
+    renderForm();
+  });
+  grid.append(
+    field('Nazwa', name),
+    field('Usługa', service),
+    field('Serwer', server),
+    field('Adres', url),
+    field('Klucz streamu', keyline),
+    field('Kodowanie', mode),
+    field('Ścieżka na żywo', live),
+    field('Ścieżka VOD Twitch', vod)
+  );
+  const auto = document.createElement('label');
+  auto.className = 'check';
+  const autoIn = document.createElement('input');
+  autoIn.type = 'checkbox';
+  autoIn.checked = !!d.autostart;
+  autoIn.addEventListener('change', () => { d.autostart = autoIn.checked; });
+  auto.append(autoIn, document.createTextNode('Startuj razem ze streamem'));
+  const enh = document.createElement('label');
+  enh.className = 'check';
+  const enhIn = document.createElement('input');
+  enhIn.type = 'checkbox';
+  enhIn.checked = !!d.enhanced && isTwitch(d);
+  enhIn.disabled = !isTwitch(d);
+  enhIn.addEventListener('change', () => { d.enhanced = enhIn.checked; });
+  const enhText = document.createElement('span');
+  enhText.textContent = 'Enhanced Broadcasting (beta)';
+  enh.append(enhIn, enhText);
+  const notes = document.createElement('p');
+  notes.className = 'hint';
+  notes.style.margin = '12px 0 0';
+  notes.textContent = isTwitch(d)
+    ? 'Enhanced pyta Twitcha o sesję GoLive i puszcza zwrócone jakości przez ten sam delay. Jak Twitch nie odpowie, zostaje jedna ścieżka wideo. Ścieżka VOD musi być inna niż live.'
+    : 'Enhanced i ścieżka VOD są dla Twitcha. Kick i YouTube zostają na jednej ścieżce wideo.';
+  box.append(grid, auto, enh, notes);
+  const manualOn = d.encode_mode === 'manual';
+  const summary = document.createElement('p');
+  summary.className = 'summary';
+  const rec = svcByName(d.service);
+  if (d.encode_mode === 'manual')
+    summary.textContent = 'Ręcznie: ' + (d.video_kbps || 0) + ' kb/s wideo, ' + (d.audio_kbps || 0) + ' kb/s audio, keyint ' + (d.keyint_sec || 0) + ' s, ' + (d.rate_control || 'CBR') + '.';
+  else if (d.encode_mode === 'recommended' && rec && rec.max_video_kbps)
+    summary.textContent = 'Zalecane dla ' + rec.name + ': ' + rec.max_video_kbps + ' kb/s wideo, ' + (rec.max_audio_kbps || 0) + ' kb/s audio, keyint ' + (rec.keyint_sec || 2) + ' s.';
+  else if (d.encode_mode === 'twitch_partner')
+    summary.textContent = 'Profil Twitch Partner: najmocniejszy klasyczny profil, keyint 2 s, CBR.';
+  else if (d.encode_mode === 'auto')
+    summary.textContent = 'Auto dobiera bitrate z rozdzielczości i liczby klatek.';
+  else
+    summary.textContent = 'Jak w OBS: bitrate, rozmiar i klatka kluczowa biorą się z Wyjście w OBS. Pola poniżej obowiązują tylko przy Ręcznie.';
+  const manual = document.createElement('div');
+  manual.className = 'manual' + (manualOn ? '' : ' off');
+  function num(key, label, min, max) {
+    const i = document.createElement('input');
+    i.type = 'number';
+    i.min = String(min);
+    i.max = String(max);
+    i.value = d[key] || 0;
+    i.disabled = !manualOn;
+    i.addEventListener('input', () => { d[key] = Number(i.value) || 0; });
+    return field(label, i);
+  }
+  const rc = document.createElement('select');
+  ['CBR', 'VBR', 'CQP', 'CRF'].forEach(v => {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    rc.append(o);
+  });
+  rc.value = ['CBR', 'VBR', 'CQP', 'CRF'].includes(d.rate_control) ? d.rate_control : 'CBR';
+  rc.disabled = !manualOn;
+  rc.addEventListener('change', () => { d.rate_control = rc.value; });
+  manual.append(
+    num('video_kbps', 'Bitrate wideo', 0, 100000),
+    num('audio_kbps', 'Bitrate audio', 0, 512),
+    num('keyint_sec', 'Interwał klatek kluczowych (s)', 0, 10),
+    field('Kontrola bitrate', rc),
+    num('width', 'Szerokość (0 = canvas)', 0, 7680),
+    num('height', 'Wysokość (0 = canvas)', 0, 4320)
+  );
+  box.append(summary, manual);
+  const ing = document.createElement('p');
+  ing.className = 'tag';
+  ing.style.marginTop = '14px';
+  ing.textContent = 'Klucz do LiveDelay: ' + (d.ingest_key || ('ld' + sel));
+  box.append(ing);
+}
+
+function renderPlat() { renderList(); renderForm(); }
+
+function renderAudio() {
+  const body = document.getElementById('audiotable');
+  body.replaceChildren();
+  dests.forEach((d, i) => {
+    const tr = document.createElement('tr');
+    const name = document.createElement('td');
+    name.textContent = d.name || ('Platforma ' + (i + 1));
+    const a = document.createElement('td');
+    const b = document.createElement('td');
+    const live = trackSelect(d.audio_track, false);
+    const vod = trackSelect(d.vod_track, true);
+    vod.disabled = !isTwitch(d);
+    live.addEventListener('change', () => {
+      d.audio_track = Number(live.value);
+      if (d.vod_track === d.audio_track) d.vod_track = 0;
+      renderAudio();
+    });
+    vod.addEventListener('change', () => { d.vod_track = Number(vod.value); });
+    a.append(live);
+    b.append(vod);
+    tr.append(name, a, b);
+    body.append(tr);
+  });
+}
+
+function renderOverlay() {
+  const box = document.getElementById('ovfields');
+  box.replaceChildren();
+  const texts = (overlay && overlay.texts) || {};
+  const show = (overlay && overlay.show) || {};
+  [['live', 'Na żywo'], ['arming', 'Uzbrajanie'], ['armed', 'Uzbrojone'], ['delayed', 'Opóźnienie']].forEach(([k, lab]) => {
+    const row = document.createElement('div');
+    row.className = 'field';
+    const tag = document.createElement('span');
+    tag.className = 'tag';
+    tag.textContent = lab;
+    const line = document.createElement('div');
+    line.className = 'keyline';
+    const chk = document.createElement('input');
+    chk.type = 'checkbox';
+    chk.checked = show[k] !== false;
+    chk.title = 'Pokazuj ten stan';
+    chk.style.width = '16px';
+    chk.style.flex = 'none';
+    chk.dataset.ovshow = k;
+    const input = textIn(texts[k] || '');
+    input.dataset.ovtext = k;
+    line.append(chk, input);
+    row.append(tag, line);
+    box.append(row);
+  });
+  document.getElementById('ovArmed').checked = !!(overlay && overlay.armedAsLive);
+}
+
+document.getElementById('addDest').addEventListener('click', () => {
+  dests.push({
+    name: 'Nowa platforma', service: 'Twitch', server: '', url: 'rtmp://live.twitch.tv/app', key: '',
+    ingest_key: '', autostart: true, enabled: true, encode_mode: 'obs',
+    video_kbps: 6000, audio_kbps: 160, keyint_sec: 2, rate_control: 'CBR',
+    width: 0, height: 0, audio_track: 0, vod_track: 0, enhanced: false
+  });
+  sel = dests.length - 1;
+  renderPlat();
+});
+document.getElementById('delDest').addEventListener('click', () => {
+  if (!dests[sel]) return;
+  if (!confirm('Usunąć platformę „' + (dests[sel].name || '') + '”?')) return;
+  dests.splice(sel, 1);
+  sel = Math.max(0, sel - 1);
+  renderPlat();
+});
+
+function paint(kind, label) {
+  for (const id of ['sidechip', 'topchip']) {
+    const el = document.getElementById(id);
+    el.className = 'chip ' + kind;
+    el.querySelector('b').textContent = label;
+  }
+}
+async function tick() {
+  try {
+    const r = await fetch('/state');
+    if (!r.ok) return;
+    const s = await r.json();
+    let kind = 'wait', label = 'Czekam na stream';
+    if (!s.input) { kind = 'wait'; label = 'Czekam na stream'; }
+    else if (s.mode === 'delayed') { kind = 'delayed'; label = 'Opóźnienie'; }
+    else if (s.armed) { kind = 'armed'; label = 'Uzbrojone'; }
+    else { kind = 'live'; label = 'Na żywo'; }
+    paint(kind, label);
+    const buf = Number(s.buffer_s) || 0;
+    document.getElementById('meters').textContent = 'bufor ' + buf.toFixed(1) + ' s · ' + Math.round(s.in_kbps || 0) + ' kb/s · opóźnienie ' + (Number(s.default_delay) || 0) + ' s';
+    document.getElementById('ribbon').textContent = label + ' · klucze streamu zostają na tym komputerze';
+  } catch (_) { paint('wait', 'Brak silnika'); }
+  if (!document.getElementById('page-logs').hidden) refreshLogs();
+}
+
+async function refreshLogs() {
+  const box = document.getElementById('logbox');
+  try {
+    const r = await fetch('/logs');
+    const t = await r.text();
+    const next = r.status === 403 ? 'Logi są dostępne tylko na tym komputerze.' : (t || 'Brak wpisów w tej sesji.');
+    if (box.textContent === next) return;
+    const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    box.textContent = next;
+    if (atEnd) box.scrollTop = box.scrollHeight;
+  } catch (_) {}
+}
+
+async function load() {
+  const svc = await fetch('/services').then(r => r.ok ? r.json() : { services: [] }).catch(() => ({ services: [] }));
+  services = svc.services || [];
+  const r = await fetch('/config');
+  if (r.status === 403) {
+    document.getElementById('lock').hidden = false;
+    return;
+  }
+  if (!r.ok) { say('Nie udało się odczytać ustawień.', 'bad'); return; }
+  const c = await r.json();
+  document.getElementById('delay').value = c.delay;
+  document.getElementById('buffer').value = c.max_buffer_mb;
+  document.getElementById('listen').value = c.listen;
+  document.getElementById('api').value = c.api;
+  const lang = document.getElementById('language');
+  const knownLang = ['auto', 'pl-PL', 'en-US', 'de-DE', 'ru-RU'];
+  if (c.language && !knownLang.includes(c.language)) {
+    const o = document.createElement('option');
+    o.value = c.language;
+    o.textContent = c.language;
+    lang.append(o);
+  }
+  lang.value = c.language || 'auto';
+  const inObs = c.host === 'obs';
+  document.getElementById('dock_theme').value = c.dock_theme || 'obs';
+  document.getElementById('page-style').dataset.off = inObs ? '' : '1';
+  document.querySelectorAll('[data-only="obsonly"]').forEach(a => { a.hidden = !inObs; });
+  if (!inObs && (location.hash || '') === '#style') show('general');
+  for (const k of ['hotkey_arm', 'hotkey_activate', 'hotkey_cut', 'hotkey_cut_after'])
+    document.getElementById(k).value = c[k] || '';
+  renderSlots(c.arm_slots || []);
+  dests = (c.dests || []).map(d => {
+    const row = {
+      name: d.name || '', service: d.service || '', server: d.server || '', url: d.url || '', key: d.key || '',
+      ingest_key: d.ingest_key || '', autostart: !!d.autostart, enabled: d.enabled !== false,
+      encode_mode: d.encode_mode || 'obs', video_kbps: d.video_kbps || 0, audio_kbps: d.audio_kbps || 0,
+      keyint_sec: d.keyint_sec || 0, rate_control: d.rate_control || 'CBR', width: d.width || 0, height: d.height || 0,
+      audio_track: d.audio_track || 0, vod_track: d.vod_track || 0, enhanced: !!d.enhanced
+    };
+    if (!row.service && row.url) {
+      const matches = [];
+      services.forEach(s => (s.servers || []).forEach(srv => {
+        if (srv.url === row.url) matches.push({ service: s.name, server: srv.name });
+      }));
+      const named = matches.find(m => m.server !== 'Auto') || matches[0];
+      if (named) {
+        row.service = named.service;
+        if (!row.server) row.server = named.server;
+      }
+    }
+    return row;
+  });
+  sel = 0;
+  renderPlat();
+  try {
+    const o = await fetch('/overlay/config');
+    if (o.ok) overlay = await o.json();
+  } catch (_) {}
+  renderOverlay();
+  document.getElementById('app').hidden = false;
+  show((location.hash || '#general').slice(1));
+  tick();
+}
+
+document.getElementById('save').addEventListener('click', async () => {
+  const save = document.getElementById('save');
+  for (const d of dests) {
+    if (!String(d.name || '').trim() || /[\]\r\n]/.test(d.name)) {
+      say('Każda platforma potrzebuje nazwy, bez znaku ].', 'bad');
+      show('platforms');
+      return;
+    }
+    if (d.vod_track && Number(d.vod_track) === Number(d.audio_track)) d.vod_track = 0;
+    if (!isTwitch(d)) { d.enhanced = false; d.vod_track = 0; }
+  }
+  save.disabled = true;
+  say('Zapisuję…');
+  const body = {
+    delay: Number(document.getElementById('delay').value),
+    max_buffer_mb: Number(document.getElementById('buffer').value),
+    listen: document.getElementById('listen').value.trim(),
+    api: document.getElementById('api').value.trim(),
+    language: document.getElementById('language').value,
+    dock_theme: document.getElementById('dock_theme').value,
+    hotkey_arm: hotkeyValue('hotkey_arm'),
+    hotkey_activate: hotkeyValue('hotkey_activate'),
+    hotkey_cut: hotkeyValue('hotkey_cut'),
+    hotkey_cut_after: hotkeyValue('hotkey_cut_after')
+  };
+  for (let i = 0; i < 6; i++) body['arm_slot_' + i] = document.getElementById('arm_slot_' + i).value.trim();
+  body.dests = dests.map(d => ({
+    name: d.name.trim(), service: d.service || '', server: d.server || '', url: d.url.trim(), key: d.key,
+    enabled: d.enabled !== false, autostart: !!d.autostart, encode_mode: d.encode_mode || 'obs',
+    video_kbps: Number(d.video_kbps) || 0, audio_kbps: Number(d.audio_kbps) || 0,
+    keyint_sec: Number(d.keyint_sec) || 0, rate_control: d.rate_control || 'CBR',
+    width: Number(d.width) || 0, height: Number(d.height) || 0,
+    audio_track: Number(d.audio_track) || 0, vod_track: Number(d.vod_track) || 0, enhanced: !!d.enhanced
+  }));
+  try {
+    const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) { say(data.error || 'Zapis odrzucony.', 'bad'); save.disabled = false; return; }
+    if (overlay) {
+      overlay.texts = overlay.texts || {};
+      overlay.show = overlay.show || {};
+      document.querySelectorAll('[data-ovtext]').forEach(el => { overlay.texts[el.dataset.ovtext] = el.value; });
+      document.querySelectorAll('[data-ovshow]').forEach(el => { overlay.show[el.dataset.ovshow] = el.checked; });
+      overlay.armedAsLive = document.getElementById('ovArmed').checked;
+      const o = await fetch('/overlay/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(overlay) });
+      if (!o.ok) { say('Ustawienia zapisane, overlay nie.', 'bad'); save.disabled = false; return; }
+    }
+    say(data.reload ? 'Zapisane. Silnik wstanie od nowa — transmisja urwie się na moment.' : 'Zapisane. Opóźnienie, adresy i teksty overlay weszły od razu.', 'ok');
+  } catch (_) { say('Brak połączenia z silnikiem.', 'bad'); }
+  save.disabled = false;
+});
+
+load().catch(() => say('Brak połączenia z silnikiem.', 'bad'));
+
+let capEl = null;
+let capPrev = '';
+function hotkeyValue(id) {
+  const el = document.getElementById(id);
+  const v = (el.value || '').trim();
+  return v === CAPTURE ? capPrev : v;
+}
+function keyToken(e) {
+  const c = e.code || '';
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(c)) return c;
+  const num = { Numpad0: 'Num0', Numpad1: 'Num1', Numpad2: 'Num2', Numpad3: 'Num3', Numpad4: 'Num4', Numpad5: 'Num5', Numpad6: 'Num6', Numpad7: 'Num7', Numpad8: 'Num8', Numpad9: 'Num9', NumpadAdd: 'Num+', NumpadSubtract: 'Num-', NumpadMultiply: 'Num*', NumpadDivide: 'Num/', NumpadDecimal: 'Num.' };
+  if (num[c]) return num[c];
+  if (c.length === 4 && c.startsWith('Key')) return c.slice(3);
+  if (c.startsWith('Digit') && c.length === 6) return c.slice(5);
+  const named = { Pause: 'Pause', ScrollLock: 'ScrollLock', Insert: 'Insert', Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown' };
+  return named[c] || '';
+}
+function stopCap(keep) {
+  if (!capEl) return;
+  capEl.classList.remove('capturing');
+  if (!keep) capEl.value = capPrev;
+  capEl = null;
+}
+function startCap(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (capEl && capEl !== el) stopCap(false);
+  capPrev = el.value === CAPTURE ? capPrev : el.value;
+  capEl = el;
+  el.value = CAPTURE;
+  el.classList.add('capturing');
+  el.focus();
+}
+document.querySelectorAll('.cap').forEach(btn => {
+  btn.addEventListener('click', () => startCap(btn.dataset.cap));
+});
+document.querySelectorAll('.trash').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const el = document.getElementById(btn.dataset.clear);
+    if (!el) return;
+    if (capEl === el) stopCap(true);
+    capPrev = '';
+    el.value = '';
+  });
+});
+window.addEventListener('keydown', (e) => {
+  if (!capEl) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (e.key === 'Escape') { stopCap(false); return; }
+  if (e.key === 'Backspace' || e.key === 'Delete') { capPrev = ''; capEl.value = ''; stopCap(true); return; }
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+  const token = keyToken(e);
+  if (!token) return;
+  const parts = [];
+  if (e.ctrlKey) parts.push('Ctrl');
+  if (e.altKey) parts.push('Alt');
+  if (e.shiftKey) parts.push('Shift');
+  if (e.metaKey) parts.push('Win');
+  parts.push(token);
+  capPrev = parts.join('+');
+  capEl.value = capPrev;
+  stopCap(true);
+}, true);
+
+function applyObs(p) {
+  if (!p || !p.url) { say('W tym profilu OBS nie ma adresu platformy.', 'bad'); return; }
+  if (/^rtmps?:\/\/127\.0\.0\.1:1935/i.test(p.url) || /^rtmps?:\/\/localhost:1935/i.test(p.url)) {
+    say('Ten profil OBS już wskazuje na LiveDelay, nie na platformę.', 'bad');
+    return;
+  }
+  if (!dests[sel]) {
+    dests.push({
+      name: p.service || p.name || 'Platforma', service: p.service || '', server: p.server || '', url: p.url, key: p.key || '',
+      ingest_key: '', autostart: true, enabled: true, encode_mode: 'obs',
+      video_kbps: 0, audio_kbps: 0, keyint_sec: 0, rate_control: 'CBR', width: 0, height: 0,
+      audio_track: 0, vod_track: 0, enhanced: false
+    });
+    sel = dests.length - 1;
+  } else {
+    const d = dests[sel];
+    if (p.service) d.service = p.service;
+    d.server = p.server || '';
+    d.url = p.url;
+    if (p.key) d.key = p.key;
+    if (!d.name || d.name === 'Nowa platforma') d.name = p.service || d.name;
+  }
+  renderPlat();
+  say('Wstawione z profilu OBS „' + p.name + '”. Zapisz, żeby zostało.', 'ok');
+}
+document.getElementById('allObs').addEventListener('click', () => {
+  dests.forEach(d => { d.encode_mode = 'obs'; });
+  renderForm();
+  say('Wszystkie platformy ustawione na Jak w OBS. Zapisz, żeby zostało.');
+});
+document.getElementById('importObs').addEventListener('click', async () => {
+  let data;
+  try {
+    const r = await fetch('/obs-import');
+    data = await r.json();
+    if (!r.ok) { say('Import z OBS jest tylko z tego komputera.', 'bad'); return; }
+  } catch (_) { say('Brak połączenia z silnikiem.', 'bad'); return; }
+  const profiles = data.profiles || [];
+  const usable = profiles.filter(p => p.has_key && p.url && !/^rtmps?:\/\/(127\.0\.0\.1|localhost):1935/i.test(p.url));
+  const box = document.getElementById('obsProfile');
+  const use = document.getElementById('useObs');
+  if (!usable.length) {
+    box.hidden = true;
+    use.hidden = true;
+    say('OBS nie ma zapisanego serwera platformy. Wybierz usługę z listy — to ta sama lista co Ustawienia → Stream.', 'bad');
+    return;
+  }
+  if (usable.length === 1) { applyObs(usable[0]); return; }
+  box.replaceChildren();
+  usable.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.name;
+    o.textContent = p.name + (p.service ? ' · ' + p.service : '');
+    box.append(o);
+  });
+  const current = usable.find(p => p.name === data.current) || usable[0];
+  box.value = current.name;
+  box.hidden = false;
+  use.hidden = false;
+  use.onclick = () => applyObs(usable.find(p => p.name === box.value));
+  say('Wybierz profil OBS i wstaw.');
+});
+
+document.getElementById('logcopy').onclick = async () => {
+  const t = document.getElementById('logbox').textContent;
+  try { await navigator.clipboard.writeText(t); } catch (_) {}
+};
+window.addEventListener('hashchange', () => show((location.hash || '#general').slice(1)));
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

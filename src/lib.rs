@@ -6,6 +6,7 @@ macro_rules! log {
 }
 
 pub mod api;
+mod catalog;
 pub mod config;
 pub mod engine;
 mod ffi;
@@ -14,6 +15,7 @@ pub mod overlay;
 mod preview;
 pub mod rtmp;
 
+use std::collections::VecDeque;
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
@@ -23,6 +25,8 @@ use tokio::sync::oneshot;
 type Logger = Box<dyn Fn(&str) + Send + Sync>;
 static LOGGER: RwLock<Option<Logger>> = RwLock::new(None);
 static LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
+static LOG_LINES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
+const LOG_KEEP: usize = 400;
 
 pub fn set_logger(f: impl Fn(&str) + Send + Sync + 'static) {
     *LOGGER.write().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(f));
@@ -47,16 +51,33 @@ fn local_time() -> (u16, u16, u16) {
 
 pub fn log_line(args: std::fmt::Arguments) {
     let msg = args.to_string();
+    let (h, m, s) = local_time();
+    let line = format!("[{h:02}:{m:02}:{s:02}] {msg}");
+    {
+        let mut q = LOG_LINES.lock().unwrap_or_else(|e| e.into_inner());
+        if q.len() >= LOG_KEEP {
+            q.pop_front();
+        }
+        q.push_back(line.clone());
+    }
     if let Some(f) = LOGGER.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
         f(&msg);
         return;
     }
-    let (h, m, s) = local_time();
-    let line = format!("[{h:02}:{m:02}:{s:02}] {msg}");
     eprintln!("{line}");
     if let Some(f) = LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
         let _ = writeln!(f, "{line}");
     }
+}
+
+/// Recent engine lines from this process, oldest first. Empty when nothing was logged yet.
+pub fn recent_logs() -> String {
+    let q = LOG_LINES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut out = q.iter().cloned().collect::<Vec<_>>().join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    out
 }
 
 /// A running proxy: its own thread with a single-threaded tokio runtime.
@@ -106,6 +127,7 @@ impl Proxy {
             dests,
             default_delay: std::sync::Mutex::new(Duration::from_secs_f64(cfg.delay_s)),
             overlay: overlay::OverlayStore::load(cfg.overlay_file.clone(), &cfg.overlay),
+            ini_path: cfg.ini_path.clone(),
         });
         let (listen, api_addr) = (cfg.listen.clone(), cfg.api.clone());
         let (stop_tx, stop_rx) = oneshot::channel();

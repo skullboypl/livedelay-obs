@@ -5,36 +5,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LiveDelay – overlay</title>
 <style>
-  :root { --bg: #0f1115; --panel: #161920; --card: #1c2028; --line: #2a2f39; --text: #e8eaef; --muted: #8b90a0; --accent: #5ac8fa; }
+  :root { --bg: #070707; --panel: #0b0b0c; --card: #111113; --line: #1e1e21; --text: #ebe8e3; --muted: #8a8780; --accent: #ff3b2f; }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
-  header { display: flex; align-items: center; gap: 12px; padding: 14px 22px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 2; }
-  h1 { font-size: 16px; margin: 0; font-weight: 600; }
-  header .spacer { flex: 1; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 "Archivo", "Segoe UI", system-ui, sans-serif; }
+  .editor-bar { display: flex; align-items: center; gap: 12px; padding: 14px 22px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 2; }
+  h1 { font-size: 16px; margin: 0; font-weight: 800; letter-spacing: -.02em; }
+  .editor-bar .spacer { flex: 1; }
   #toast { color: #3ddc84; font-size: 13px; opacity: 0; transition: opacity .3s; }
   #toast.on { opacity: 1; }
-  button { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 7px 14px; cursor: pointer; }
-  button:hover { border-color: #3a404c; }
-  button.primary { background: #1f5f86; border-color: #2a7bb0; font-weight: 600; }
-  button.primary:hover { background: #24709e; }
-  main { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; min-height: calc(100vh - 57px); }
-  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
-  aside { border-right: 1px solid var(--line); background: var(--panel); padding: 18px 20px 40px; overflow: auto; }
+  button { font: inherit; color: var(--text); background: transparent; border: 1px solid var(--line); border-radius: 0; padding: 7px 14px; cursor: pointer; }
+  button:hover { border-color: var(--text); }
+  button.primary { background: var(--text); color: #070707; border-color: var(--text); font-weight: 700; }
+  button.primary:hover { background: #fff; }
+  .editor { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; min-height: calc(100vh - 34px - 52px); }
+  @media (max-width: 860px) { .editor { grid-template-columns: 1fr; } }
+  .editor > aside { border-right: 1px solid var(--line); background: var(--panel); padding: 18px 20px 40px; overflow: auto; }
   section { margin-bottom: 22px; }
   h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
   .themes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .theme { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; cursor: pointer; background: var(--card); }
+  .theme { border: 1px solid var(--line); border-radius: 0; overflow: hidden; cursor: pointer; background: var(--card); }
   .theme.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .theme iframe { display: block; width: 100%; height: 66px; border: 0; pointer-events: none; }
   .theme span { display: block; padding: 6px 10px; font-size: 13px; }
-  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 0; overflow: hidden; }
   .seg button { border: 0; border-radius: 0; background: transparent; padding: 6px 14px; }
-  .seg button.on { background: #24303d; color: #fff; }
+  .seg button.on { background: var(--accent); color: #070707; }
   .field { display: grid; grid-template-columns: 130px 1fr; align-items: center; gap: 10px; margin: 8px 0; }
   .field label { color: var(--muted); }
   input[type=range] { width: 100%; accent-color: var(--accent); }
-  input[type=text], select { width: 100%; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  input[type=text], select { width: 100%; font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 0; padding: 7px 10px; }
   .toggles label { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
   input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
   .state { display: grid; grid-template-columns: 22px 1fr 36px; gap: 8px; align-items: center; margin: 8px 0; }
@@ -42,12 +42,20 @@
   .state small { grid-column: 2 / 4; color: var(--muted); margin-top: -4px; }
   .hint { color: var(--muted); font-size: 12.5px; }
   .stage { padding: 22px; display: flex; flex-direction: column; gap: 12px; }
-  .stage iframe { width: 100%; flex: 1; min-height: 420px; border: 1px solid var(--line); border-radius: 12px; background: #1d1f25; }
+  .stage iframe { width: 100%; flex: 1; min-height: 420px; border: 1px solid var(--line); border-radius: 0; background: #1d1f25; }
   code { background: #232833; padding: 1px 6px; border-radius: 5px; }
 </style>
+<link rel="stylesheet" href="/chrome.css">
 </head>
 <body>
-<header>
+<div class="app">
+  <div class="ribbon"><b>Motyw</b><span>Wygląd overlayu dla widzów</span></div>
+  <aside class="side">
+    <a class="brand" href="/panel"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><circle cx="19.5" cy="16" r="7" fill="none" stroke="#ebe8e3" stroke-width="2"/><circle cx="12.5" cy="16" r="7" fill="#ff3b2f"/></svg><span>Live<em>Delay</em></span></a>
+    <nav class="nav" id="appnav" aria-label="LiveDelay"></nav>
+  </aside>
+  <div class="work">
+<header class="editor-bar">
   <h1>LiveDelay · <span data-t="title"></span></h1>
   <span id="toast"></span>
   <span class="spacer"></span>
@@ -55,7 +63,7 @@
   <button id="revert" data-t="revert"></button>
   <button id="save" class="primary" data-t="save"></button>
 </header>
-<main>
+<main class="editor">
   <aside>
     <section>
       <h2 data-t="theme"></h2>
@@ -95,6 +103,9 @@
     <div class="hint"><span data-t="url"></span> <code id="url"></code></div>
   </div>
 </main>
+  </div>
+</div>
+<script src="/nav.js"></script>
 <script>
   const I18N = {
     en: { title: 'overlay look', save: 'Save', revert: 'Undo changes', reset: 'Theme defaults', saved: 'Saved – the Browser source already shows it.',

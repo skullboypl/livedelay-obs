@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiveDelay — sterowanie</title>
+<link rel="stylesheet" href="/chrome.css">
+<style>
+  .pad { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
+  .status { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .chip { display: inline-flex; align-items: center; gap: 8px; font: 600 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .chip.live i { background: var(--live); box-shadow: 0 0 8px var(--live); }
+  .chip.armed i { background: var(--arm); box-shadow: 0 0 8px var(--arm); }
+  .chip.delayed i { background: var(--tally); box-shadow: 0 0 8px var(--tally); }
+  .meters { font: 500 11px/1 var(--mono); letter-spacing: .06em; color: var(--dim); text-transform: uppercase; }
+  .delay { display: flex; gap: 8px; }
+  input[type="number"] { width: 96px; height: 44px; background: var(--ink); color: var(--text); border: 1px solid var(--line-2); font: 800 1.3rem/1 var(--sans); font-stretch: 112%; padding: 0 10px; }
+  button.act { flex: 1; height: 44px; cursor: pointer; background: transparent; color: var(--text); border: 1px solid var(--line-2); font: 600 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+  button.act:hover:not(:disabled) { border-color: var(--text); }
+  button.act:disabled { opacity: .35; cursor: default; }
+  button.act.arm:not(:disabled) { border-color: var(--arm); color: var(--arm); }
+  button.act.go:not(:disabled) { border-color: var(--tally); color: var(--tally); }
+  button.act.live:not(:disabled) { border-color: var(--live); color: var(--live); }
+  .row { display: flex; gap: 8px; }
+  .dest { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .dest b { font-weight: 700; }
+  .dest small { display: block; color: var(--dim); font: 500 10px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .stage { max-width: 420px; margin: 0 auto; padding: 16px 16px 28px; display: flex; flex-direction: column; gap: 18px; }
+  .embed { display: flex; flex-direction: column; gap: 8px; }
+  .embed select, .url input { height: 36px; background: var(--ink); color: var(--text); border: 1px solid var(--line); font: 500 12px/1 var(--mono); padding: 0 10px; }
+  .url { display: flex; gap: 8px; }
+  .url input { flex: 1; min-width: 0; color: var(--muted); }
+  .hint { color: var(--muted); font-size: 13px; margin: 0; }
+  body.menu-hide .ribbon, body.menu-hide .side, body.menu-hide .embed,
+  html.menu-hide .ribbon, html.menu-hide .side, html.menu-hide .embed { display: none !important; }
+  body.menu-hide .app, html.menu-hide .app { grid-template-columns: 1fr; grid-template-rows: 1fr; height: auto; min-height: 100vh; }
+  html.menu-hide .stage { max-width: none; min-height: 100vh; padding: 0; box-sizing: border-box; }
+  html.menu-hide .pad { min-height: 100%; }
+  .pad[data-style="tally"] { background: #ff3b2f; color: #070707; }
+  .pad[data-style="tally"] .chip,
+  .pad[data-style="tally"] .meters,
+  .pad[data-style="tally"] .dest small { color: #3a0c09; }
+  .pad[data-style="tally"] input,
+  .pad[data-style="tally"] button.act { background: #070707; color: #ebe8e3; border-color: #070707; }
+  .pad[data-style="tally"] .dest { border-color: rgba(7,7,7,.28); }
+  .pad[data-style="paper"] { background: #f4f1ea; color: #161513; }
+  .pad[data-style="paper"] .chip,
+  .pad[data-style="paper"] .meters,
+  .pad[data-style="paper"] .dest small { color: #5c574e; }
+  .pad[data-style="paper"] input,
+  .pad[data-style="paper"] button.act { background: #fffdf8; color: #161513; border-color: #cfc8ba; }
+  .pad[data-style="paper"] .dest { border-color: #e4dfd4; }
+  .pad[data-style="paper"] button.act.go:not(:disabled) { border-color: #ff3b2f; color: #ff3b2f; }
+  .pad[data-style="live"] button.act.arm:not(:disabled),
+  .pad[data-style="live"] button.act.go:not(:disabled) { border-color: #3ddc84; color: #3ddc84; }
+  .pad[data-style="glass"] { background: #171b24; color: #e7eefc; }
+  .pad[data-style="glass"] .chip,
+  .pad[data-style="glass"] .meters,
+  .pad[data-style="glass"] .dest small { color: #93a0b8; }
+  .pad[data-style="glass"] input,
+  .pad[data-style="glass"] button.act { background: #10131a; color: #e7eefc; border-color: #3a4458; }
+  .pad[data-style="glass"] .dest { border-color: #2a3140; }
+  .pad[data-style="glass"] button.act.go:not(:disabled),
+  .pad[data-style="glass"] button.act.arm:not(:disabled) { border-color: #7eb6ff; color: #7eb6ff; }
+  html.menu-hide body:has(.pad[data-style="tally"]) { background: #ff3b2f; }
+  html.menu-hide body:has(.pad[data-style="paper"]) { background: #f4f1ea; }
+  html.menu-hide body:has(.pad[data-style="glass"]) { background: #171b24; }
+</style>
+<script>if (new URLSearchParams(location.search).get('menu') === 'hide') document.documentElement.classList.add('menu-hide');</script>
+</head>
+<body class="dock">
+<div class="app">
+  <div class="ribbon"><b>Sterowanie</b><span>Panel do Streamlabs i przeglądarki</span></div>
+  <aside class="side">
+    <a class="brand" href="/panel"><svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><circle cx="19.5" cy="16" r="7" fill="none" stroke="#ebe8e3" stroke-width="2"/><circle cx="12.5" cy="16" r="7" fill="#ff3b2f"/></svg><span>Live<em>Delay</em></span></a>
+    <nav class="nav" id="appnav" aria-label="LiveDelay"></nav>
+  </aside>
+  <div class="work">
+    <div class="stage">
+      <div class="pad" id="dockbox">
+        <div class="status">
+          <span class="chip wait" id="chip"><i></i><b>…</b></span>
+          <span class="meters" id="meters">bufor 0.0 s</span>
+        </div>
+        <div class="delay">
+          <input id="delay" type="number" min="1" max="3600" value="15" aria-label="Opóźnienie w sekundach">
+          <button type="button" class="act arm" id="arm">Uzbrój</button>
+        </div>
+        <button type="button" class="act go" id="activate">Włącz opóźnienie</button>
+        <div class="row">
+          <button type="button" class="act live" id="cut">Na żywo</button>
+          <button type="button" class="act live" id="cutafter">Na żywo po emisji</button>
+        </div>
+        <button type="button" class="act" id="disarm">Rozbrój</button>
+        <div id="dests"></div>
+      </div>
+      <div class="embed">
+        <p class="hint">Styl widać w ramce powyżej. Skopiowany adres otwiera sam dock, bez menu. W Streamlabs wklej go jako panel przeglądarki albo źródło Przeglądarka.</p>
+        <select id="style" aria-label="Styl panelu">
+          <option value="ink">Atrament</option>
+          <option value="tally">Czerwień</option>
+          <option value="paper">Papier</option>
+          <option value="live">Na żywo</option>
+          <option value="glass">Szkło</option>
+        </select>
+        <div class="url"><input id="url" readonly><button type="button" class="act" id="copy">Kopiuj</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="/nav.js"></script>
+<script>
+const STYLES = ['ink', 'tally', 'paper', 'live', 'glass'];
+const q = new URLSearchParams(location.search);
+const styleNow = STYLES.includes(q.get('style')) ? q.get('style') : 'ink';
+document.body.classList.toggle('menu-hide', q.get('menu') === 'hide');
+document.documentElement.classList.toggle('menu-hide', q.get('menu') === 'hide');
+const box = document.getElementById('dockbox');
+const styleSel = document.getElementById('style');
+const url = document.getElementById('url');
+styleSel.value = styleNow;
+function applyStyle(name) {
+  if (!name || name === 'ink') delete box.dataset.style;
+  else box.dataset.style = name;
+}
+function dockLink() {
+  const u = new URL(location.origin + '/dock');
+  u.searchParams.set('menu', 'hide');
+  if (styleSel.value && styleSel.value !== 'ink') u.searchParams.set('style', styleSel.value);
+  return u.toString();
+}
+function paintLink() { url.value = dockLink(); }
+applyStyle(styleNow);
+styleSel.addEventListener('change', () => { applyStyle(styleSel.value); paintLink(); });
+paintLink();
+document.getElementById('copy').addEventListener('click', async () => {
+  const text = dockLink();
+  try { await navigator.clipboard.writeText(text); }
+  catch (_) { url.focus(); url.select(); document.execCommand('copy'); }
+  document.getElementById('copy').textContent = 'Skopiowane';
+  setTimeout(() => { document.getElementById('copy').textContent = 'Kopiuj'; }, 1200);
+});
+url.addEventListener('focus', () => url.select());
+let delaySet = false;
+
+function post(path) {
+  return fetch(path, { method: 'POST' }).then(r => r.json().catch(() => ({})));
+}
+document.getElementById('arm').onclick = () => post('/arm?delay=' + document.getElementById('delay').value).then(tick);
+document.getElementById('activate').onclick = () => post('/activate').then(tick);
+document.getElementById('cut').onclick = () => post('/cut').then(tick);
+document.getElementById('cutafter').onclick = () => post('/cut-after').then(tick);
+document.getElementById('disarm').onclick = () => post('/disarm').then(tick);
+
+function paint(kind, label) {
+  const el = document.getElementById('chip');
+  el.className = 'chip ' + kind;
+  el.querySelector('b').textContent = label;
+}
+function tick() {
+  return fetch('/state').then(r => r.json()).then(s => {
+    const delayed = s.mode === 'delayed';
+    const armed = !!s.armed;
+    const input = !!s.input;
+    let kind = 'wait', label = input ? 'Na żywo' : 'Czekam na stream';
+    if (!input) { kind = 'wait'; label = 'Czekam na stream'; }
+    else if (delayed) { kind = 'delayed'; label = 'Opóźnienie'; }
+    else if (armed) { kind = 'armed'; label = 'Uzbrojone'; }
+    else if (Number(s.arm_delay) > 0) { kind = 'armed'; label = 'Uzbrajanie'; }
+    else { kind = 'live'; label = 'Na żywo'; }
+    paint(kind, label);
+    const buf = Number(s.buffer_s) || 0;
+    document.getElementById('meters').textContent = 'bufor ' + buf.toFixed(1) + ' s · ' + Math.round(s.in_kbps || 0) + ' kb/s';
+    if (!delaySet) {
+      delaySet = true;
+      const n = s.arm_delay != null ? s.arm_delay : s.default_delay;
+      if (n) document.getElementById('delay').value = Math.round(n);
+    }
+    document.getElementById('arm').disabled = delayed;
+    document.getElementById('activate').disabled = !(armed && !delayed);
+    document.getElementById('cut').disabled = !delayed;
+    document.getElementById('cutafter').disabled = !delayed || !!s.cut_pending;
+    document.getElementById('disarm').disabled = delayed || !(s.arm_delay > 0);
+    const box = document.getElementById('dests');
+    box.replaceChildren();
+    (s.dests || []).forEach((d, i) => {
+      const row = document.createElement('div');
+      row.className = 'dest';
+      const name = document.createElement('div');
+      const b = document.createElement('b');
+      b.textContent = d.name || ('Platforma ' + (i + 1));
+      const sm = document.createElement('small');
+      sm.textContent = (d.state || 'stop') + ' · ' + Math.round(d.kbps || 0) + ' kb/s';
+      name.append(b, sm);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'act ' + (d.on ? 'go' : 'live');
+      btn.textContent = d.on ? 'Zakończ' : 'Live';
+      btn.onclick = () => post('/dest/' + (d.on ? 'stop' : 'start') + '?i=' + i).then(tick);
+      row.append(name, btn);
+      box.append(row);
+    });
+  }).catch(() => paint('wait', 'Brak silnika'));
+}
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>
