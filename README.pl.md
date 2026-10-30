@@ -4,6 +4,8 @@
 
 **Strona:** [livedelay.vxh.pl](https://livedelay.vxh.pl/) · [EN](https://livedelay.vxh.pl/en/) · [Pobierz](https://github.com/skullboypl/livedelay-obs/releases/latest) · [Hub VXH](https://vxh.pl/livedelay/)
 
+<sub>Nie używasz OBS? [Osobna aplikacja LiveDelay](https://github.com/skullboypl/livedelay-standalone-app) dla Streamlabs Desktop, Meld Studio i innych programów jest w budowie — jeszcze bez wydania.</sub>
+
 Włączasz i wyłączasz opóźnienie streamu w trakcie nadawania, bez zrywania połączenia. LiveDelay siedzi w OBS między OBS a platformami: **Arm**, potem **Activate**, i widzowie są N sekund z tyłu. **Cut** i są z powrotem na żywo.
 
 - **Jedna wtyczka, bez dodatkowego programu.** Proxy opóźnienia działa w środku OBS (rdzeń w Ruście, ok. 0,1% CPU i 30 MB RAM przy 15 s opóźnienia i 6 Mb/s).
@@ -87,6 +89,14 @@ Akcja **Hotkey** ze skrótami z OBS albo lokalne API (tylko 127.0.0.1):
 | `GET /state`, `GET /events` | stan jako JSON albo wypychany jako zdarzenia (SSE) |
 
 Akcje działają też przez GET, więc zadziała akcja **Website** w Stream Decku. Żądania z innych stron WWW są odrzucane, więc żadna strona nie wytnie Ci streamu.
+
+## Nie używasz OBS? Aplikacja wkrótce
+
+To repozytorium to **wtyczka do OBS Studio**. Jeśli streamujesz w Streamlabs Desktop, Meld Studio, XSplit, vMix albo czymkolwiek innym, co umie wysłać transmisję na własny serwer RTMP, powstaje dla ciebie **osobna aplikacja LiveDelay**: chodzi obok twojego miksera, przyjmuje stream po RTMP na `127.0.0.1:1935` i ładuje ten sam rdzeń w Ruście jako DLL, więc dostajesz to samo opóźnienie Arm / Activate / Cut i ten sam lokalny multistream.
+
+**Nie ma jeszcze wydania** — aplikacja jest w budowie, więc nie ma czego pobrać. Repozytorium jest publiczne: **[skullboypl/livedelay-standalone-app](https://github.com/skullboypl/livedelay-standalone-app)**. Obserwuj je, żeby dostać powiadomienie o pierwszym wydaniu.
+
+Więcej na stronie: [livedelay.vxh.pl/opoznienie-bez-obs](https://livedelay.vxh.pl/opoznienie-bez-obs/).
 
 ## Ograniczenia
 

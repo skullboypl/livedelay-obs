@@ -4,6 +4,8 @@
 
 **Website:** [livedelay.vxh.pl](https://livedelay.vxh.pl/) · [English](https://livedelay.vxh.pl/en/) · [Download](https://github.com/skullboypl/livedelay-obs/releases/latest) · [VXH hub](https://vxh.pl/livedelay/)
 
+<sub>Not on OBS? A [standalone LiveDelay app](https://github.com/skullboypl/livedelay-standalone-app) for Streamlabs Desktop, Meld Studio and other encoders is in development — no release yet.</sub>
+
 Turn a stream delay on and off while you are live, without reconnecting. LiveDelay sits between OBS and your platforms inside OBS itself: hit **Arm**, then **Activate**, and viewers are N seconds behind. Hit **Cut** and they are back to live.
 
 - **One plugin, no extra program.** The delay proxy runs inside OBS (Rust core, about 0.1% CPU and 30 MB RAM for a 15 s delay at 6 Mb/s).
@@ -87,6 +89,14 @@ Use the **Hotkey** action with the OBS hotkeys, or call the local API (127.0.0.1
 | `GET /state`, `GET /events` | state as JSON, or pushed as server-sent events |
 
 GET works for the actions too, so the Stream Deck **Website** action can call them. Requests coming from other websites are refused, so a web page cannot cut your stream.
+
+## Not using OBS? A standalone app is coming
+
+This repository is the **OBS Studio plugin**. If you stream in Streamlabs Desktop, Meld Studio, XSplit, vMix or anything else that can publish to a custom RTMP server, a **separate LiveDelay app** is being built for you: it runs alongside your mixer, takes the stream over RTMP on `127.0.0.1:1935`, and loads the same Rust core as a DLL, so you get the same Arm / Activate / Cut delay and the same local multistream.
+
+**It has no release yet** — the app is still in development, so there is nothing to download. The repository is public: **[skullboypl/livedelay-standalone-app](https://github.com/skullboypl/livedelay-standalone-app)**. Watch it to be notified of the first release.
+
+More on the site: [livedelay.vxh.pl/en/stream-delay-without-obs](https://livedelay.vxh.pl/en/stream-delay-without-obs/).
 
 ## Known limits
 
