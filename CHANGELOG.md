@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.33 – 2026-10-30
+
+- **The plugin ships the translations it uses.** Thirteen strings in the Audio tab and the per-platform track pickers were missing from the locale files and only existed on the website, so every OBS start downloaded them again — and without a connection those fields showed bare key names. They are in the plugin now, and the locale check no longer has a gap to heal.
+
 ## 1.0.32 – 2026-10-30
 
 - **The dock looks like the rest of LiveDelay.** It draws from the product palette, where the three accents are named after what they mean, and fills exactly one button: the action the current state is waiting for. The rest stay outlined. Settings gains a Dock look — same as OBS, LiveDelay dark, or high contrast. The viewer overlay is not repeated there; it keeps its own editor.
