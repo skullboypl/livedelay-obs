@@ -1,5 +1,8 @@
 #pragma once
 
+#include "settings.hpp"
+#include "theme.hpp"
+
 #include <QWidget>
 
 #include <chrono>
@@ -33,8 +36,13 @@ public:
 	void Hotkey(const std::string &action);
 	// Re-reads every text after the language changed.
 	void Retranslate();
+	// Picks up livedelay.ini again: the web panel, the standalone app and the
+	// settings window all write it while the dock is open.
+	void ReloadConfig();
 
 private:
+	void ApplyTheme();
+	void SetPrimary(QPushButton *primary);
 	void ShowState(const std::string &json);
 	void ShowOffline();
 	void ShowError(const QString &msg);
@@ -60,7 +68,13 @@ private:
 	QPushButton *disarm_;
 	QPushButton *start_;
 	bool delay_set_ = false;
-	bool limitsHidden_ = false; // session-only skip of the limits banner
+	QString limitsKey_; // what the limits banner is about right now
+	QString limitsAck_; // the same, as last dismissed; kept in livedelay.ini
+	DockTheme theme_ = DockTheme::Obs;
+	Palette pal_ = ThemePalette(DockTheme::Obs);
+	unsigned long long configStamp_ = 0; // livedelay.ini write time we last read
+	std::string language_;
+	std::string engine_text_; // ini parts that only a proxy restart picks up
 	std::string last_; // last state JSON, empty while offline
 	std::map<std::string, std::deque<double>> history_;
 	std::chrono::steady_clock::time_point lastSample_{};

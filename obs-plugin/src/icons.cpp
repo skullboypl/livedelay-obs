@@ -73,6 +73,17 @@ void Draw(QPainter &p, Icon kind, const QColor &c)
 		p.drawPath(tri);
 		break;
 	}
+	case Icon::Panel: { // browser window with a slider on its page
+		p.drawRoundedRect(QRectF(3, 4.5, 18, 15), 2, 2);
+		p.drawLine(QPointF(3, 9), QPointF(21, 9));
+		p.drawLine(QPointF(7, 13), QPointF(17, 13));
+		p.drawLine(QPointF(7, 16.5), QPointF(17, 16.5));
+		p.setBrush(c);
+		p.setPen(Qt::NoPen);
+		p.drawEllipse(QPointF(14, 13), 1.9, 1.9);
+		p.drawEllipse(QPointF(9.5, 16.5), 1.9, 1.9);
+		break;
+	}
 	case Icon::Help: {
 		p.drawEllipse(QPointF(12, 12), 8.5, 8.5);
 		QPainterPath q;

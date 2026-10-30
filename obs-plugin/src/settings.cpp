@@ -25,6 +25,9 @@
 #include <QDialog>
 #include <QDesktopServices>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
@@ -38,12 +41,15 @@
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QPointer>
+#include <QProcess>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScreen>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -51,6 +57,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <memory>
 #include <sstream>
 
 #ifdef _WIN32
@@ -58,6 +65,7 @@
 #endif
 
 extern "C" {
+void ld_set_host(const char *name);
 int ld_start(const char *config_path);
 size_t ld_last_error(char *buf, size_t len);
 }
@@ -173,6 +181,18 @@ Settings Settings::Load(const std::string &path)
 			s.max_buffer_mb = std::atoi(v.c_str());
 		else if (k == "language")
 			s.language = v.empty() ? "auto" : v;
+		else if (k == "dock_theme")
+			s.dock_theme = DockThemeKey(ParseDockTheme(v));
+		else if (k == "limits_ack")
+			s.limits_ack = v;
+		else if (k == "hotkey_arm")
+			s.hotkey_arm = v;
+		else if (k == "hotkey_activate")
+			s.hotkey_activate = v;
+		else if (k == "hotkey_cut")
+			s.hotkey_cut = v;
+		else if (k == "hotkey_cut_after")
+			s.hotkey_cut_after = v;
 		else if (k.rfind("arm_slot_", 0) == 0) {
 			const int slot = std::atoi(k.c_str() + 9);
 			int sec = std::atoi(v.c_str());
@@ -221,8 +241,19 @@ std::string Settings::Text() const
 {
 	std::ostringstream o;
 	o << "# LiveDelay settings (edited from OBS: Tools -> LiveDelay)\n\n"
-	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb << "\nlanguage = " << language
+	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb << "\nlanguage = " << language << "\ndock_theme = " << dock_theme
 	  << "\n";
+	if (!limits_ack.empty())
+		o << "limits_ack = " << limits_ack << "\n";
+	// Carried through untouched: these belong to the app, not to this plugin.
+	const std::pair<const char *, const std::string *> app_keys[] = {{"hotkey_arm", &hotkey_arm},
+									 {"hotkey_activate", &hotkey_activate},
+									 {"hotkey_cut", &hotkey_cut},
+									 {"hotkey_cut_after", &hotkey_cut_after}};
+	for (const auto &kv : app_keys) {
+		if (!kv.second->empty())
+			o << kv.first << " = " << *kv.second << "\n";
+	}
 	for (int i = 0; i < 6; ++i)
 		o << "arm_slot_" << i << " = " << arm_slot[i] << "\n";
 	for (size_t i = 0; i < dests.size(); ++i) {
@@ -248,7 +279,44 @@ std::string Settings::Text() const
 	return o.str();
 }
 
+DockTheme ParseDockTheme(const std::string &key)
+{
+	if (key == "dark")
+		return DockTheme::Dark;
+	if (key == "contrast")
+		return DockTheme::Contrast;
+	return DockTheme::Obs;
+}
+
+const char *DockThemeKey(DockTheme theme)
+{
+	switch (theme) {
+	case DockTheme::Dark:
+		return "dark";
+	case DockTheme::Contrast:
+		return "contrast";
+	case DockTheme::Obs:
+	default:
+		return "obs";
+	}
+}
+
+bool SaveLimitsAck(const std::string &key)
+{
+	Settings s = Settings::Load(ConfigPath());
+	if (s.limits_ack == key)
+		return true;
+	s.limits_ack = key;
+	return s.Save(ConfigPath());
+}
+
+DockTheme CurrentDockTheme()
+{
+	return ParseDockTheme(Settings::Load(ConfigPath()).dock_theme);
+}
+
 void (*OnLanguageChanged)() = nullptr;
+void (*OnConfigChanged)() = nullptr;
 
 void ApplyLanguage(const std::string &language)
 {
@@ -284,6 +352,8 @@ std::string LastError()
 
 std::string StartProxy()
 {
+	// Lets the web panel tell "served from inside OBS" from "served by the app".
+	ld_set_host("obs");
 	if (ld_start(ConfigPath().c_str()) == 0)
 		return {};
 	char buf[512];
@@ -307,6 +377,24 @@ std::string LivePreviewUrl()
 {
 	const char *locale = obs_get_locale();
 	return ApiBase() + "/live-preview?lang=" + std::string(locale ? locale : "en").substr(0, 2);
+}
+
+std::string PanelUrl()
+{
+	return ApiBase() + "/panel";
+}
+
+unsigned long long ConfigStamp()
+{
+#ifndef _WIN32
+	return 0;
+#else
+	WIN32_FILE_ATTRIBUTE_DATA info{};
+	const std::wstring path = QString::fromStdString(ConfigPath()).toStdWString();
+	if (!GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &info))
+		return 0;
+	return (unsigned long long(info.ftLastWriteTime.dwHighDateTime) << 32) | info.ftLastWriteTime.dwLowDateTime;
+#endif
 }
 
 void AddOverlayToScene(QWidget *parent)
@@ -487,6 +575,165 @@ int LegacyVodTrack()
 	return ObsStreamTrackNumber() == 2 ? 1 : 2;
 }
 
+bool SessionOutputsBusy()
+{
+	return obs_frontend_streaming_active() || obs_frontend_recording_active() || obs_frontend_replay_buffer_active() ||
+	       obs_frontend_virtualcam_active();
+}
+
+void StopSessionOutputs()
+{
+	if (obs_frontend_streaming_active())
+		obs_frontend_streaming_stop();
+	if (obs_frontend_recording_active())
+		obs_frontend_recording_stop();
+	if (obs_frontend_replay_buffer_active())
+		obs_frontend_replay_buffer_stop();
+	if (obs_frontend_virtualcam_active())
+		obs_frontend_stop_virtualcam();
+}
+
+// Only the plugin folder or livedelay-obs.dll, and only on an OBS plugin path.
+bool SafeUninstallTarget(const QString &path)
+{
+	const QFileInfo fi(path);
+	const QString name = fi.fileName();
+	if (name.compare(QStringLiteral("livedelay-obs"), Qt::CaseInsensitive) != 0 &&
+	    name.compare(QStringLiteral("livedelay-obs.dll"), Qt::CaseInsensitive) != 0)
+		return false;
+	const QString native = QDir::toNativeSeparators(fi.absoluteFilePath());
+	if (native.size() < 16)
+		return false;
+	const QString lower = native.toLower();
+	return lower.contains(QStringLiteral("\\obs-studio\\")) || lower.contains(QStringLiteral("\\obs-plugins\\")) ||
+	       lower.contains(QStringLiteral("\\plugins\\"));
+}
+
+void AddUninstallTarget(QStringList *out, const QString &path)
+{
+	if (!out || path.isEmpty() || !QFileInfo::exists(path) || !SafeUninstallTarget(path))
+		return;
+	const QString native = QDir::toNativeSeparators(QFileInfo(path).absoluteFilePath());
+	for (const QString &have : *out) {
+		if (have.compare(native, Qt::CaseInsensitive) == 0)
+			return;
+	}
+	out->append(native);
+}
+
+QStringList CollectUninstallTargets()
+{
+	QStringList out;
+	obs_module_t *mod = obs_current_module();
+	const char *bin = mod ? obs_get_module_binary_path(mod) : nullptr;
+	if (bin) {
+		const QString dll = QDir::toNativeSeparators(QString::fromUtf8(bin));
+		const QString marker = QStringLiteral("\\plugins\\livedelay-obs");
+		const int at = dll.indexOf(marker, 0, Qt::CaseInsensitive);
+		if (at >= 0)
+			AddUninstallTarget(&out, dll.left(at + marker.size()));
+		if (dll.endsWith(QStringLiteral("\\obs-plugins\\64bit\\livedelay-obs.dll"), Qt::CaseInsensitive))
+			AddUninstallTarget(&out, dll);
+	}
+	wchar_t exe[MAX_PATH] = {};
+	if (GetModuleFileNameW(nullptr, exe, MAX_PATH)) {
+		QDir root(QString::fromWCharArray(exe));
+		if (root.cdUp() && root.cdUp() && root.cdUp()) {
+			AddUninstallTarget(&out, root.filePath(QStringLiteral("obs-plugins/64bit/livedelay-obs.dll")));
+			AddUninstallTarget(&out, root.filePath(QStringLiteral("data/obs-plugins/livedelay-obs")));
+			AddUninstallTarget(&out, root.filePath(QStringLiteral("plugins/livedelay-obs")));
+		}
+	}
+	const QString pd = qEnvironmentVariable("ProgramData");
+	if (!pd.isEmpty())
+		AddUninstallTarget(&out, QDir(pd).filePath(QStringLiteral("obs-studio/plugins/livedelay-obs")));
+	return out;
+}
+
+void LaunchUninstallScript(const QString &script, const QStringList &targets)
+{
+	QStringList args{QStringLiteral("-NoProfile"),
+			 QStringLiteral("-STA"),
+			 QStringLiteral("-WindowStyle"),
+			 QStringLiteral("Hidden"),
+			 QStringLiteral("-ExecutionPolicy"),
+			 QStringLiteral("Bypass"),
+			 QStringLiteral("-File"),
+			 script,
+			 QStringLiteral("-ObsPid"),
+			 QString::number(GetCurrentProcessId()),
+			 QStringLiteral("-UiTitle"),
+			 T("Danger.ProgressTitle"),
+			 QStringLiteral("-UiWait"),
+			 T("Danger.ProgressWaiting"),
+			 QStringLiteral("-UiRemoving"),
+			 T("Danger.ProgressRemoving"),
+			 QStringLiteral("-UiDone"),
+			 T("Danger.ProgressDone"),
+			 QStringLiteral("-UiFail"),
+			 T("Danger.ProgressFailed"),
+			 QStringLiteral("-UiClose"),
+			 T("Danger.ProgressClose"),
+			 QStringLiteral("-UiNone"),
+			 T("Danger.ProgressNone")};
+	for (const QString &t : targets)
+		args << QStringLiteral("-Target") << t;
+	if (!QProcess::startDetached(QStringLiteral("powershell.exe"), args)) {
+		QWidget *host = static_cast<QWidget *>(obs_frontend_get_main_window());
+		QMessageBox::warning(host, QStringLiteral("LiveDelay"), T("Danger.UninstallFailed").arg(QStringLiteral("start")));
+		return;
+	}
+	QTimer::singleShot(450, qApp, [] {
+		if (QWidget *main = static_cast<QWidget *>(obs_frontend_get_main_window()))
+			QMetaObject::invokeMethod(main, "close", Qt::QueuedConnection);
+	});
+}
+
+// Returns false when the user backed out, so the button can be used again.
+bool BeginUninstall(QWidget *parent)
+{
+	if (QMessageBox::warning(parent, QStringLiteral("LiveDelay"), T("Danger.UninstallConfirm"),
+				 QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
+		return false;
+	const QStringList targets = CollectUninstallTargets();
+	if (targets.isEmpty()) {
+		QMessageBox::warning(parent, QStringLiteral("LiveDelay"), T("Danger.NoPath"));
+		return false;
+	}
+	const char *data = obs_get_module_data_path(obs_current_module());
+	const QString src = data ? QDir(QString::fromUtf8(data)).filePath(QStringLiteral("Uninstall-LiveDelay.ps1")) : QString();
+	if (src.isEmpty() || !QFileInfo::exists(src)) {
+		QMessageBox::warning(parent, QStringLiteral("LiveDelay"), T("Danger.ScriptMissing"));
+		return false;
+	}
+	const QString script = QDir::temp().filePath(QStringLiteral("livedelay-uninstall.ps1"));
+	QFile::remove(script);
+	if (!QFile::copy(src, script)) {
+		QMessageBox::warning(parent, QStringLiteral("LiveDelay"), T("Danger.UninstallFailed").arg(QStringLiteral("script")));
+		return false;
+	}
+	auto go = [script, targets] { LaunchUninstallScript(script, targets); };
+	if (!SessionOutputsBusy()) {
+		go();
+		return true;
+	}
+	StopSessionOutputs();
+	auto *wait = new QTimer(qApp);
+	auto left = std::make_shared<int>(75);
+	QObject::connect(wait, &QTimer::timeout, qApp, [wait, left, go] {
+		if (SessionOutputsBusy() && *left > 0) {
+			--*left;
+			StopSessionOutputs();
+			return;
+		}
+		wait->stop();
+		wait->deleteLater();
+		go();
+	});
+	wait->start(200);
+	return true;
+}
+
 class SettingsDialog : public QDialog {
 public:
 	explicit SettingsDialog(QWidget *parent) : QDialog(parent), s_(Settings::Load(ConfigPath()))
@@ -534,11 +781,23 @@ public:
 			int i = language_->findData(Q(s_.language));
 			language_->setCurrentIndex(i < 0 ? 0 : i);
 		}
+		// The look of this dock only. What viewers see has its own themes in
+		// the overlay editor, so it is not repeated here.
+		dockTheme_ = new QComboBox;
+		dockTheme_->addItem(T("Settings.DockThemeObs"), "obs");
+		dockTheme_->addItem(T("Settings.DockThemeDark"), "dark");
+		dockTheme_->addItem(T("Settings.DockThemeContrast"), "contrast");
+		dockTheme_->setToolTip(T("Settings.DockThemeTip"));
+		{
+			int i = dockTheme_->findData(Q(s_.dock_theme));
+			dockTheme_->setCurrentIndex(i < 0 ? 0 : i);
+		}
 		original_ = s_;
 		auto *general = new QFormLayout;
 		general->addRow(T("Settings.DefaultDelay"), delay_);
 		general->addRow(T("Settings.BufferLimit"), bufferRow);
 		general->addRow(T("Settings.Language"), language_);
+		general->addRow(T("Settings.DockTheme"), dockTheme_);
 		connect(delay_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { RefreshBufferHint(); });
 		connect(buffer_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { RefreshBufferHint(); });
 		connect(bufferSuggest_, &QPushButton::clicked, this, [this] {
@@ -773,6 +1032,30 @@ public:
 		aboutLayout->addSpacing(12);
 		aboutLayout->addWidget(Hint(T("Settings.SmoothWizardText")));
 		aboutLayout->addWidget(wizard, 0, Qt::AlignLeft);
+		aboutLayout->addSpacing(18);
+		auto *danger = new QGroupBox(T("Danger.Title"));
+		auto *dangerLay = new QVBoxLayout(danger);
+		dangerLay->addWidget(Hint(T("Danger.About")));
+		auto *dangerRow = new QHBoxLayout;
+		auto *dangerPick = new QComboBox;
+		dangerPick->addItem(T("Danger.Choose"), QString());
+		dangerPick->addItem(T("Danger.Uninstall"), QStringLiteral("uninstall"));
+		auto *dangerRun = new QPushButton(T("Danger.Run"));
+		dangerRun->setEnabled(false);
+		dangerRow->addWidget(dangerPick, 1);
+		dangerRow->addWidget(dangerRun, 0);
+		dangerLay->addLayout(dangerRow);
+		aboutLayout->addWidget(danger);
+		connect(dangerPick, &QComboBox::currentIndexChanged, dangerRun, [dangerPick, dangerRun] {
+			dangerRun->setEnabled(!dangerPick->currentData().toString().isEmpty());
+		});
+		connect(dangerRun, &QPushButton::clicked, this, [this, dangerPick, dangerRun] {
+			if (dangerPick->currentData().toString() != QLatin1String("uninstall"))
+				return;
+			dangerRun->setEnabled(false);
+			if (!BeginUninstall(this))
+				dangerRun->setEnabled(true);
+		});
 		aboutLayout->addStretch();
 		auto *updateChecker = new UpdateChecker(this);
 		connect(checkUpdate, &QPushButton::clicked, this, [updateChecker, updateStatus, checkUpdate, downloadUpdate] {
@@ -899,6 +1182,7 @@ public:
 			s_.max_buffer_mb = buffer_->value();
 			SaveOverlay();
 			s_.language = S(language_->currentData().toString());
+			s_.dock_theme = S(dockTheme_->currentData().toString());
 			for (int i = 0; i < 6 && i < int(hotkeySpins_.size()); ++i)
 				s_.arm_slot[i] = hotkeySpins_[i]->value();
 			ApplyHotkeyPage(hotkeyKeys_, hotkeySpins_);
@@ -1303,6 +1587,15 @@ private:
 		if (disruptive && obs_frontend_streaming_active() &&
 		    QMessageBox::question(this, "LiveDelay", T("Settings.RestartWarning")) != QMessageBox::Yes)
 			return;
+		// LiveDelay is an RTMP proxy. An SRT endpoint pasted from a platform's
+		// dashboard would be saved happily and then never connect.
+		for (const Destination &d : s_.dests) {
+			const QString url = Q(d.url);
+			if (url.isEmpty() || url.startsWith("rtmp://") || url.startsWith("rtmps://"))
+				continue;
+			QMessageBox::warning(this, "LiveDelay", T("Settings.NotRtmp").arg(Q(d.name), url));
+			return;
+		}
 		if (!s_.Save(ConfigPath())) {
 			QMessageBox::warning(this, "LiveDelay", T("Settings.SaveFailed"));
 			return;
@@ -1327,6 +1620,9 @@ private:
 		}
 		if (languageChanged)
 			ApplyLanguage(s_.language);
+		// The dock watches the ini anyway; this just saves it the wait.
+		if (OnConfigChanged)
+			OnConfigChanged();
 		accept();
 	}
 
@@ -1336,6 +1632,7 @@ private:
 	OverlayRow rows_[4];
 	QCheckBox *armedAsLive_ = nullptr;
 	QComboBox *language_;
+	QComboBox *dockTheme_ = nullptr;
 	std::vector<ComboButton *> hotkeyKeys_;
 	std::vector<QSpinBox *> hotkeySpins_;
 	QSpinBox *delay_ = nullptr;

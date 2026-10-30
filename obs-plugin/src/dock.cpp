@@ -1,5 +1,6 @@
 #include "dock.hpp"
 #include "contrast.hpp"
+#include "theme.hpp"
 
 #include <cstdlib>
 #include "client.hpp"
@@ -10,6 +11,8 @@
 #include "outputs.hpp"
 #include "settings.hpp"
 #include "update.hpp"
+
+#include <obs-frontend-api.h>
 
 #include <QDesktopServices>
 #include <QFrame>
@@ -66,30 +69,79 @@ private:
 	QColor color_;
 };
 
-// Buttons remember their text keys so Retranslate() can switch language live.
-static QPushButton *Button(const char *text, const char *tip, Icon icon, const char *accent = nullptr)
+// What an action means, not what colour it is: the palette decides that.
+enum class Accent { None, Tally, Live, Arm };
+
+static QColor AccentColor(const Palette &p, Accent a)
+{
+	switch (a) {
+	case Accent::Tally:
+		return p.tally;
+	case Accent::Live:
+		return p.live;
+	case Accent::Arm:
+		return p.arm;
+	case Accent::None:
+	default:
+		return p.text;
+	}
+}
+
+// One button, dressed for the current theme. The action the state is waiting
+// for is filled; the rest stay outlined, and plain tools stay quiet.
+static void StyleButton(QPushButton *b, const Palette &p)
+{
+	const auto accent = Accent(b->property("ldAccent").toInt());
+	const bool primary = b->property("ldPrimary").toBool();
+	QColor fg = p.text;
+	if (accent == Accent::None) {
+		// Under "same as OBS" an unaccented button is simply an OBS button.
+		b->setStyleSheet(p.painted ? QuietButton(p) : QString());
+	} else {
+		const QColor c = AccentColor(p, accent);
+		b->setStyleSheet(primary ? FilledButton(c) : GhostButton(c, p.text));
+		fg = primary ? InkOn(c) : c;
+	}
+	b->setIcon(MakeIcon(Icon(b->property("ldIcon").toInt()), fg));
+}
+
+// Buttons remember their text keys so Retranslate() can switch language live,
+// and their accent so the theme can be swapped without rebuilding the dock.
+static QPushButton *Button(const char *text, const char *tip, Icon icon, Accent accent = Accent::None)
 {
 	auto *b = new QPushButton(T(text));
 	b->setToolTip(T(tip));
 	b->setProperty("ldText", text);
 	b->setProperty("ldTip", tip);
-	b->setIcon(MakeIcon(icon, QColor(accent ? accent : "#c9ccd3")));
+	b->setProperty("ldAccent", int(accent));
+	b->setProperty("ldIcon", int(icon));
 	b->setIconSize(QSize(16, 16));
 	b->setMinimumHeight(32);
 	b->setCursor(Qt::PointingHandCursor);
-	if (accent) {
-		// A tint of the action's colour that works on light and dark OBS themes.
-		QColor c(accent);
-		b->setStyleSheet(QString("QPushButton { background: rgba(%1,%2,%3,.14); border: 1px solid rgba(%1,%2,%3,.45);"
-					 " border-radius: 6px; padding: 4px 10px; font-weight: 600; }"
-					 "QPushButton:hover { background: rgba(%1,%2,%3,.26); }"
-					 "QPushButton:pressed { background: rgba(%1,%2,%3,.36); }"
-					 "QPushButton:disabled { background: transparent; border-color: rgba(128,132,142,.35); }")
-					 .arg(c.red())
-					 .arg(c.green())
-					 .arg(c.blue()));
-	}
 	return b;
+}
+
+// What a limits warning is about, in numbers rather than words, so dismissing it
+// survives a restart and a language change but not a settings change.
+static QString LimitsKey(const QStringList &problems)
+{
+	const ObsOutput o = ReadObsOutput();
+	return QStringLiteral("%1/%2/%3/%4/%5")
+		.arg(o.video_kbps)
+		.arg(o.audio_kbps)
+		.arg(o.keyint_sec)
+		.arg(o.rate_control.isEmpty() ? QStringLiteral("-") : o.rate_control)
+		.arg(problems.size());
+}
+
+// Everything the running engine fixed at startup: its addresses and its
+// platform list. Changing any of it needs the proxy itself to come back up,
+// unlike a delay or a theme, which are picked up as they are.
+static std::string EngineText(const Settings &s)
+{
+	const std::string all = s.Text();
+	const size_t at = all.find("[dest ");
+	return s.listen + "|" + s.api + "|" + (at == std::string::npos ? std::string() : all.substr(at));
 }
 
 static QLabel *Label(const char *text)
@@ -120,13 +172,24 @@ void Dock::Retranslate()
 
 Dock::Dock(QWidget *parent) : QWidget(parent)
 {
+	setObjectName("ldDock");
+	setAttribute(Qt::WA_StyledBackground, true);
+	{
+		const Settings s = Settings::Load(ConfigPath());
+		theme_ = ParseDockTheme(s.dock_theme);
+		pal_ = ThemePalette(theme_);
+		language_ = s.language;
+		limitsAck_ = QString::fromStdString(s.limits_ack);
+		engine_text_ = EngineText(s);
+		configStamp_ = ConfigStamp();
+	}
+
 	// Shown while OBS streams somewhere else than LiveDelay.
 	banner_ = new QFrame;
 	banner_->setObjectName("ldBanner");
-	banner_->setStyleSheet("#ldBanner { background: rgba(255, 191, 60, .14); border: 1px solid rgba(255, 191, 60, .45); border-radius: 6px; }");
 	auto *bannerText = Label("Dock.NotRouted");
 	bannerText->setWordWrap(true);
-	auto *route = Button("Dock.Route", "Dock.Route", Icon::Play, "#ffbf3c");
+	auto *route = Button("Dock.Route", "Dock.Route", Icon::Play, Accent::Arm);
 	auto *bannerLayout = new QHBoxLayout(banner_);
 	bannerLayout->addWidget(bannerText, 1);
 	bannerLayout->addWidget(route);
@@ -135,10 +198,9 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	// Shown while OBS's stream settings exceed what a platform accepts.
 	limits_ = new QFrame;
 	limits_->setObjectName("ldLimits");
-	limits_->setStyleSheet("#ldLimits { background: rgba(255, 90, 79, .13); border: 1px solid rgba(255, 90, 79, .5); border-radius: 6px; }");
 	limitsText_ = new QLabel;
 	limitsText_->setWordWrap(true);
-	limitsFit_ = Button("Limits.Fit", "Limits.FitTip", Icon::Settings, "#ff5a4f");
+	limitsFit_ = Button("Limits.Fit", "Limits.FitTip", Icon::Settings, Accent::Tally);
 	limitsHide_ = Button("Limits.Hide", "Limits.HideTip", Icon::Disarm);
 	auto *limitsLayout = new QHBoxLayout(limits_);
 	limitsLayout->addWidget(limitsText_, 1);
@@ -154,7 +216,6 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	detail_->setAlignment(Qt::AlignCenter);
 	error_ = new QLabel;
 	error_->setWordWrap(true);
-	error_->setStyleSheet("color: #ff8a80;");
 	error_->hide();
 
 	delay_ = new QSpinBox;
@@ -163,13 +224,14 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	delay_->setSuffix(" s");
 	delay_->setToolTip(T("Dock.DelayTip"));
 	delay_->setMinimumHeight(32);
-	arm_ = Button("Dock.Arm", "Dock.ArmTip", Icon::Arm, "#ffbf3c");
-	activate_ = Button("Dock.Activate", "Dock.ActivateTip", Icon::Activate, "#ff5a4f");
-	cut_ = Button("Dock.Cut", "Dock.CutTip", Icon::Live, "#3ddc84");
-	cut_after_ = Button("Dock.CutAfter", "Dock.CutAfterTip", Icon::LiveAfter, "#3ddc84");
+	arm_ = Button("Dock.Arm", "Dock.ArmTip", Icon::Arm, Accent::Arm);
+	activate_ = Button("Dock.Activate", "Dock.ActivateTip", Icon::Activate, Accent::Tally);
+	cut_ = Button("Dock.Cut", "Dock.CutTip", Icon::Live, Accent::Live);
+	cut_after_ = Button("Dock.CutAfter", "Dock.CutAfterTip", Icon::LiveAfter, Accent::Live);
 	disarm_ = Button("Dock.Disarm", "Dock.DisarmTip", Icon::Disarm);
-	start_ = Button("Dock.Restart", "Dock.RestartTip", Icon::Restart, "#5ac8fa");
+	start_ = Button("Dock.Restart", "Dock.RestartTip", Icon::Restart, Accent::Arm);
 	auto *settings = Button("Dock.Settings", "Dock.SettingsTip", Icon::Settings);
+	auto *panel = Button("Dock.Panel", "Dock.PanelTip", Icon::Panel);
 	auto *preview = Button("Dock.Preview", "Dock.PreviewTip", Icon::Preview);
 	auto *help = Button("Dock.Help", "Dock.HelpTip", Icon::Help);
 	fill_ = new QProgressBar;
@@ -180,7 +242,6 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	// Platforms with their own Start / Stop.
 	dests_ = new QFrame;
 	dests_->setObjectName("ldDests");
-	dests_->setStyleSheet("#ldDests { border: 1px solid palette(mid); border-radius: 6px; }");
 	destGrid_ = new QGridLayout(dests_);
 	destGrid_->setContentsMargins(8, 6, 8, 6);
 	destGrid_->setColumnStretch(1, 1);
@@ -194,10 +255,12 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	auto *moreRow = new QHBoxLayout;
 	moreRow->addWidget(cut_after_);
 	moreRow->addWidget(disarm_);
-	auto *toolsRow = new QHBoxLayout;
-	toolsRow->addWidget(settings);
-	toolsRow->addWidget(preview);
-	toolsRow->addWidget(help);
+	// Four tools in one row would squeeze their labels out of a narrow dock.
+	auto *toolsRow = new QGridLayout;
+	toolsRow->addWidget(settings, 0, 0);
+	toolsRow->addWidget(panel, 0, 1);
+	toolsRow->addWidget(preview, 1, 0);
+	toolsRow->addWidget(help, 1, 1);
 
 	auto *layout = new QVBoxLayout(this);
 	AttachUpdateBanner(this, layout);
@@ -231,20 +294,39 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 		ShowError(ok ? QString() : T("Settings.SaveFailed"));
 	});
 	connect(limitsHide_, &QPushButton::clicked, this, [this] {
-		limitsHidden_ = true;
+		// Remembered in the ini, so the same warning does not come back with
+		// the next OBS. Change the settings it is about and it returns.
+		limitsAck_ = limitsKey_;
+		SaveLimitsAck(limitsAck_.toStdString());
+		configStamp_ = ConfigStamp();
 		UpdateBanner();
 	});
 	// OBS settings can change behind our back (Settings dialog, profile switch).
 	auto *timer = new QTimer(this);
 	connect(timer, &QTimer::timeout, this, [this] { UpdateBanner(); });
 	timer->start(10000);
+	// So can livedelay.ini: the web panel and the standalone app write the same
+	// file. Watching its write time is cheaper than re-reading it every second.
+	auto *iniTimer = new QTimer(this);
+	connect(iniTimer, &QTimer::timeout, this, [this] {
+		const unsigned long long stamp = ConfigStamp();
+		if (stamp == 0 || stamp == configStamp_)
+			return;
+		configStamp_ = stamp;
+		ReloadConfig();
+	});
+	iniTimer->start(1000);
 	connect(preview, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QString::fromStdString(LivePreviewUrl()))); });
+	// The same settings page the standalone app opens; the engine serves it
+	// whether the stream runs through this plugin or through the app.
+	connect(panel, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(QString::fromStdString(PanelUrl()))); });
 	connect(help, &QPushButton::clicked, this, [this] { ShowHelp(window()); });
 	connect(route, &QPushButton::clicked, this, [this] {
 		RouteObsThroughLiveDelay(window());
 		UpdateBanner();
 	});
 
+	ApplyTheme();
 	ShowOffline();
 	UpdateBanner();
 	QPointer<Dock> self(this);
@@ -260,6 +342,76 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 }
 
 Dock::~Dock() = default;
+
+// Repaints everything the plugin owns. What it does not own — OBS's own
+// widgets around the dock — is left alone on purpose.
+void Dock::ApplyTheme()
+{
+	setStyleSheet(DockSheet(pal_));
+	// Only the buttons Button() made: the platform rows carry their own style
+	// and are rebuilt from scratch on the next state anyway.
+	for (QPushButton *b : findChildren<QPushButton *>()) {
+		if (b->property("ldIcon").isValid())
+			StyleButton(b, pal_);
+	}
+	error_->setStyleSheet(QStringLiteral("color: %1;").arg(pal_.tally.name()));
+	dests_->setStyleSheet(CardSheet("ldDests", pal_, pal_.line, false));
+	banner_->setStyleSheet(CardSheet("ldBanner", pal_, pal_.arm));
+	if (last_.empty())
+		ShowOffline();
+	else
+		ShowState(last_);
+	UpdateBanner();
+}
+
+// The action this state is waiting for; everything else goes quiet.
+void Dock::SetPrimary(QPushButton *primary)
+{
+	for (QPushButton *b : {arm_, activate_, cut_, cut_after_, disarm_, start_}) {
+		const bool was = b->property("ldPrimary").toBool();
+		const bool now = b == primary;
+		if (was == now)
+			continue;
+		b->setProperty("ldPrimary", now);
+		StyleButton(b, pal_);
+	}
+}
+
+// Everything the ini on disk can change under the dock: the web panel, the
+// standalone app and this plugin's own settings window all write that one file.
+void Dock::ReloadConfig()
+{
+	const Settings s = Settings::Load(ConfigPath());
+	configStamp_ = ConfigStamp();
+	const DockTheme theme = ParseDockTheme(s.dock_theme);
+	if (theme != theme_) {
+		theme_ = theme;
+		pal_ = ThemePalette(theme);
+		ApplyTheme();
+	}
+	limitsAck_ = QString::fromStdString(s.limits_ack);
+	if (s.language != language_) {
+		language_ = s.language;
+		ApplyLanguage(s.language); // retranslates the dock through plugin.cpp
+	}
+	// Platforms edited elsewhere leave the engine on its old list and OBS's
+	// per-platform encoders stale. Both come back mid-stream only at the cost
+	// of cutting the stream, so wait for idle.
+	const std::string engine = EngineText(s);
+	if (engine != engine_text_) {
+		engine_text_ = engine;
+		if (!obs_frontend_streaming_active()) {
+			ShowError(QString::fromStdString(StartProxy()));
+			OutputsReloadConfig();
+		}
+	}
+	// A default delay changed elsewhere is only safe to adopt while nothing is
+	// armed — otherwise it would overwrite what the user is about to arm.
+	if (!last_.empty() && JsonNumber(last_, "arm_delay", -1) <= 0 && s.delay >= delay_->minimum() &&
+	    s.delay <= delay_->maximum())
+		delay_->setValue(s.delay);
+	UpdateBanner();
+}
 
 void Dock::Act(const std::string &action)
 {
@@ -305,39 +457,43 @@ void Dock::UpdateBanner()
 	QStringList problems = routed ? EncodeProblems() : QStringList();
 	const QString info = MultiEncodeInfo();
 	if (problems.isEmpty() && !info.isEmpty()) {
+		// Not a problem, just something worth knowing: a quiet card, no accent.
 		limitsText_->setText(info);
-		limits_->setStyleSheet(
-			"#ldLimits { background: rgba(90, 200, 250, .12); border: 1px solid rgba(90, 200, 250, .45); border-radius: 6px; }");
+		limits_->setStyleSheet(CardSheet("ldLimits", pal_, pal_.muted));
 		limitsFit_->setVisible(false);
 		limitsHide_->setVisible(false);
 		limits_->setVisible(true);
 		return;
 	}
-	limits_->setStyleSheet(
-		"#ldLimits { background: rgba(255, 90, 79, .13); border: 1px solid rgba(255, 90, 79, .5); border-radius: 6px; }");
-	const bool show = !problems.isEmpty() && !limitsHidden_;
+	limits_->setStyleSheet(CardSheet("ldLimits", pal_, pal_.tally));
+	limitsKey_ = problems.isEmpty() ? QString() : LimitsKey(problems);
+	const bool show = !problems.isEmpty() && limitsKey_ != limitsAck_;
 	limitsFit_->setVisible(show);
 	limitsHide_->setVisible(show);
 	limitsText_->setText(problems.isEmpty() ? QString() : ("<b>" + T("Limits.Title") + "</b><br>" + problems.join("<br>")));
 	limits_->setVisible(show);
 }
 
-static void Pill(QLabel *l, const QString &text, const char *bg)
+// The state pill: filled in the colour of what is on air, quiet when nothing is.
+static void Pill(QLabel *l, const QString &text, const QColor &bg, const Palette &p, bool filled = true)
 {
 	l->setText(text);
-	l->setStyleSheet(QString("font-size: 15px; font-weight: 600; border-radius: 6px; color: white; background: %1;").arg(bg));
+	l->setStyleSheet(QStringLiteral("font-size: 15px; font-weight: 700; letter-spacing: .04em; border-radius: 6px;"
+					" padding: 6px 10px; color: %1; background: %2;")
+				 .arg(filled ? InkOn(bg).name() : p.text.name(), filled ? bg.name() : Rgba(p.muted, .20)));
 }
 
 void Dock::ShowOffline()
 {
 	last_.clear();
-	Pill(status_, T("Dock.Offline"), "#5a5f6b");
+	Pill(status_, T("Dock.Offline"), pal_.muted, pal_, false);
 	detail_->setText(LastError().empty() ? T("Dock.Starting") : QString::fromStdString(LastError()));
 	fill_->hide();
 	dests_->hide();
 	for (QPushButton *b : {arm_, activate_, cut_, cut_after_, disarm_})
 		b->setEnabled(false);
 	start_->show();
+	SetPrimary(start_);
 }
 
 void Dock::ShowDestinations(const std::string &j)
@@ -366,14 +522,17 @@ void Dock::ShowDestinations(const std::string &j)
 	{
 		const bool input = JsonBool(j, "input");
 		const double kbps = input ? JsonNumber(j, "in_kbps") : 0;
+		const QColor inColor = input ? pal_.text : pal_.muted;
 		auto *dot = new QLabel(QString::fromUtf8("●"));
-		dot->setStyleSheet(QString("color: %1;").arg(input ? "#5ac8fa" : "#7a7f8c"));
+		// What OBS feeds in is none of the three on-air states, so it stays in
+		// the panel's own greys: bright when there is signal, dim when not.
+		dot->setStyleSheet(QStringLiteral("color: %1;").arg(inColor.name()));
 		auto *name = new QLabel(T("Dock.InputRow"));
 		auto *rate = new QLabel(input ? QString("%1 kb/s").arg(kbps, 0, 'f', 0) : T("Dock.NoSignalShort"));
-		rate->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
+		rate->setStyleSheet(QStringLiteral("color: %1;").arg(pal_.muted.name()));
 		destGrid_->addWidget(dot, row, 0);
 		destGrid_->addWidget(name, row, 1);
-		destGrid_->addWidget(new Sparkline(history("in", kbps), QColor("#5ac8fa")), row, 2);
+		destGrid_->addWidget(new Sparkline(history("in", kbps), inColor), row, 2);
 		destGrid_->addWidget(rate, row, 3);
 		row++;
 	}
@@ -384,22 +543,28 @@ void Dock::ShowDestinations(const std::string &j)
 		const bool on = JsonBool(j, "on", p);
 		const double kbps = JsonNumber(j, "kbps", 0, p);
 		const std::string error = JsonString(j, "error", p);
-		const char *color = state == "live" ? "#3ddc84" : state == "error" ? "#ff5a4f" : state == "stopped" ? "#7a7f8c" : "#ffbf3c";
+		const QColor color = state == "live"	 ? pal_.live
+				     : state == "error"	 ? pal_.tally
+				     : state == "stopped" ? pal_.muted
+							  : pal_.arm;
 
 		auto *dot = new QLabel(QString::fromUtf8("●"));
-		dot->setStyleSheet(QString("color: %1;").arg(color));
+		dot->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
 		const std::string destName = JsonString(j, "name", p);
 		auto *name = new QLabel(QString::fromStdString(destName));
 		QString st = T(("Dest." + state).c_str());
 		if (kbps > 0)
 			st += QString(" · %1 kb/s").arg(kbps, 0, 'f', 0);
 		auto *stateLabel = new QLabel(st);
-		stateLabel->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
+		stateLabel->setStyleSheet(QStringLiteral("color: %1;").arg(pal_.muted.name()));
 		if (!error.empty())
 			stateLabel->setToolTip(QString::fromStdString(error));
+		// Per-platform Start / Stop never shouts: the dock's loud button is
+		// the delay action, not one of a handful of rows.
 		auto *toggle = new QPushButton(on ? T("Dock.DestStop") : T("Dock.DestStart"));
 		toggle->setToolTip(on ? T("Dock.DestStopTip") : T("Dock.DestStartTip"));
-		toggle->setIcon(MakeIcon(on ? Icon::Stop : Icon::Play, QColor(on ? "#ff5a4f" : "#3ddc84")));
+		toggle->setStyleSheet(GhostButton(on ? pal_.tally : pal_.live, pal_.text));
+		toggle->setIcon(MakeIcon(on ? Icon::Stop : Icon::Play, on ? pal_.tally : pal_.live));
 		toggle->setIconSize(QSize(12, 12));
 		toggle->setCursor(Qt::PointingHandCursor);
 		const std::string path = std::string(on ? "dest/stop" : "dest/start") + "?i=" + std::to_string(index);
@@ -415,7 +580,7 @@ void Dock::ShowDestinations(const std::string &j)
 
 		destGrid_->addWidget(dot, row, 0);
 		destGrid_->addWidget(name, row, 1);
-		destGrid_->addWidget(new Sparkline(history(destName, state == "live" ? kbps : 0), QColor(color)), row, 2);
+		destGrid_->addWidget(new Sparkline(history(destName, state == "live" ? kbps : 0), color), row, 2);
 		destGrid_->addWidget(stateLabel, row, 3);
 		destGrid_->addWidget(toggle, row, 4);
 		p += 8;
@@ -425,6 +590,7 @@ void Dock::ShowDestinations(const std::string &j)
 	if (index == 0) {
 		auto *none = new QLabel(T("Dock.NoPlatforms"));
 		none->setWordWrap(true);
+		none->setStyleSheet(QStringLiteral("color: %1;").arg(pal_.muted.name()));
 		destGrid_->addWidget(none, row, 0, 1, 5);
 	}
 	dests_->show();
@@ -451,15 +617,15 @@ void Dock::ShowState(const std::string &j)
 	// Show configured Arm seconds, not measured keyframe lag (always a bit higher).
 	const double shown_delay = arm_delay > 0 ? arm_delay : delay;
 	if (delayed)
-		Pill(status_, T("Dock.StateDelayed").arg(shown_delay, 0, 'f', 0), "#c62828");
+		Pill(status_, T("Dock.StateDelayed").arg(shown_delay, 0, 'f', 0), pal_.tally, pal_);
 	else if (!input)
-		Pill(status_, T("Dock.StateWaiting"), "#3b4a63");
+		Pill(status_, T("Dock.StateWaiting"), pal_.muted, pal_, false);
 	else if (armed)
-		Pill(status_, T("Dock.StateArmed").arg(arm_delay, 0, 'f', 0), "#b26a00");
+		Pill(status_, T("Dock.StateArmed").arg(arm_delay, 0, 'f', 0), pal_.arm, pal_);
 	else if (arm_delay > 0)
-		Pill(status_, T("Dock.StateArming").arg(buffer, 0, 'f', 0).arg(arm_delay, 0, 'f', 0), "#b26a00");
+		Pill(status_, T("Dock.StateArming").arg(buffer, 0, 'f', 0).arg(arm_delay, 0, 'f', 0), pal_.arm, pal_);
 	else
-		Pill(status_, T("Dock.StateLive"), "#2e7d32");
+		Pill(status_, T("Dock.StateLive"), pal_.live, pal_);
 
 	const bool filling = input && !delayed && arm_delay > 0 && !armed;
 	fill_->setVisible(filling);
@@ -482,6 +648,8 @@ void Dock::ShowState(const std::string &j)
 	cut_->setEnabled(delayed);
 	cut_after_->setEnabled(delayed && !cut_pending);
 	disarm_->setEnabled(!delayed && arm_delay > 0);
+	// Whatever this state is heading towards is the one loud button.
+	SetPrimary(delayed ? cut_ : arm_delay > 0 ? activate_ : arm_);
 }
 
 } // namespace livedelay

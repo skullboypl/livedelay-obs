@@ -10,6 +10,15 @@ namespace livedelay {
 
 enum class EncodeMode { Auto, Recommended, TwitchPartner, Obs, Manual };
 
+/// Look of the LiveDelay dock inside OBS. Nothing to do with the viewer
+/// overlay, which has its own themes in the browser editor (/edit-theme).
+enum class DockTheme { Obs, Dark, Contrast };
+
+DockTheme ParseDockTheme(const std::string &key);
+const char *DockThemeKey(DockTheme theme);
+/// The theme saved in livedelay.ini right now.
+DockTheme CurrentDockTheme();
+
 // livedelay.ini as the settings window sees it. The proxy reads the same file.
 struct Destination {
 	std::string name, url, key;
@@ -47,6 +56,13 @@ struct Settings {
 	/// Seconds for the six "arm this delay" hotkeys. Keys themselves live in OBS.
 	int arm_slot[6] = {15, 30, 45, 60, 90, 120};
 	std::string language = "auto"; // auto = follow OBS, or en-US / pl-PL / de-DE / ru-RU
+	std::string dock_theme = "obs"; // obs = follow OBS's theme, or dark / contrast
+	/// Limits warning the user dismissed, keyed to the settings it was about.
+	/// Empty = show it. A different warning brings the banner back.
+	std::string limits_ack;
+	/// Global hotkeys of the standalone app. This plugin uses OBS's own hotkeys
+	/// and never reads these, but it must not drop them when it saves the ini.
+	std::string hotkey_arm, hotkey_activate, hotkey_cut, hotkey_cut_after;
 	std::string overlay_live = "LIVE";
 	std::string overlay_arming = "ARMING… {buf}/{s}s";
 	std::string overlay_armed = "ARMED {s}s";
@@ -66,6 +82,13 @@ std::string StartProxy();
 
 std::string OverlayUrl();
 std::string LivePreviewUrl();
+// The settings panel the engine serves in a browser; same page as the app's.
+std::string PanelUrl();
+// Last write time of livedelay.ini, 0 when it cannot be read. The dock polls
+// this so a save from the web panel or the app shows up without a restart.
+unsigned long long ConfigStamp();
+// Remembers a dismissed limits warning in the ini. Empty `key` shows it again.
+bool SaveLimitsAck(const std::string &key);
 // True when OBS's stream settings point at LiveDelay.
 bool ObsRoutedToLiveDelay();
 // If already routed: turn off stock OBS Enhanced Broadcasting (Multitrack) and
@@ -82,5 +105,7 @@ void ShowSettings(QWidget *parent);
 // tells the dock to redraw itself through OnLanguageChanged.
 void ApplyLanguage(const std::string &language);
 extern void (*OnLanguageChanged)();
+// Called right after the plugin's own settings window wrote livedelay.ini.
+extern void (*OnConfigChanged)();
 
 } // namespace livedelay

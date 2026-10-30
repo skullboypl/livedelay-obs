@@ -60,6 +60,10 @@ bool obs_module_load(void)
 		if (dock)
 			dock->Retranslate();
 	};
+	livedelay::OnConfigChanged = [] {
+		if (dock)
+			dock->ReloadConfig();
+	};
 	std::string err = livedelay::StartProxy();
 	if (!err.empty())
 		blog(LOG_WARNING, "[livedelay] %s", err.c_str());
