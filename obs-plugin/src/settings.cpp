@@ -199,7 +199,8 @@ Settings Settings::Load(const std::string &path)
 				dest->vod_audio = Yes(v);
 				if (dest->vod_audio && !dest->vod_track_set)
 					dest->vod_track = -1;
-			}
+			} else if (k == "vod_override")
+				dest->vod_override = Yes(v);
 			else if (k == "enhanced_broadcasting" || k == "enhanced")
 				dest->enhanced_broadcasting = Yes(v);
 			continue;
@@ -304,6 +305,7 @@ std::string Settings::Text() const
 		o << "\naudio_track = " << (d.audio_track >= 1 && d.audio_track <= 6 ? d.audio_track : 0)
 		  << "\nvod_track = " << vod
 		  << "\nvod_audio = " << (vod > 0 ? "yes" : "no")
+		  << "\nvod_override = " << (d.vod_override ? "yes" : "no")
 		  << "\nenhanced_broadcasting = " << (d.enhanced_broadcasting ? "yes" : "no") << "\n";
 	}
 	return o.str();
@@ -892,6 +894,7 @@ public:
 		vodTrack_->addItem(T("Encode.VodTrackOff"), 0);
 		for (int i = 1; i <= 6; ++i)
 			vodTrack_->addItem(T("Encode.TrackN").arg(i), i);
+		vodShow_ = new QCheckBox(T("Encode.VodShow"));
 		vodHelp_ = Hint(T("Encode.VodTrackHelp"));
 		vodHelp_->hide();
 		enhanced_ = new QCheckBox(T("Encode.Enhanced"));
@@ -919,6 +922,7 @@ public:
 		form->addRow(T("Encode.Width"), width_);
 		form->addRow(T("Encode.Height"), height_);
 		form->addRow(T("Encode.LiveTrack"), liveTrack_);
+		form->addRow(QString(), vodShow_);
 		form->addRow(T("Encode.VodTrack"), vodTrack_);
 		form->addRow(QString(), vodHelp_);
 		form->addRow(QString(), enhanced_);
@@ -1165,6 +1169,18 @@ public:
 		connect(url_, &QLineEdit::textChanged, this, [this] { UpdateEncodeFields(); });
 		connect(liveTrack_, &QComboBox::currentIndexChanged, this, [this] { UpdateEncodeFields(); });
 		connect(vodTrack_, &QComboBox::currentIndexChanged, this, [this] { UpdateEncodeFields(); });
+		connect(vodShow_, &QCheckBox::toggled, this, [this](bool on) {
+			if (on && !SupportsSeparateVodTrack(service_->currentText(), url_->text())) {
+				if (QMessageBox::question(this, T("Encode.VodShow"), T("Encode.VodShowAsk"),
+							  QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
+					vodShow_->blockSignals(true);
+					vodShow_->setChecked(false);
+					vodShow_->blockSignals(false);
+					return;
+				}
+			}
+			UpdateEncodeFields();
+		});
 		connect(enhanced_, &QCheckBox::toggled, this, [this] { UpdateEncodeFields(); });
 		connect(add, &QPushButton::clicked, this, [this] {
 			Destination d;
@@ -1379,6 +1395,7 @@ private:
 		d.vod_track = vod;
 		d.vod_track_set = true;
 		d.vod_audio = vod > 0;
+		d.vod_override = vodShow_->isChecked();
 		d.enhanced_broadcasting = enhanced_->isChecked();
 		if (d.ingest_key.empty() && current_ >= 0)
 			d.ingest_key = "ld" + std::to_string(current_);
@@ -1393,18 +1410,28 @@ private:
 				   static_cast<QWidget *>(height_)})
 			w->setEnabled(manual);
 		const bool twitch = IsTwitchTarget(service_->currentText(), url_->text());
-		vodTrack_->setEnabled(true);
-		vodHelp_->setVisible(twitch);
+		const bool vodOk = SupportsSeparateVodTrack(service_->currentText(), url_->text());
+		const bool showVod = vodOk || vodShow_->isChecked();
+		vodShow_->setVisible(!vodOk);
+		vodTrack_->setVisible(showVod);
+		if (QWidget *parent = vodTrack_->parentWidget()) {
+			if (auto *form = qobject_cast<QFormLayout *>(parent->layout())) {
+				if (QWidget *label = form->labelForField(vodTrack_))
+					label->setVisible(showVod);
+			}
+		}
 		const int livePick = liveTrack_->currentData().toInt();
 		const int liveNow = livePick >= 1 && livePick <= 6 ? livePick : ObsStreamTrackNumber();
 		const int vodNow = vodTrack_->currentData().toInt();
-		if (vodNow > 0 && vodNow == liveNow) {
+		if (showVod && vodNow > 0 && vodNow == liveNow) {
 			vodTrack_->blockSignals(true);
 			vodTrack_->setCurrentIndex(0);
 			vodTrack_->blockSignals(false);
 			vodHelp_->setText(Rich(T("Encode.VodSame"), true));
+			vodHelp_->setVisible(true);
 		} else {
 			vodHelp_->setText(Rich(T("Encode.VodTrackHelp"), true));
+			vodHelp_->setVisible(vodOk);
 		}
 		enhanced_->setEnabled(twitch);
 		if (!twitch && enhanced_->isChecked()) {
@@ -1427,6 +1454,7 @@ private:
 		tmp.audio_track = liveTrack_->currentData().toInt();
 		tmp.vod_track = vodTrack_->currentData().toInt();
 		tmp.vod_audio = tmp.vod_track > 0;
+		tmp.vod_override = vodShow_->isChecked();
 		tmp.enhanced_broadcasting = enhanced_->isChecked();
 		tmp.service = service_->currentIndex() > 0 ? S(service_->currentText()) : tmp.service;
 		tmp.url = S(url_->text());
@@ -1590,6 +1618,9 @@ private:
 		vodTrack_->blockSignals(true);
 		vodTrack_->setCurrentIndex(vtIdx < 0 ? 0 : vtIdx);
 		vodTrack_->blockSignals(false);
+		vodShow_->blockSignals(true);
+		vodShow_->setChecked(d.vod_override);
+		vodShow_->blockSignals(false);
 		enhanced_->setChecked(d.enhanced_broadcasting);
 		UpdateEncodeFields();
 	}
@@ -1638,7 +1669,8 @@ private:
 		return a.encode_mode == b.encode_mode && a.video_kbps == b.video_kbps && a.audio_kbps == b.audio_kbps &&
 		       a.keyint_sec == b.keyint_sec && a.rate_control == b.rate_control && a.width == b.width &&
 		       a.height == b.height && a.audio_track == b.audio_track && a.vod_track == b.vod_track &&
-		       a.vod_audio == b.vod_audio && a.enhanced_broadcasting == b.enhanced_broadcasting;
+		       a.vod_audio == b.vod_audio && a.vod_override == b.vod_override &&
+		       a.enhanced_broadcasting == b.enhanced_broadcasting;
 	}
 
 	SaveImpact ClassifySave() const
@@ -1737,6 +1769,7 @@ private:
 	QComboBox *rateControl_;
 	QComboBox *liveTrack_ = nullptr;
 	QComboBox *vodTrack_ = nullptr;
+	QCheckBox *vodShow_ = nullptr;
 	QLabel *vodHelp_ = nullptr;
 	QCheckBox *enhanced_;
 	std::vector<obs_source_t *> audioSources_;

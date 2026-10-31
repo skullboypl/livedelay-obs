@@ -230,12 +230,12 @@ input.capturing { border-color: var(--tally); color: var(--tally); }
 
     <section class="page" id="page-audio" hidden>
       <h1>Audio</h1>
-      <p class="hint">Tu wybierasz, która z sześciu ścieżek OBS idzie na daną platformę i która jest VOD Twitcha. Przypisanie źródeł do ścieżek (muzyka tylko na live, nie na VOD) jest w OBS: Edycja → Zaawansowane właściwości audio. Ten panel nie widzi źródeł sceny.</p>
+      <p class="hint">Tu wybierasz, która z sześciu ścieżek OBS idzie na daną platformę. Przypisanie źródeł do ścieżek (muzyka tylko na żywo, nie na VOD) jest w OBS: Edycja, Zaawansowane właściwości audio. Ten panel nie widzi źródeł sceny.</p>
       <table class="rows">
-        <thead><tr><th>Platforma</th><th>Ścieżka na żywo</th><th>Ścieżka VOD</th></tr></thead>
+        <thead><tr><th>Platforma</th><th>Ścieżka na żywo</th><th id="vodhead">Ścieżka VOD</th></tr></thead>
         <tbody id="audiotable"></tbody>
       </table>
-      <p class="hint" style="margin-top:16px">VOD działa na Twitchu: w OBS Wyjście → Zaawansowane włącz ścieżkę VOD i wybierz inną niż live. Widzowie słyszą pełny mix, nagranie dostaje drugą ścieżkę. YouTube i Kick to pole ignorują.</p>
+      <p class="hint" style="margin-top:16px">Na Twitchu ścieżka VOD jest od razu: drugi dźwięk do nagrania, widzowie słyszą ścieżkę na żywo. Przy innej platformie zaznacz „Pokaż osobną ścieżkę VOD”. LiveDelay zapyta, bo według nas ta platforma jej nie obsługuje.</p>
     </section>
 
     <section class="page" id="page-overlay" hidden>
@@ -312,6 +312,35 @@ function isTwitch(d) {
   if (isKick(d)) return false;
   const s = ((d.service || '') + ' ' + (d.url || '')).toLowerCase();
   return s.includes('twitch') || s.includes('ttvnw.net') || s.includes('live-video.net');
+}
+const VOD_ASK = 'Według LiveDelay podana platforma nie obsługuje osobnej ścieżki VOD. Czy chcesz kontynuować?';
+function vodShowCheck(d, rerender) {
+  const lab = document.createElement('label');
+  lab.className = 'check';
+  const inp = document.createElement('input');
+  inp.type = 'checkbox';
+  inp.checked = !!d.vod_override;
+  inp.addEventListener('change', () => {
+    if (inp.checked && !window.confirm(VOD_ASK)) {
+      inp.checked = false;
+      return;
+    }
+    d.vod_override = inp.checked;
+    rerender();
+  });
+  lab.append(inp, document.createTextNode('Pokaż osobną ścieżkę VOD'));
+  return lab;
+}
+function vodPicker(d, rerender) {
+  const vod = trackSelect(d.vod_track, true);
+  vod.title = 'Drugi dźwięk do nagrania. Widzowie słyszą ścieżkę na żywo.';
+  vod.addEventListener('change', () => {
+    let n = Number(vod.value);
+    if (n && n === Number(d.audio_track || 0)) n = 0;
+    d.vod_track = n;
+    rerender();
+  });
+  return vod;
 }
 function trackSelect(value, vod) {
   const s = document.createElement('select');
@@ -568,15 +597,7 @@ function renderForm() {
     if (d.vod_track && d.vod_track === d.audio_track) d.vod_track = 0;
     renderForm();
   });
-  const vod = trackSelect(d.vod_track, true);
-  vod.title = 'Działa na Twitchu. YouTube, Kick i inne platformy tę ścieżkę ignorują.';
-  vod.addEventListener('change', () => {
-    let n = Number(vod.value);
-    if (n && n === Number(d.audio_track || 0) && n !== 0) n = 0;
-    d.vod_track = n;
-    renderForm();
-  });
-  grid.append(
+  const fields = [
     field('Nazwa', name),
     field('Usługa', service),
     field('Serwer', server),
@@ -584,9 +605,11 @@ function renderForm() {
     field('Klucz streamu', keyline),
     field('Kodowanie', mode),
     field('Bitrate wideo', bitrate),
-    field('Ścieżka na żywo', live),
-    field('Ścieżka VOD', vod)
-  );
+    field('Ścieżka na żywo', live)
+  ];
+  if (isTwitch(d) || d.vod_override)
+    fields.push(field('Ścieżka VOD', vodPicker(d, renderForm)));
+  grid.append(...fields);
   const auto = document.createElement('label');
   auto.className = 'check';
   const autoIn = document.createElement('input');
@@ -608,9 +631,12 @@ function renderForm() {
   notes.className = 'hint';
   notes.style.margin = '12px 0 0';
   notes.textContent = isTwitch(d)
-    ? 'Enhanced pyta Twitcha o sesję GoLive i puszcza zwrócone jakości przez ten sam delay. Jak Twitch nie odpowie, zostaje jedna ścieżka wideo. Ścieżka VOD musi być inna niż live.'
-    : 'Enhanced i ścieżka VOD są dla Twitcha. Kick i YouTube zostają na jednej ścieżce wideo.';
-  box.append(grid, auto, enh, notes);
+    ? 'Enhanced pyta Twitcha o sesję GoLive i puszcza zwrócone jakości przez ten sam delay. Jak Twitch nie odpowie, zostaje jedna ścieżka wideo. Ścieżka VOD musi być inna niż na żywo.'
+    : 'Enhanced Broadcasting jest dla Twitcha. Kick i YouTube zostają na jednej ścieżce wideo.';
+  const parts = [grid, auto];
+  if (!isTwitch(d)) parts.push(vodShowCheck(d, renderForm));
+  parts.push(enh, notes);
+  box.append(...parts);
   const manualOn = d.encode_mode === 'manual';
   summary = document.createElement('p');
   summary.className = 'summary';
@@ -666,24 +692,23 @@ function renderPlat() { renderList(); renderForm(); }
 
 function renderAudio() {
   const body = document.getElementById('audiotable');
+  document.getElementById('vodhead').hidden = dests.length === 0;
   body.replaceChildren();
   dests.forEach((d, i) => {
     const tr = document.createElement('tr');
     const name = document.createElement('td');
     name.textContent = d.name || ('Platforma ' + (i + 1));
     const a = document.createElement('td');
-    const b = document.createElement('td');
     const live = trackSelect(d.audio_track, false);
-    const vod = trackSelect(d.vod_track, true);
-    vod.title = 'Działa na Twitchu. YouTube, Kick i inne platformy tę ścieżkę ignorują.';
     live.addEventListener('change', () => {
       d.audio_track = Number(live.value);
       if (d.vod_track === d.audio_track) d.vod_track = 0;
       renderAudio();
     });
-    vod.addEventListener('change', () => { d.vod_track = Number(vod.value); });
     a.append(live);
-    b.append(vod);
+    const b = document.createElement('td');
+    if (!isTwitch(d)) b.append(vodShowCheck(d, renderAudio));
+    if (isTwitch(d) || d.vod_override) b.append(vodPicker(d, renderAudio));
     tr.append(name, a, b);
     body.append(tr);
   });
@@ -723,7 +748,7 @@ document.getElementById('addDest').addEventListener('click', () => {
     name: 'Nowa platforma', service: 'Twitch', server: '', url: 'rtmp://live.twitch.tv/app', key: '',
     ingest_key: '', autostart: true, enabled: true, encode_mode: 'recommended',
     video_kbps: 0, audio_kbps: 160, keyint_sec: 2, rate_control: 'CBR',
-    width: 0, height: 0, audio_track: 0, vod_track: 0, enhanced: false
+    width: 0, height: 0, audio_track: 0, vod_track: 0, vod_override: false, enhanced: false
   });
   sel = dests.length - 1;
   renderPlat();
@@ -811,7 +836,7 @@ async function load() {
       ingest_key: d.ingest_key || '', autostart: !!d.autostart, enabled: d.enabled !== false,
       encode_mode: d.encode_mode || 'obs', video_kbps: d.video_kbps || 0, audio_kbps: d.audio_kbps || 0,
       keyint_sec: d.keyint_sec || 0, rate_control: d.rate_control || 'CBR', width: d.width || 0, height: d.height || 0,
-      audio_track: d.audio_track || 0, vod_track: d.vod_track || 0, enhanced: !!d.enhanced
+      audio_track: d.audio_track || 0, vod_track: d.vod_track || 0, vod_override: !!d.vod_override, enhanced: !!d.enhanced
     };
     if (!row.service && row.url) {
       const matches = [];
@@ -870,7 +895,7 @@ document.getElementById('save').addEventListener('click', async () => {
     video_kbps: Number(d.video_kbps) || 0, audio_kbps: Number(d.audio_kbps) || 0,
     keyint_sec: Number(d.keyint_sec) || 0, rate_control: d.rate_control || 'CBR',
     width: Number(d.width) || 0, height: Number(d.height) || 0,
-    audio_track: Number(d.audio_track) || 0, vod_track: Number(d.vod_track) || 0, enhanced: !!d.enhanced
+    audio_track: Number(d.audio_track) || 0, vod_track: Number(d.vod_track) || 0, vod_override: !!d.vod_override, enhanced: !!d.enhanced
   }));
   try {
     const r = await fetch('/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -968,7 +993,7 @@ function applyObs(p) {
       name: p.service || p.name || 'Platforma', service: p.service || '', server: p.server || '', url: p.url, key: p.key || '',
       ingest_key: '', autostart: true, enabled: true, encode_mode: 'obs',
       video_kbps: 0, audio_kbps: 0, keyint_sec: 0, rate_control: 'CBR', width: 0, height: 0,
-      audio_track: 0, vod_track: 0, enhanced: false
+      audio_track: 0, vod_track: 0, vod_override: false, enhanced: false
     });
     sel = dests.length - 1;
   } else {

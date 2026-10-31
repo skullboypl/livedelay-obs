@@ -26,6 +26,8 @@ const char *EncodeModeKey(EncodeMode m);
 // family as Twitch. Kick is decided first so that host is not treated as Twitch.
 bool IsKickTarget(const QString &service, const QString &url);
 bool IsTwitchTarget(const QString &service, const QString &url);
+// Twitch ingest stores a second AAC as the VOD mix. Other RTMP platforms do not.
+bool SupportsSeparateVodTrack(const QString &service, const QString &url);
 
 // Fills EncodeSettings from encode_mode + OBS Output + services.json / guidelines.
 EncodeSettings ResolveEncode(const Destination &d);
@@ -38,7 +40,7 @@ QStringList EncodeProblems();
 // (and any that would use OBS as a template). Returns false on write failure.
 bool FitEncodeForObsMode();
 
-// Soft tip when many separate encoders will run (informational banner).
+// Soft tip when three or more platforms resolve to different encode settings.
 QString MultiEncodeInfo();
 
 // Encoder id OBS itself uses for streaming (simple or advanced).

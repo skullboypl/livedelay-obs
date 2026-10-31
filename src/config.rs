@@ -99,6 +99,8 @@ pub struct Dest {
     pub audio_track: i32,
     /// 0 = no Twitch VOD track. 1–6 = that mixer is the second AAC.
     pub vod_track: i32,
+    /// User asked to send a VOD track to a platform that is not expected to use it.
+    pub vod_override: bool,
 }
 
 impl Default for Dest {
@@ -123,6 +125,7 @@ impl Default for Dest {
             enhanced_broadcasting: false,
             audio_track: 0,
             vod_track: 0,
+            vod_override: false,
         }
     }
 }
@@ -310,6 +313,7 @@ pub fn parse_report(text: &str) -> ParseReport {
                             dropped.push(note("vod_track must be a number"));
                         }
                     },
+                    "vod_override" => d.vod_override = yes(v),
                     _ => {}
                 }
             }
@@ -416,6 +420,7 @@ pub struct DestUpdate {
     pub height: Option<String>,
     pub audio_track: Option<String>,
     pub vod_track: Option<String>,
+    pub vod_override: Option<bool>,
     pub enhanced: Option<bool>,
 }
 
@@ -550,6 +555,9 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
             set_line(lines, "vod_track", v);
             let on = v != "0" && !v.is_empty();
             set_line(lines, "vod_audio", if on { "yes" } else { "no" });
+        }
+        if let Some(on) = patch.vod_override {
+            set_line(lines, "vod_override", if on { "yes" } else { "no" });
         }
         if let Some(on) = patch.enabled {
             set_line(lines, "enabled", if on { "yes" } else { "no" });

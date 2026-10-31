@@ -335,7 +335,7 @@ fn config_json(ctx: &Ctx) -> Result<String, String> {
     for (i, d) in cfg.dests.iter().enumerate() {
         let _ = write!(
             j,
-            "{}{{\"name\":\"{}\",\"service\":\"{}\",\"server\":\"{}\",\"url\":\"{}\",\"key\":\"{}\",\"ingest_key\":\"{}\",\"autostart\":{},\"enabled\":{},\"encode_mode\":\"{}\",\"video_kbps\":{},\"audio_kbps\":{},\"keyint_sec\":{},\"rate_control\":\"{}\",\"width\":{},\"height\":{},\"audio_track\":{},\"vod_track\":{},\"enhanced\":{}}}",
+            "{}{{\"name\":\"{}\",\"service\":\"{}\",\"server\":\"{}\",\"url\":\"{}\",\"key\":\"{}\",\"ingest_key\":\"{}\",\"autostart\":{},\"enabled\":{},\"encode_mode\":\"{}\",\"video_kbps\":{},\"audio_kbps\":{},\"keyint_sec\":{},\"rate_control\":\"{}\",\"width\":{},\"height\":{},\"audio_track\":{},\"vod_track\":{},\"vod_override\":{},\"enhanced\":{}}}",
             if i > 0 { "," } else { "" },
             esc(&d.name),
             esc(&d.service),
@@ -354,6 +354,7 @@ fn config_json(ctx: &Ctx) -> Result<String, String> {
             d.height,
             d.audio_track,
             d.vod_track,
+            if d.vod_override { "true" } else { "false" },
             if d.enhanced_broadcasting { "true" } else { "false" },
         );
     }
@@ -450,6 +451,7 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
             height: Some(height.to_string()),
             audio_track: Some(audio_track.to_string()),
             vod_track: Some(vod_track.to_string()),
+            vod_override: json_raw(obj, "vod_override").map(|v| v == "true"),
             enhanced: json_raw(obj, "enhanced").map(|v| v == "true"),
         });
     }
@@ -464,6 +466,7 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
                 || p.enhanced.is_some_and(|v| v != old.enhanced_broadcasting)
                 || p.audio_track.as_deref() != Some(audio.as_str())
                 || p.vod_track.as_deref() != Some(vod.as_str())
+                || p.vod_override.is_some_and(|v| v != old.vod_override)
         });
     let next = config::update_ini(&text, &upd);
     let bak = ctx.ini_path.with_extension("ini.bak");

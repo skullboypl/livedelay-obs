@@ -37,13 +37,15 @@ struct Destination {
 	uint32_t height = 0;
 	/// 0 = OBS Settings → Output stream track. 1–6 = that mixer is what viewers hear.
 	int audio_track = 0;
-	/// 0 = no VOD track. 1–6 = that mixer is Twitch's VOD AAC (output audio index 1).
+	/// 0 = no VOD track. 1–6 = that mixer is a second AAC.
 	/// -1 = old ini had vod_audio=yes and no explicit track.
 	int vod_track = 0;
 	/// True once the ini contained vod_track, so vod_audio=yes does not mean "legacy".
 	bool vod_track_set = false;
 	/// Kept in sync with vod_track > 0 so older builds still see the flag.
 	bool vod_audio = false;
+	/// User asked for a VOD track on a platform LiveDelay does not expect to honor it.
+	bool vod_override = false;
 	/// Multiple video encodes (Partner ladder / Enhanced Broadcasting path).
 	bool enhanced_broadcasting = false;
 };

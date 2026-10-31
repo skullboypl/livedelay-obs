@@ -32,6 +32,11 @@ bool IsTwitchTarget(const QString &service, const QString &url)
 	       url.contains(QStringLiteral("live-video.net"), Qt::CaseInsensitive);
 }
 
+bool SupportsSeparateVodTrack(const QString &service, const QString &url)
+{
+	return IsTwitchTarget(service, url);
+}
+
 namespace {
 
 const Service *Svc(const Destination &d)
@@ -351,7 +356,7 @@ EncodeSettings ResolveEncode(const Destination &d)
 	}
 	if (d.audio_track >= 1 && d.audio_track <= 6)
 		e.summary += QStringLiteral(" · ") + T("Encode.TrackN").arg(d.audio_track);
-	if (classicTwitch && (d.vod_track > 0 || d.vod_track < 0 || d.vod_audio))
+	if ((classicTwitch || d.vod_override) && (d.vod_track > 0 || d.vod_track < 0 || d.vod_audio))
 		e.summary += QStringLiteral(" · ") + T("Encode.SummaryVodOn");
 	if (classicTwitch && d.enhanced_broadcasting)
 		e.summary += QStringLiteral(" · ") + T("Encode.SummaryEnhancedOn");
@@ -429,8 +434,32 @@ bool FitEncodeForObsMode()
 
 QString MultiEncodeInfo()
 {
-	const int n = int(Settings::Load(ConfigPath()).dests.size());
-	if (n >= 3)
+	const Settings s = Settings::Load(ConfigPath());
+	EncodeSettings first;
+	bool have = false;
+	bool differ = false;
+	int n = 0;
+	for (const Destination &d : s.dests) {
+		if (!d.enabled)
+			continue;
+		++n;
+		if (d.enhanced_broadcasting &&
+		    IsTwitchTarget(QString::fromStdString(d.service), QString::fromStdString(d.url)))
+			differ = true;
+		const EncodeSettings e = ResolveEncode(d);
+		if (!have) {
+			first = e;
+			have = true;
+			continue;
+		}
+		if (e.video_encoder_id != first.video_encoder_id || e.video_kbps != first.video_kbps ||
+		    e.keyint_sec != first.keyint_sec || e.rate_control != first.rate_control || e.width != first.width ||
+		    e.height != first.height)
+			differ = true;
+	}
+	// Three matching platforms still each have an encoder, but the settings are one
+	// profile. The note is for the case where those profiles actually diverge.
+	if (n >= 3 && differ)
 		return T("Limits.MultiEncodeInfo");
 	return {};
 }

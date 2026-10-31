@@ -198,7 +198,7 @@ size_t ResolveLiveMixer(const Destination &d)
 // Twitch stores audio encoder index 1 as the VOD. It must be a different mixer than live.
 int ResolveVodTrack(const Destination &d, int live_track)
 {
-	if (!DestIsTwitch(d))
+	if (!SupportsSeparateVodTrack(QString::fromStdString(d.service), QString::fromStdString(d.url)) && !d.vod_override)
 		return 0;
 	int vod = d.vod_track;
 	if (vod < 0) {
