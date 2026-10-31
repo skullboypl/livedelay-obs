@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.37 – 2026-10-31
+
+- **Live and VOD tracks stay on every platform.** The VOD picker was switched off and cleared whenever the destination was not Twitch, so it also vanished when Twitch was not recognized for a moment. Both fields stay. The tooltip says the second recording track works on Twitch and other platforms ignore it. Only Twitch still receives that second AAC.
+
 ## 1.0.36 – 2026-10-31
 
 - **Three platforms no longer flood the log.** The dock note about a separate encoder was passed through `QString::arg` with no placeholder, so OBS logged a warning on every refresh. ([#3](https://github.com/skullboypl/livedelay-obs/issues/3))

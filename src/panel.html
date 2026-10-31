@@ -462,7 +462,7 @@ function renderForm() {
         d.url = '';
     }
     if (!d.service) d.server = '';
-    if (!isTwitch(d)) { d.enhanced = false; d.vod_track = 0; }
+    if (!isTwitch(d)) d.enhanced = false;
     renderForm();
     renderList();
   });
@@ -499,7 +499,7 @@ function renderForm() {
     const still = sv && sv.servers.some(s => s.name === d.server && s.url === d.url);
     if (!still) d.server = '';
     if (isTwitch(d) === was) return;
-    if (!isTwitch(d)) { d.enhanced = false; d.vod_track = 0; }
+    if (!isTwitch(d)) d.enhanced = false;
     renderForm();
   });
   const key = textIn(d.key, true);
@@ -569,7 +569,7 @@ function renderForm() {
     renderForm();
   });
   const vod = trackSelect(d.vod_track, true);
-  vod.disabled = !isTwitch(d);
+  vod.title = 'Działa na Twitchu. YouTube, Kick i inne platformy tę ścieżkę ignorują.';
   vod.addEventListener('change', () => {
     let n = Number(vod.value);
     if (n && n === Number(d.audio_track || 0) && n !== 0) n = 0;
@@ -585,7 +585,7 @@ function renderForm() {
     field('Kodowanie', mode),
     field('Bitrate wideo', bitrate),
     field('Ścieżka na żywo', live),
-    field('Ścieżka VOD Twitch', vod)
+    field('Ścieżka VOD', vod)
   );
   const auto = document.createElement('label');
   auto.className = 'check';
@@ -675,7 +675,7 @@ function renderAudio() {
     const b = document.createElement('td');
     const live = trackSelect(d.audio_track, false);
     const vod = trackSelect(d.vod_track, true);
-    vod.disabled = !isTwitch(d);
+    vod.title = 'Działa na Twitchu. YouTube, Kick i inne platformy tę ścieżkę ignorują.';
     live.addEventListener('change', () => {
       d.audio_track = Number(live.value);
       if (d.vod_track === d.audio_track) d.vod_track = 0;
@@ -847,7 +847,7 @@ document.getElementById('save').addEventListener('click', async () => {
       return;
     }
     if (d.vod_track && Number(d.vod_track) === Number(d.audio_track)) d.vod_track = 0;
-    if (!isTwitch(d)) { d.enhanced = false; d.vod_track = 0; }
+    if (!isTwitch(d)) d.enhanced = false;
   }
   save.disabled = true;
   say('Zapisuję…');

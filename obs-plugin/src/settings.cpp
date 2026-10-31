@@ -1372,8 +1372,7 @@ private:
 		d.width = uint32_t(width_->value());
 		d.height = uint32_t(height_->value());
 		d.audio_track = liveTrack_->currentData().toInt();
-		const bool twitch = IsTwitchTarget(service_->currentText(), url_->text());
-		int vod = twitch ? vodTrack_->currentData().toInt() : 0;
+		int vod = vodTrack_->currentData().toInt();
 		int live = d.audio_track >= 1 && d.audio_track <= 6 ? d.audio_track : ObsStreamTrackNumber();
 		if (vod == live)
 			vod = 0;
@@ -1394,17 +1393,12 @@ private:
 				   static_cast<QWidget *>(height_)})
 			w->setEnabled(manual);
 		const bool twitch = IsTwitchTarget(service_->currentText(), url_->text());
-		vodTrack_->setEnabled(twitch);
+		vodTrack_->setEnabled(true);
 		vodHelp_->setVisible(twitch);
-		if (!twitch && vodTrack_->currentIndex() != 0) {
-			vodTrack_->blockSignals(true);
-			vodTrack_->setCurrentIndex(0);
-			vodTrack_->blockSignals(false);
-		}
 		const int livePick = liveTrack_->currentData().toInt();
 		const int liveNow = livePick >= 1 && livePick <= 6 ? livePick : ObsStreamTrackNumber();
 		const int vodNow = vodTrack_->currentData().toInt();
-		if (twitch && vodNow > 0 && vodNow == liveNow) {
+		if (vodNow > 0 && vodNow == liveNow) {
 			vodTrack_->blockSignals(true);
 			vodTrack_->setCurrentIndex(0);
 			vodTrack_->blockSignals(false);
