@@ -20,6 +20,14 @@ pub fn host() -> String {
 
 pub type LogFn = extern "C" fn(msg: *const c_char);
 
+/// Engine version, the same number as the OBS plugin (`Cargo.toml`).
+/// The standalone app shows it apart from its own exe version.
+#[no_mangle]
+pub extern "C" fn ld_version() -> *const c_char {
+    static VERSION: &[u8] = concat!(env!("CARGO_PKG_VERSION"), "\0").as_bytes();
+    VERSION.as_ptr().cast()
+}
+
 fn set_error(e: String) {
     log!("{e}");
     *LAST_ERROR.lock().unwrap_or_else(|p| p.into_inner()) = e;

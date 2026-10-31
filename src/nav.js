@@ -1,4 +1,6 @@
 (function () {
+  if (/[?&](?:embed|inapp)=1(?:&|$)/.test(location.search))
+    document.documentElement.classList.add('inapp');
   const items = [
     ['/panel#general', 'Ogólne'],
     ['/panel#hotkeys', 'Skróty'],

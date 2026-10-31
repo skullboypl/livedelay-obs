@@ -26,7 +26,7 @@ type Logger = Box<dyn Fn(&str) + Send + Sync>;
 static LOGGER: RwLock<Option<Logger>> = RwLock::new(None);
 static LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
 static LOG_LINES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
-const LOG_KEEP: usize = 400;
+const LOG_KEEP: usize = 2000;
 
 pub fn set_logger(f: impl Fn(&str) + Send + Sync + 'static) {
     *LOGGER.write().unwrap_or_else(|e| e.into_inner()) = Some(Box::new(f));

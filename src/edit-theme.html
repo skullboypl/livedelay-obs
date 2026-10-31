@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>if(/[?&](?:embed|inapp)=1(?:&|$)/.test(location.search))document.documentElement.classList.add("inapp")</script>
 <title>LiveDelay – overlay</title>
 <style>
   :root { --bg: #070707; --panel: #0b0b0c; --card: #111113; --line: #1e1e21; --text: #ebe8e3; --muted: #8a8780; --accent: #ff3b2f; }
@@ -43,6 +44,16 @@
   .hint { color: var(--muted); font-size: 12.5px; }
   .stage { padding: 22px; display: flex; flex-direction: column; gap: 12px; }
   .stage iframe { width: 100%; flex: 1; min-height: 420px; border: 1px solid var(--line); border-radius: 0; background: #1d1f25; }
+  html.inapp .side, html.inapp .ribbon, html.inapp .brand { display: none !important; }
+  html.inapp .app { display: block !important; height: auto !important; min-height: 100%; }
+  html.inapp .editor { display: flex; flex-direction: column; min-height: 0; }
+  html.inapp .stage { order: -1; padding: 8px 10px 4px; }
+  html.inapp .editor > aside { border-right: 0; padding: 8px 12px 16px; }
+  html.inapp .editor-bar { padding: 8px 10px; gap: 8px; flex-wrap: wrap; }
+  html.inapp .editor-bar h1 { font-size: 14px; }
+  html.inapp .field { grid-template-columns: 88px 1fr; }
+  html.inapp .stage iframe { min-height: 140px; height: 160px; flex: none; }
+  html.inapp .hint { font-size: 12px; }
   code { background: #232833; padding: 1px 6px; border-radius: 5px; }
 </style>
 <link rel="stylesheet" href="/chrome.css">

@@ -26,6 +26,8 @@ pub struct Hub {
     index: HashMap<String, usize>,
     /// Busy flag per ingest key currently publishing.
     busy: Mutex<HashMap<String, bool>>,
+    /// Publish key that was not ld0… but was accepted on the first free slot.
+    claimed: Mutex<HashMap<String, String>>,
     /// Stock OBS is publishing to `_idle` / legacy (media discarded, but OBS is live).
     idle_active: AtomicBool,
     /// Aggregated change counter for SSE / tray.
@@ -52,6 +54,7 @@ impl Hub {
             slots,
             index,
             busy: Mutex::new(HashMap::new()),
+            claimed: Mutex::new(HashMap::new()),
             idle_active: AtomicBool::new(false),
             state,
         })
@@ -103,10 +106,33 @@ impl Hub {
         self.index.get(key).map(|i| self.slots[*i].ingest_key.clone()).unwrap_or_else(|| key.to_string())
     }
 
+    /// Take the first platform slot when it is free. The publish key is remembered
+    /// so release clears that slot instead of leaving it busy.
+    fn claim_first_free(&self, key: &str) -> Option<Arc<Shared>> {
+        let mut busy = self.busy.lock().unwrap();
+        let slot = self.slots.first()?;
+        let map_key = slot.ingest_key.clone();
+        if busy.get(&map_key).copied().unwrap_or(false) {
+            return None;
+        }
+        busy.insert(map_key.clone(), true);
+        drop(busy);
+        self.claimed.lock().unwrap().insert(key.to_string(), map_key);
+        Some(slot.shared.clone())
+    }
+
     /// Claim a publisher slot. `Ok(None)` = idle drop; `Ok(Some)` = real engine.
     pub fn try_claim(&self, key: &str) -> Result<Option<Arc<Shared>>, &'static str> {
         let key = key.trim();
         if Self::is_idle_key(key) {
+            // The plugin discards `_idle`: its real encode arrives separately as ld0.
+            // The standalone app has only this one publish, so it is the stream.
+            if crate::ffi::host() != "obs" {
+                if let Some(shared) = self.claim_first_free(key) {
+                    log!("RTMP: key '{key}' — accepting it as the stream from this PC");
+                    return Ok(Some(shared));
+                }
+            }
             // Never block OBS Start Streaming on the discarded stock publish —
             // OBS may reconnect while the previous idle TCP is still draining.
             let mut busy = self.busy.lock().unwrap();
@@ -116,8 +142,14 @@ impl Hub {
             return Ok(None);
         }
         let Some(shared) = self.shared_for_key(key) else {
-            // Unknown key: discard like idle so Start Streaming never hard-fails.
-            log!("RTMP: unknown ingest key '{key}' — discarding (use ld0, ld1, …)");
+            // A program on this PC often publishes with its own key, not ld0.
+            // One free slot takes that stream. A second publisher cannot steal a busy slot.
+            if let Some(shared) = self.claim_first_free(key) {
+                let map_key = self.slots[0].ingest_key.clone();
+                log!("RTMP: ingest key is not {map_key} — accepting it as the stream from this PC");
+                return Ok(Some(shared));
+            }
+            log!("RTMP: unknown ingest key — discarding (use ld0, ld1, …)");
             let mut busy = self.busy.lock().unwrap();
             busy.insert(format!("unknown:{key}"), true);
             self.idle_active.store(true, Ordering::Relaxed);
@@ -134,7 +166,14 @@ impl Hub {
     }
 
     pub fn release(&self, key: &str) {
+        let key = key.trim();
         let mut busy = self.busy.lock().unwrap();
+        if let Some(slot_key) = self.claimed.lock().unwrap().remove(key) {
+            busy.insert(slot_key, false);
+            drop(busy);
+            self.state.send_modify(|v| *v += 1);
+            return;
+        }
         if Self::is_idle_key(key) {
             busy.insert(IDLE_KEY.to_string(), false);
             self.idle_active.store(false, Ordering::Relaxed);
@@ -143,9 +182,9 @@ impl Hub {
             return;
         }
         busy.insert(self.map_key(key), false);
-        busy.insert(format!("unknown:{}", key.trim()), false);
+        busy.insert(format!("unknown:{key}"), false);
         // Unknown keys were treated as idle for OBS Start Streaming.
-        if !self.index.contains_key(key.trim()) {
+        if !self.index.contains_key(key) {
             self.idle_active.store(false, Ordering::Relaxed);
             drop(busy);
             self.state.send_modify(|v| *v += 1);

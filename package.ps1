@@ -14,6 +14,14 @@ Copy-Item "$PSScriptRoot\obs-plugin\data\*" "$stage\data\obs-plugins\livedelay-o
 Copy-Item "$PSScriptRoot\LICENSE" "$stage\LICENSE.txt"
 Copy-Item "$PSScriptRoot\Install-LiveDelay.ps1" "$stage\Install-LiveDelay.ps1"
 Copy-Item "$PSScriptRoot\obs-plugin\data\Uninstall-LiveDelay.ps1" "$stage\Uninstall-LiveDelay.ps1"
+# The standalone app updates its engine from this file. It is not inside the OBS zip:
+# that zip is the plugin, and the plugin already contains the engine as a static lib.
+$engineDll = Join-Path $PSScriptRoot "target\release\livedelay.dll"
+if (Test-Path -LiteralPath $engineDll) {
+	Copy-Item -LiteralPath $engineDll -Destination (Join-Path $PSScriptRoot "dist\livedelay-$version.dll") -Force
+	Write-Host "engine dll: dist\livedelay-$version.dll"
+	Write-Host "Put its URL in version.json as engine.dll so the app can download it."
+}
 # BOM for Windows PowerShell 5.1 -File. Do NOT put BOM on web/public/install.ps1 (breaks irm|iex).
 $utf8bom = New-Object System.Text.UTF8Encoding $true
 [System.IO.File]::WriteAllText("$stage\Install-LiveDelay.ps1", [System.IO.File]::ReadAllText("$stage\Install-LiveDelay.ps1"), $utf8bom)

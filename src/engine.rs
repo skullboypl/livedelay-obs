@@ -251,6 +251,7 @@ impl Engine {
 
     pub fn begin_session(&mut self) {
         self.publishing = true;
+        self.in_window = (Instant::now(), 0);
         self.session_base = if self.next_seq == 0 { 0 } else { self.last_in_ts + JUMP_GAP_MS };
         self.first_raw = None;
         self.wraps = 0;
@@ -602,7 +603,16 @@ impl Engine {
             arm_delay_s: self.arm_delay.map(|d| d.as_secs_f64()),
             armed: self.is_armed(now),
             cut_pending: self.cut_after_seq.is_some(),
-            in_kbps: if self.publishing && now.saturating_duration_since(self.in_window.0) < Duration::from_secs(3) { self.in_kbps } else { 0.0 },
+            in_kbps: if !self.publishing {
+                0.0
+            } else if self.in_window.1 > 0 {
+                let el = now.saturating_duration_since(self.in_window.0).as_secs_f64().max(0.25);
+                self.in_window.1 as f64 * 8.0 / 1000.0 / el
+            } else if now.saturating_duration_since(self.in_window.0) < Duration::from_secs(3) {
+                self.in_kbps
+            } else {
+                0.0
+            },
         }
     }
 }

@@ -34,9 +34,20 @@ body { margin: 0; background: var(--ink); color: var(--text); font: 400 15px/1.4
 .nav a[aria-current="true"] { color: var(--text); border-left-color: var(--tally); background: #101012; }
 .nav a:hover { color: var(--text); }
 .work { min-width: 0; min-height: 0; overflow: auto; }
+/* inapp=1: the standalone window already has its own menu. */
+html.inapp .side, html.inapp .ribbon, html.inapp .brand { display: none !important; }
+html.inapp .app {
+  display: block !important;
+  height: auto !important;
+  min-height: 100%;
+  grid-template-columns: 1fr !important;
+  grid-template-rows: auto !important;
+}
+html.inapp .work { height: auto; min-height: 100%; overflow: auto; }
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; grid-template-rows: 34px auto 1fr; }
   .side { border-right: 0; border-bottom: 1px solid var(--line); }
   .nav { flex-direction: row; }
   .brand { display: none; }
+  html.inapp .app { grid-template-rows: auto !important; }
 }

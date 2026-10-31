@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.34 – 2026-10-31
+
+- **The engine tells its version.** The standalone app can show the plugin version next to its own, and download a newer `livedelay.dll` when `version.json` points at one.
+- **Pages opened inside the app drop the site menu.** `inapp=1` hides the ribbon and the navigation and tightens the preview and the theme editor to the window.
+
 ## 1.0.33 – 2026-10-30
 
 - **The plugin ships the translations it uses.** Thirteen strings in the Audio tab and the per-platform track pickers were missing from the locale files and only existed on the website, so every OBS start downloaded them again — and without a connection those fields showed bare key names. They are in the plugin now, and the locale check no longer has a gap to heal.

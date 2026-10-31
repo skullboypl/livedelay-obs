@@ -2,12 +2,14 @@
 <html>
 <head>
 <meta charset="utf-8">
+<script>if(/[?&](?:embed|inapp)=1(?:&|$)/.test(location.search))document.documentElement.classList.add("inapp")</script>
 <title>LiveDelay overlay</title>
 <style>
   /* Look comes from /overlay/config (edit it at /edit-theme). The Browser source's
      Custom CSS can still override anything: #tag, .live, .arming, .armed, .delayed */
   :root { --size: 30px; --font: "Segoe UI"; --radius: 999px; --alpha: .78; --accent: #3ddc84; --ink: #f3f4f7; }
   html, body { margin: 0; background: transparent; overflow: hidden; }
+  html.inapp, html.inapp body { background: #070707; }
   body { display: flex; padding: .5em; box-sizing: border-box; width: 100vw;
          font: 650 var(--size)/1 var(--font), "Segoe UI", system-ui, sans-serif; letter-spacing: .03em;
          color: var(--ink); -webkit-font-smoothing: antialiased; }

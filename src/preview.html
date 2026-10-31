@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>if(/[?&](?:embed|inapp)=1(?:&|$)/.test(location.search))document.documentElement.classList.add("inapp")</script>
 <title>LiveDelay preview</title>
 <style>
   :root { --bg: #070707; --card: #0b0b0c; --line: #1e1e21; --text: #ebe8e3; --muted: #8a8780;
@@ -29,6 +30,21 @@
   .legend b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
   .off { display: grid; place-items: center; aspect-ratio: 16 / 9; color: var(--muted); background: #0b0c0f; }
+  html.inapp .side, html.inapp .ribbon, html.inapp .brand { display: none !important; }
+  html.inapp .app { display: block !important; height: auto !important; min-height: 100%; }
+  html.inapp header { padding: 8px 10px; gap: 8px; border-bottom: 0; }
+  html.inapp header h1 { display: none; }
+  html.inapp #dests { margin-left: auto; font-size: 11px; }
+  html.inapp main { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 8px; }
+  html.inapp .card h2 { padding: 6px 8px; font-size: 11px; }
+  html.inapp .off { font-size: 12px; }
+  html.inapp .note { display: none; }
+  html.inapp .chart canvas { height: 84px; }
+  html.inapp .legend { padding: 0 8px 8px; font-size: 11px; gap: 4px 12px; }
+  @media (min-width: 520px) {
+    html.inapp main { grid-template-columns: 1fr 1fr; }
+    html.inapp .chart { grid-column: 1 / -1; }
+  }
 </style>
 <link rel="stylesheet" href="/chrome.css">
 </head>
@@ -73,8 +89,8 @@
           delayed: 'delayed {s} s', noSignal: 'Waiting for the stream from OBS…', waiting: 'WAITING FOR OBS',
           sLive: 'LIVE', sArming: 'ARMING {b}/{s} s', sArmed: 'ARMED {s} s', sDelayed: 'DELAY {s} s',
           note: 'Both players are muted and run on this computer only. The right one is exactly what LiveDelay sends to your platforms, so it trails by the delay plus a second or two of player buffer.' },
-    pl: { bitrate: 'Bitrate', bitrateSub: 'ostatnie 2 minuty, kb/s', inLine: 'Z OBS', dest: { stopped: 'zatrzymana', waiting: 'czeka', connecting: 'łączy', live: 'nadaje', error: 'błąd' }, in: 'Z OBS', inSub: 'to, co OBS wysyła do LiveDelay', out: 'Do widzów', live: 'na żywo, bez opóźnienia',
-          delayed: 'opóźnienie {s} s', noSignal: 'Czekam na stream z OBS…', waiting: 'CZEKAM NA OBS',
+    pl: { bitrate: 'Bitrate', bitrateSub: 'ostatnie 2 minuty, kb/s', inLine: 'Z twojego PC', dest: { stopped: 'zatrzymana', waiting: 'czeka', connecting: 'łączy', live: 'nadaje', error: 'błąd' }, in: 'Z twojego PC', inSub: 'to, co wchodzi z tego PC', out: 'Do widzów', live: 'na żywo, bez opóźnienia',
+          delayed: 'opóźnienie {s} s', noSignal: 'Czekam na stream z tego PC…', waiting: 'CZEKAM NA STREAM',
           sLive: 'NA ŻYWO', sArming: 'UZBRAJANIE {b}/{s} s', sArmed: 'UZBROJONE {s} s', sDelayed: 'OPÓŹNIENIE {s} s',
           note: 'Oba odtwarzacze są wyciszone i działają tylko na tym komputerze. Prawy pokazuje dokładnie to, co LiveDelay wysyła na platformy, więc jest z tyłu o opóźnienie plus sekundę czy dwie bufora odtwarzacza.' },
     de: { bitrate: 'Bitrate', bitrateSub: 'letzte 2 Minuten, kb/s', inLine: 'Von OBS', dest: { stopped: 'gestoppt', waiting: 'wartet', connecting: 'verbindet', live: 'sendet', error: 'Fehler' }, in: 'Von OBS', inSub: 'was OBS an LiveDelay sendet', out: 'An die Zuschauer', live: 'live, ohne Verzögerung',
