@@ -22,6 +22,11 @@ struct EncodeSettings {
 EncodeMode ParseEncodeMode(const std::string &s);
 const char *EncodeModeKey(EncodeMode m);
 
+// Kick's own ingest lives on global-contribute.live-video.net, the same domain
+// family as Twitch. Kick is decided first so that host is not treated as Twitch.
+bool IsKickTarget(const QString &service, const QString &url);
+bool IsTwitchTarget(const QString &service, const QString &url);
+
 // Fills EncodeSettings from encode_mode + OBS Output + services.json / guidelines.
 EncodeSettings ResolveEncode(const Destination &d);
 

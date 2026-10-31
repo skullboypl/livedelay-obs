@@ -185,11 +185,7 @@ bool VodMixer(size_t &out_mixer)
 
 bool DestIsTwitch(const Destination &d)
 {
-	const QString svc = QString::fromStdString(d.service);
-	const QString url = QString::fromStdString(d.url);
-	return svc.contains(QStringLiteral("twitch"), Qt::CaseInsensitive) ||
-	       url.contains(QStringLiteral("twitch"), Qt::CaseInsensitive) ||
-	       url.contains(QStringLiteral("live-video.net"), Qt::CaseInsensitive);
+	return IsTwitchTarget(QString::fromStdString(d.service), QString::fromStdString(d.url));
 }
 
 size_t ResolveLiveMixer(const Destination &d)

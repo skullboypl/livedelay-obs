@@ -84,7 +84,7 @@ pub struct Dest {
     pub enabled: bool,
     /// Start sending as soon as OBS streams; otherwise wait for Start in LiveDelay.
     pub autostart: bool,
-    /// RTMP publish key into this proxy (`ld0`, …). Empty → assigned as `ld{index}` at start.
+    /// RTMP publish key into this proxy (`ld0`, …). Empty or duplicated keys take the next free `ldN`.
     pub ingest_key: String,
     pub encode_mode: EncodeMode,
     pub video_kbps: u32,
@@ -357,11 +357,7 @@ pub fn parse_report(text: &str) -> ParseReport {
             kept.push(raw);
         }
     }
-    for (i, d) in c.dests.iter_mut().enumerate() {
-        if d.ingest_key.is_empty() {
-            d.ingest_key = format!("ld{i}");
-        }
-    }
+    assign_ingest_keys(&mut c.dests);
     let mut repaired = kept.join("\n");
     if text.ends_with('\n') || text.ends_with("\r\n") {
         repaired.push('\n');
@@ -452,6 +448,50 @@ fn set_line(lines: &mut Vec<String>, key: &str, value: &str) {
     lines.insert(at, format!("{key} = {value}"));
 }
 
+fn ini_value(lines: &[String], key: &str) -> String {
+    for line in lines {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with(';') {
+            continue;
+        }
+        if let Some((k, v)) = t.split_once('=') {
+            if k.trim() == key {
+                return v.trim().to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn next_ld_key(dests: &[(String, Vec<String>)]) -> String {
+    let mut n = 0;
+    loop {
+        let key = format!("ld{n}");
+        if !dests.iter().any(|(_, lines)| ini_value(lines, "ingest_key") == key) {
+            return key;
+        }
+        n += 1;
+    }
+}
+
+fn assign_ingest_keys(dests: &mut [Dest]) {
+    let mut used = Vec::new();
+    for d in dests.iter_mut() {
+        if d.ingest_key.is_empty() || used.iter().any(|k| k == &d.ingest_key) {
+            let mut n = 0;
+            loop {
+                let key = format!("ld{n}");
+                n += 1;
+                if !used.iter().any(|k| k == &key) {
+                    d.ingest_key = key;
+                    break;
+                }
+            }
+        }
+        used.push(d.ingest_key.clone());
+    }
+}
+
 /// Rewrites the ini text. Comments, unknown keys and every platform block the
 /// patch does not mention are copied through.
 pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
@@ -533,7 +573,7 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
             let name = patch.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| format!("Platforma {}", i + 1));
             let mut lines = Vec::new();
             apply(&mut lines, patch);
-            set_line(&mut lines, "ingest_key", &format!("ld{i}"));
+            set_line(&mut lines, "ingest_key", &next_ld_key(&dests));
             dests.push((format!("[dest {name}]"), lines));
             continue;
         }
@@ -662,6 +702,27 @@ mod tests {
         assert!(!c.dests[0].enabled);
         assert_eq!(c.dests[0].encode_mode, EncodeMode::Obs);
         assert_eq!(c.dests[0].ingest_key, "ld0");
+    }
+
+    #[test]
+    fn duplicate_ingest_keys_take_the_next_free_one() {
+        let text = "\
+[dest Twitch]
+url = rtmp://live.twitch.tv/app
+ingest_key = ld0
+
+[dest Kick]
+url = rtmps://abc.global-contribute.live-video.net/app
+ingest_key = ld2
+
+[dest YouTube]
+url = rtmp://a.rtmp.youtube.com/live2
+ingest_key = ld2
+";
+        let c = parse(text).unwrap();
+        assert_eq!(c.dests[0].ingest_key, "ld0");
+        assert_eq!(c.dests[1].ingest_key, "ld2");
+        assert_eq!(c.dests[2].ingest_key, "ld1");
     }
 
     #[test]

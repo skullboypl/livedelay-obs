@@ -15,6 +15,23 @@
 
 namespace livedelay {
 
+bool IsKickTarget(const QString &service, const QString &url)
+{
+	return service.contains(QStringLiteral("kick"), Qt::CaseInsensitive) ||
+	       url.contains(QStringLiteral("kick.com"), Qt::CaseInsensitive) ||
+	       url.contains(QStringLiteral("global-contribute.live-video.net"), Qt::CaseInsensitive);
+}
+
+bool IsTwitchTarget(const QString &service, const QString &url)
+{
+	if (IsKickTarget(service, url))
+		return false;
+	return service.contains(QStringLiteral("twitch"), Qt::CaseInsensitive) ||
+	       url.contains(QStringLiteral("twitch"), Qt::CaseInsensitive) ||
+	       url.contains(QStringLiteral("ttvnw.net"), Qt::CaseInsensitive) ||
+	       url.contains(QStringLiteral("live-video.net"), Qt::CaseInsensitive);
+}
+
 namespace {
 
 const Service *Svc(const Destination &d)
@@ -46,21 +63,19 @@ double CanvasFps()
 
 bool NamedKick(const Destination &d, const Service *s)
 {
-	const QString svc = (s ? s->name : QString::fromStdString(d.service)).toLower();
-	const QString url = QString::fromStdString(d.url).toLower();
-	return svc.contains(QStringLiteral("kick")) || url.contains(QStringLiteral("kick.com"));
+	if (IsKickTarget(QString::fromStdString(d.service), QString::fromStdString(d.url)))
+		return true;
+	return s && s->name.contains(QStringLiteral("kick"), Qt::CaseInsensitive);
 }
 
-// Twitch's non-partner cap. Kick ingests also live on live-video.net, so a bare
-// host match would pin Kick to 6000.
+// Twitch's non-partner cap. Kick is excluded first: its ingest is also on live-video.net.
 bool NamedTwitch(const Destination &d, const Service *s)
 {
 	if (NamedKick(d, s))
 		return false;
-	const QString svc = (s ? s->name : QString::fromStdString(d.service)).toLower();
-	const QString url = QString::fromStdString(d.url).toLower();
-	return svc.contains(QStringLiteral("twitch")) || url.contains(QStringLiteral("twitch.tv")) ||
-	       url.contains(QStringLiteral("ttvnw.net"));
+	if (IsTwitchTarget(QString::fromStdString(d.service), QString::fromStdString(d.url)))
+		return true;
+	return s && s->name.contains(QStringLiteral("twitch"), Qt::CaseInsensitive);
 }
 
 // What "Zalecane" encodes. Twitch without Partner is 6000. Kick's own baseline
@@ -176,10 +191,7 @@ QString ObsStreamVideoEncoderId()
 
 bool NeedsClassicH264(const Destination &d)
 {
-	const QString svc = QString::fromStdString(d.service).toLower();
-	const QString url = QString::fromStdString(d.url).toLower();
-	return svc.contains("twitch") || url.contains("twitch.tv") || url.contains("ttvnw.net") ||
-	       url.contains("live-video.net") || url.contains("contribute.live-video.net");
+	return IsTwitchTarget(QString::fromStdString(d.service), QString::fromStdString(d.url));
 }
 
 // Classic Twitch RTMP rejects HEVC/AV1 → player error #1000. Map to H.264 sibling.
@@ -307,22 +319,24 @@ EncodeSettings ResolveEncode(const Destination &d)
 		e.summary = T("Encode.SummaryManual").arg(e.video_kbps).arg(e.rate_control).arg(e.keyint_sec);
 		break;
 	}
-	if (NeedsClassicH264(d)) {
+	const bool classicTwitch = NeedsClassicH264(d);
+	const bool kickH264 = IsKickTarget(QString::fromStdString(d.service), QString::fromStdString(d.url));
+	if (classicTwitch || kickH264) {
 		const QString was = e.video_encoder_id;
 		e.video_encoder_id = ForceClassicH264(e.video_encoder_id);
 		if (e.video_encoder_id != was) {
-			blog(LOG_WARNING,
-			     "[livedelay] %s: classic Twitch RTMP needs H.264 — mapped %s → %s (HEVC/AV1 → player #1000)",
-			     d.name.c_str(), was.toUtf8().constData(), e.video_encoder_id.toUtf8().constData());
+			blog(LOG_WARNING, "[livedelay] %s: %s needs H.264 — mapped %s → %s", d.name.c_str(),
+			     classicTwitch ? "classic Twitch RTMP" : "Kick", was.toUtf8().constData(),
+			     e.video_encoder_id.toUtf8().constData());
 			e.summary += " · H.264";
 		}
 		// Classic Twitch ingest (no Enhanced Broadcasting): >1080p often
 		// shows LIVE with bitrate but player error #1000 for viewers.
-		// Manual width/height still honored when both are set.
+		// Kick is not capped here. Manual width/height still honored when both are set.
 		const bool manual_size = d.encode_mode == EncodeMode::Manual && d.width > 0 && d.height > 0;
 		uint32_t out_w = e.width > 0 ? e.width : cw;
 		uint32_t out_h = e.height > 0 ? e.height : ch;
-		if (!d.enhanced_broadcasting && !manual_size && (out_w > 1920 || out_h > 1080)) {
+		if (classicTwitch && !d.enhanced_broadcasting && !manual_size && (out_w > 1920 || out_h > 1080)) {
 			const double scale = std::min(1920.0 / double(out_w), 1080.0 / double(out_h));
 			e.width = uint32_t(std::lround(out_w * scale)) & ~1u;
 			e.height = uint32_t(std::lround(out_h * scale)) & ~1u;
@@ -337,9 +351,9 @@ EncodeSettings ResolveEncode(const Destination &d)
 	}
 	if (d.audio_track >= 1 && d.audio_track <= 6)
 		e.summary += QStringLiteral(" · ") + T("Encode.TrackN").arg(d.audio_track);
-	if (d.vod_track > 0 || d.vod_track < 0 || d.vod_audio)
+	if (classicTwitch && (d.vod_track > 0 || d.vod_track < 0 || d.vod_audio))
 		e.summary += QStringLiteral(" · ") + T("Encode.SummaryVodOn");
-	if (d.enhanced_broadcasting)
+	if (classicTwitch && d.enhanced_broadcasting)
 		e.summary += QStringLiteral(" · ") + T("Encode.SummaryEnhancedOn");
 	return e;
 }
@@ -417,7 +431,7 @@ QString MultiEncodeInfo()
 {
 	const int n = int(Settings::Load(ConfigPath()).dests.size());
 	if (n >= 3)
-		return T("Limits.MultiEncodeInfo").arg(n);
+		return T("Limits.MultiEncodeInfo");
 	return {};
 }
 

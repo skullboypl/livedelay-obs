@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.36 – 2026-10-31
+
+- **Three platforms no longer flood the log.** The dock note about a separate encoder was passed through `QString::arg` with no placeholder, so OBS logged a warning on every refresh. ([#3](https://github.com/skullboypl/livedelay-obs/issues/3))
+- **Kick is not Twitch.** A Kick ingest on `live-video.net` no longer shows the Twitch VOD track or Enhanced Broadcasting, and the address stays empty because each channel has its own. A repeated local key takes the next free `ldN`, so two platforms can no longer publish as `ld2`. ([#3](https://github.com/skullboypl/livedelay-obs/issues/3))
+
 ## 1.0.35 – 2026-10-31
 
 - **Bitrate per platform.** Recommended follows that platform's cap: Twitch without Partner stays at 6000 kb/s, Kick at 8000 kb/s, and the rest use their own recommended maximum. Typing a video bitrate switches just that destination to Manual.

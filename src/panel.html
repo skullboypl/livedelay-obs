@@ -289,9 +289,8 @@ function svcByName(name) {
 // Twitch without Partner is 6000. Kick's own baseline is 8000. Kick ingests
 // also sit on live-video.net, so Kick is matched before that host.
 function platformVideoKbps(d) {
-  const blob = ((d.service || '') + ' ' + (d.url || '')).toLowerCase();
-  if (blob.includes('kick')) return 8000;
-  if (blob.includes('twitch') || blob.includes('twitch.tv') || blob.includes('ttvnw.net')) return 6000;
+  if (isKick(d)) return 8000;
+  if (isTwitch(d)) return 6000;
   const rec = svcByName(d.service);
   return (rec && rec.max_video_kbps) || 6000;
 }
@@ -305,9 +304,14 @@ function say(text, kind) {
   msg.textContent = text;
   msg.className = kind || '';
 }
+function isKick(d) {
+  const s = ((d.service || '') + ' ' + (d.url || '')).toLowerCase();
+  return s.includes('kick') || s.includes('global-contribute.live-video.net');
+}
 function isTwitch(d) {
-  const s = (d.service || '') + ' ' + (d.url || '');
-  return /twitch|live-video\.net/i.test(s);
+  if (isKick(d)) return false;
+  const s = ((d.service || '') + ' ' + (d.url || '')).toLowerCase();
+  return s.includes('twitch') || s.includes('ttvnw.net') || s.includes('live-video.net');
 }
 function trackSelect(value, vod) {
   const s = document.createElement('select');
@@ -448,10 +452,14 @@ function renderForm() {
     const prev = serversOf(d.service);
     d.service = service.value;
     const next = serversOf(d.service);
-    const urlWasList = !d.url || prev.some(s => s.url === d.url);
+    const urlWasList = !d.url || prev.some(s => s.url && s.url === d.url);
     if (urlWasList && next.length) {
-      d.url = next[0].url;
+      const fill = next[0].url || '';
       d.server = next[0].name;
+      if (fill)
+        d.url = fill;
+      else if (!isKick({ url: d.url }))
+        d.url = '';
     }
     if (!d.service) d.server = '';
     if (!isTwitch(d)) { d.enhanced = false; d.vod_track = 0; }
@@ -481,7 +489,7 @@ function renderForm() {
   server.addEventListener('change', () => {
     d.server = server.value;
     const hit = sv && sv.servers.find(s => s.name === server.value);
-    if (hit) d.url = hit.url;
+    if (hit && hit.url) d.url = hit.url;
     renderForm();
   });
   const url = textIn(d.url, true);

@@ -88,6 +88,39 @@ bool Yes(std::string v)
 	return v == "yes" || v == "tak" || v == "true" || v == "1" || v == "on";
 }
 
+// Empty keys and a repeated ldN (two platforms saved as ld2) take the next free one.
+void AssignIngestKeys(std::vector<Destination> &dests)
+{
+	std::vector<std::string> used;
+	for (Destination &d : dests) {
+		const bool clash = d.ingest_key.empty() ||
+				   std::find(used.begin(), used.end(), d.ingest_key) != used.end();
+		if (clash) {
+			for (int n = 0;; ++n) {
+				std::string key = "ld" + std::to_string(n);
+				if (std::find(used.begin(), used.end(), key) == used.end()) {
+					d.ingest_key = std::move(key);
+					break;
+				}
+			}
+		}
+		used.push_back(d.ingest_key);
+	}
+}
+
+std::string NextIngestKey(const std::vector<Destination> &dests)
+{
+	for (int n = 0;; ++n) {
+		std::string key = "ld" + std::to_string(n);
+		bool taken = false;
+		for (const Destination &d : dests)
+			if (d.ingest_key == key)
+				taken = true;
+		if (!taken)
+			return key;
+	}
+}
+
 QString Q(const std::string &s)
 {
 	return QString::fromStdString(s);
@@ -217,10 +250,7 @@ Settings Settings::Load(const std::string &path)
 		s.delay = 15;
 	if (s.max_buffer_mb < 16)
 		s.max_buffer_mb = 512;
-	for (size_t i = 0; i < s.dests.size(); ++i) {
-		if (s.dests[i].ingest_key.empty())
-			s.dests[i].ingest_key = "ld" + std::to_string(i);
-	}
+	AssignIngestKeys(s.dests);
 	return s;
 }
 
@@ -1110,8 +1140,15 @@ public:
 			[this](bool on) { key_->setEchoMode(on ? QLineEdit::Normal : QLineEdit::Password); });
 		connect(service_, &QComboBox::activated, this, [this](int i) {
 			FillServers(i > 0 ? service_->itemText(i) : QString(), QString(), QString());
-			if (i > 0 && server_->count() > 0)
-				url_->setText(server_->itemData(0).toString());
+			if (i > 0 && server_->count() > 0) {
+				const QString fill = server_->itemData(0).toString();
+				// Kick's row has no address: each channel pastes its own. Don't
+				// invent one, and don't wipe a Kick URL they already pasted.
+				if (!fill.isEmpty())
+					url_->setText(fill);
+				else if (!IsKickTarget(QString(), url_->text()))
+					url_->setText(QString());
+			}
 			if (i > 0 && (name_->text().trimmed().isEmpty() || name_->text() == T("Settings.NewPlatform"))) {
 				name_->setText(service_->itemText(i).section(" - ", 0, 0));
 				if (current_ >= 0)
@@ -1120,7 +1157,9 @@ public:
 			UpdateEncodeFields();
 		});
 		connect(server_, &QComboBox::activated, this, [this](int i) {
-			url_->setText(server_->itemData(i).toString());
+			const QString fill = server_->itemData(i).toString();
+			if (!fill.isEmpty())
+				url_->setText(fill);
 			UpdateEncodeFields();
 		});
 		connect(url_, &QLineEdit::textChanged, this, [this] { UpdateEncodeFields(); });
@@ -1131,7 +1170,7 @@ public:
 			Destination d;
 			d.name = S(T("Settings.NewPlatform"));
 			d.encode_mode = EncodeMode::Recommended;
-			d.ingest_key = "ld" + std::to_string(s_.dests.size());
+			d.ingest_key = NextIngestKey(s_.dests);
 			s_.dests.push_back(d);
 			list_->addItem(T("Settings.NewPlatform"));
 			list_->setCurrentRow(list_->count() - 1);
@@ -1333,9 +1372,7 @@ private:
 		d.width = uint32_t(width_->value());
 		d.height = uint32_t(height_->value());
 		d.audio_track = liveTrack_->currentData().toInt();
-		const bool twitch = service_->currentText().contains("Twitch", Qt::CaseInsensitive) ||
-				    url_->text().contains("twitch", Qt::CaseInsensitive) ||
-				    url_->text().contains("live-video.net", Qt::CaseInsensitive);
+		const bool twitch = IsTwitchTarget(service_->currentText(), url_->text());
 		int vod = twitch ? vodTrack_->currentData().toInt() : 0;
 		int live = d.audio_track >= 1 && d.audio_track <= 6 ? d.audio_track : ObsStreamTrackNumber();
 		if (vod == live)
@@ -1356,9 +1393,7 @@ private:
 				   static_cast<QWidget *>(rateControl_), static_cast<QWidget *>(width_),
 				   static_cast<QWidget *>(height_)})
 			w->setEnabled(manual);
-		const bool twitch = service_->currentText().contains("Twitch", Qt::CaseInsensitive) ||
-				    url_->text().contains("twitch", Qt::CaseInsensitive) ||
-				    url_->text().contains("live-video.net", Qt::CaseInsensitive);
+		const bool twitch = IsTwitchTarget(service_->currentText(), url_->text());
 		vodTrack_->setEnabled(twitch);
 		vodHelp_->setVisible(twitch);
 		if (!twitch && vodTrack_->currentIndex() != 0) {
@@ -1579,7 +1614,7 @@ private:
 			PointObsAtLiveDelay(s_.RtmpPort());
 			Destination neu;
 			neu.name = S(T("Settings.NewPlatform"));
-			neu.ingest_key = "ld" + std::to_string(s_.dests.size());
+			neu.ingest_key = NextIngestKey(s_.dests);
 			s_.dests.push_back(neu);
 			list_->addItem(T("Settings.NewPlatform"));
 			list_->setCurrentRow(list_->count() - 1);
