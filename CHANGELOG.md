@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.35 – 2026-10-31
+
+- **Bitrate per platform.** Recommended follows that platform's cap: Twitch without Partner stays at 6000 kb/s, Kick at 8000 kb/s, and the rest use their own recommended maximum. Typing a video bitrate switches just that destination to Manual.
+
 ## 1.0.34 – 2026-10-31
 
 - **The engine tells its version.** The standalone app can show the plugin version next to its own, and download a newer `livedelay.dll` when `version.json` points at one.

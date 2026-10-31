@@ -44,8 +44,40 @@ double CanvasFps()
 	return 30.0;
 }
 
+bool NamedKick(const Destination &d, const Service *s)
+{
+	const QString svc = (s ? s->name : QString::fromStdString(d.service)).toLower();
+	const QString url = QString::fromStdString(d.url).toLower();
+	return svc.contains(QStringLiteral("kick")) || url.contains(QStringLiteral("kick.com"));
+}
+
+// Twitch's non-partner cap. Kick ingests also live on live-video.net, so a bare
+// host match would pin Kick to 6000.
+bool NamedTwitch(const Destination &d, const Service *s)
+{
+	if (NamedKick(d, s))
+		return false;
+	const QString svc = (s ? s->name : QString::fromStdString(d.service)).toLower();
+	const QString url = QString::fromStdString(d.url).toLower();
+	return svc.contains(QStringLiteral("twitch")) || url.contains(QStringLiteral("twitch.tv")) ||
+	       url.contains(QStringLiteral("ttvnw.net"));
+}
+
+// What "Zalecane" encodes. Twitch without Partner is 6000. Kick's own baseline
+// is 8000. Everyone else uses that service's recommended max.
+int RecommendedVideoKbps(const Destination &d, const Service *s)
+{
+	if (NamedKick(d, s))
+		return 8000;
+	if (NamedTwitch(d, s))
+		return 6000;
+	if (s && s->max_video_kbps > 0)
+		return s->max_video_kbps;
+	return 6000;
+}
+
 // Twitch-style guideline table when Auto has no API (v1).
-int AutoVideoKbps(const Service *s, uint32_t w, uint32_t h, double fps)
+int AutoVideoKbps(const Destination &d, const Service *s, uint32_t w, uint32_t h, double fps)
 {
 	const int pixels = int(w * h);
 	const bool hi = fps >= 50.0;
@@ -56,7 +88,11 @@ int AutoVideoKbps(const Service *s, uint32_t w, uint32_t h, double fps)
 		guide = hi ? 4500 : 3000;
 	else
 		guide = hi ? 2500 : 1500;
-	if (s && s->max_video_kbps > 0)
+	// Kick allows 8000 at 1080p60. The table above is Twitch's, so lift only
+	// that case; smaller Kick canvases stay on the resolution table.
+	if (NamedKick(d, s) && pixels >= 1920 * 1080)
+		guide = hi ? 8000 : 6000;
+	else if (s && s->max_video_kbps > 0)
 		guide = std::min(guide, s->max_video_kbps);
 	return guide;
 }
@@ -225,7 +261,7 @@ EncodeSettings ResolveEncode(const Destination &d)
 				    .arg(e.video_encoder_id);
 		break;
 	case EncodeMode::Recommended: {
-		e.video_kbps = s && s->max_video_kbps > 0 ? s->max_video_kbps : (obs.video_kbps > 0 ? obs.video_kbps : 6000);
+		e.video_kbps = RecommendedVideoKbps(d, s);
 		e.audio_kbps = s && s->max_audio_kbps > 0 ? s->max_audio_kbps : 160;
 		e.keyint_sec = s && s->keyint_sec > 0 ? s->keyint_sec : 2;
 		e.rate_control = "CBR";
@@ -254,7 +290,7 @@ EncodeSettings ResolveEncode(const Destination &d)
 		break;
 	}
 	case EncodeMode::Auto: {
-		e.video_kbps = AutoVideoKbps(s, cw, ch, CanvasFps());
+		e.video_kbps = AutoVideoKbps(d, s, cw, ch, CanvasFps());
 		e.audio_kbps = s && s->max_audio_kbps > 0 ? std::min(160, s->max_audio_kbps) : 160;
 		e.keyint_sec = s && s->keyint_sec > 0 ? s->keyint_sec : 2;
 		e.rate_control = "CBR";

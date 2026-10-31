@@ -1130,6 +1130,7 @@ public:
 		connect(add, &QPushButton::clicked, this, [this] {
 			Destination d;
 			d.name = S(T("Settings.NewPlatform"));
+			d.encode_mode = EncodeMode::Recommended;
 			d.ingest_key = "ld" + std::to_string(s_.dests.size());
 			s_.dests.push_back(d);
 			list_->addItem(T("Settings.NewPlatform"));
@@ -1149,8 +1150,40 @@ public:
 			if (current_ >= 0)
 				list_->item(current_)->setText(t);
 		});
-		connect(encodeMode_, &QComboBox::currentIndexChanged, this, [this] { UpdateEncodeFields(); });
-		connect(videoKbps_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { UpdateEncodeFields(); });
+		connect(encodeMode_, &QComboBox::currentIndexChanged, this, [this] {
+			const bool manual = encodeMode_->currentData().toInt() == int(EncodeMode::Manual);
+			if (manual && current_ >= 0 && current_ < int(s_.dests.size())) {
+				const uint32_t saved = s_.dests[current_].video_kbps;
+				if (saved > 0) {
+					videoKbps_->blockSignals(true);
+					videoKbps_->setValue(int(saved));
+					videoKbps_->blockSignals(false);
+				} else {
+					s_.dests[current_].video_kbps = uint32_t(videoKbps_->value());
+				}
+			}
+			UpdateEncodeFields();
+		});
+		connect(videoKbps_, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+			if (videoKbps_->signalsBlocked())
+				return;
+			if (encodeMode_->currentData().toInt() != int(EncodeMode::Manual)) {
+				const int keep = videoKbps_->value();
+				encodeMode_->blockSignals(true);
+				const int idx = encodeMode_->findData(int(EncodeMode::Manual));
+				if (idx >= 0)
+					encodeMode_->setCurrentIndex(idx);
+				encodeMode_->blockSignals(false);
+				if (videoKbps_->value() != keep) {
+					videoKbps_->blockSignals(true);
+					videoKbps_->setValue(keep);
+					videoKbps_->blockSignals(false);
+				}
+				if (current_ >= 0 && current_ < int(s_.dests.size()))
+					s_.dests[current_].video_kbps = uint32_t(keep);
+			}
+			UpdateEncodeFields();
+		});
 		connect(audioKbps_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { UpdateEncodeFields(); });
 		connect(allObs, &QPushButton::clicked, this, [this] {
 			Store();
@@ -1290,7 +1323,10 @@ private:
 		d.enabled = true;
 		d.autostart = autostart_->isChecked();
 		d.encode_mode = EncodeMode(encodeMode_->currentData().toInt());
-		d.video_kbps = uint32_t(videoKbps_->value());
+		// Recommended / Auto / OBS show the resolved number in the spin box.
+		// Only Manual stores it, so flipping away and back keeps a typed value.
+		if (d.encode_mode == EncodeMode::Manual)
+			d.video_kbps = uint32_t(videoKbps_->value());
 		d.audio_kbps = uint32_t(audioKbps_->value());
 		d.keyint_sec = uint32_t(keyint_->value());
 		d.rate_control = S(rateControl_->currentText());
@@ -1315,9 +1351,10 @@ private:
 	void UpdateEncodeFields()
 	{
 		const bool manual = encodeMode_->currentData().toInt() == int(EncodeMode::Manual);
-		for (QWidget *w : {static_cast<QWidget *>(videoKbps_), static_cast<QWidget *>(audioKbps_),
-				   static_cast<QWidget *>(keyint_), static_cast<QWidget *>(rateControl_),
-				   static_cast<QWidget *>(width_), static_cast<QWidget *>(height_)})
+		videoKbps_->setEnabled(true);
+		for (QWidget *w : {static_cast<QWidget *>(audioKbps_), static_cast<QWidget *>(keyint_),
+				   static_cast<QWidget *>(rateControl_), static_cast<QWidget *>(width_),
+				   static_cast<QWidget *>(height_)})
 			w->setEnabled(manual);
 		const bool twitch = service_->currentText().contains("Twitch", Qt::CaseInsensitive) ||
 				    url_->text().contains("twitch", Qt::CaseInsensitive) ||
@@ -1364,7 +1401,15 @@ private:
 		tmp.enhanced_broadcasting = enhanced_->isChecked();
 		tmp.service = service_->currentIndex() > 0 ? S(service_->currentText()) : tmp.service;
 		tmp.url = S(url_->text());
-		encodeSummary_->setText(ResolveEncode(tmp).summary);
+		const EncodeSettings resolved = ResolveEncode(tmp);
+		encodeSummary_->setText(resolved.summary);
+		// The box shows the bitrate this platform will actually send. Editing it
+		// switches to Manual; that path must not overwrite the number just typed.
+		if (!manual && videoKbps_->value() != resolved.video_kbps) {
+			videoKbps_->blockSignals(true);
+			videoKbps_->setValue(std::max(100, resolved.video_kbps));
+			videoKbps_->blockSignals(false);
+		}
 		RefreshBufferHint();
 	}
 
@@ -1486,7 +1531,16 @@ private:
 		encodeMode_->blockSignals(true);
 		encodeMode_->setCurrentIndex(modeIdx < 0 ? encodeMode_->findData(int(EncodeMode::Obs)) : modeIdx);
 		encodeMode_->blockSignals(false);
-		videoKbps_->setValue(d.video_kbps > 0 ? int(d.video_kbps) : 6000);
+		videoKbps_->blockSignals(true);
+		if (d.encode_mode == EncodeMode::Manual && d.video_kbps > 0) {
+			videoKbps_->setValue(int(d.video_kbps));
+		} else {
+			Destination shown = d;
+			if (shown.encode_mode == EncodeMode::Manual)
+				shown.encode_mode = EncodeMode::Recommended;
+			videoKbps_->setValue(std::max(100, ResolveEncode(shown).video_kbps));
+		}
+		videoKbps_->blockSignals(false);
 		audioKbps_->setValue(d.audio_kbps > 0 ? int(d.audio_kbps) : 160);
 		keyint_->setValue(int(d.keyint_sec));
 		const int rc = rateControl_->findText(Q(d.rate_control.empty() ? "CBR" : d.rate_control));

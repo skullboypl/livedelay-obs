@@ -286,6 +286,15 @@ const CAPTURE = 'Naciśnij skrót…';
 function svcByName(name) {
   return services.find(s => s.name === name) || null;
 }
+// Twitch without Partner is 6000. Kick's own baseline is 8000. Kick ingests
+// also sit on live-video.net, so Kick is matched before that host.
+function platformVideoKbps(d) {
+  const blob = ((d.service || '') + ' ' + (d.url || '')).toLowerCase();
+  if (blob.includes('kick')) return 8000;
+  if (blob.includes('twitch') || blob.includes('twitch.tv') || blob.includes('ttvnw.net')) return 6000;
+  const rec = svcByName(d.service);
+  return (rec && rec.max_video_kbps) || 6000;
+}
 function serversOf(name) {
   const s = svcByName(name);
   return s && s.servers ? s.servers : [];
@@ -521,12 +530,29 @@ function renderForm() {
     d.encode_mode = mode.value;
     if (mode.value === 'manual') {
       const rec = svcByName(d.service);
-      if (!d.video_kbps) d.video_kbps = (rec && rec.max_video_kbps) || 6000;
+      if (!d.video_kbps) d.video_kbps = platformVideoKbps(d);
       if (!d.audio_kbps) d.audio_kbps = (rec && rec.max_audio_kbps) || 160;
       if (!d.keyint_sec) d.keyint_sec = (rec && rec.keyint_sec) || 2;
       if (!d.rate_control) d.rate_control = 'CBR';
     }
     renderForm();
+  });
+  let summary;
+  const bitrate = document.createElement('input');
+  bitrate.type = 'number';
+  bitrate.min = '100';
+  bitrate.max = '100000';
+  bitrate.value = d.encode_mode === 'manual'
+    ? (d.video_kbps || platformVideoKbps(d))
+    : (d.encode_mode === 'recommended' ? platformVideoKbps(d) : (d.video_kbps || platformVideoKbps(d)));
+  bitrate.addEventListener('input', () => {
+    d.video_kbps = Number(bitrate.value) || 0;
+    if (d.encode_mode !== 'manual') {
+      d.encode_mode = 'manual';
+      mode.value = 'manual';
+    }
+    if (summary)
+      summary.textContent = 'Ręcznie: ' + d.video_kbps + ' kb/s wideo. Audio, keyint i rozmiar poniżej obowiązują przy Ręcznie.';
   });
   const live = trackSelect(d.audio_track, false);
   live.addEventListener('change', () => {
@@ -549,6 +575,7 @@ function renderForm() {
     field('Adres', url),
     field('Klucz streamu', keyline),
     field('Kodowanie', mode),
+    field('Bitrate wideo', bitrate),
     field('Ścieżka na żywo', live),
     field('Ścieżka VOD Twitch', vod)
   );
@@ -577,19 +604,19 @@ function renderForm() {
     : 'Enhanced i ścieżka VOD są dla Twitcha. Kick i YouTube zostają na jednej ścieżce wideo.';
   box.append(grid, auto, enh, notes);
   const manualOn = d.encode_mode === 'manual';
-  const summary = document.createElement('p');
+  summary = document.createElement('p');
   summary.className = 'summary';
   const rec = svcByName(d.service);
   if (d.encode_mode === 'manual')
     summary.textContent = 'Ręcznie: ' + (d.video_kbps || 0) + ' kb/s wideo, ' + (d.audio_kbps || 0) + ' kb/s audio, keyint ' + (d.keyint_sec || 0) + ' s, ' + (d.rate_control || 'CBR') + '.';
-  else if (d.encode_mode === 'recommended' && rec && rec.max_video_kbps)
-    summary.textContent = 'Zalecane dla ' + rec.name + ': ' + rec.max_video_kbps + ' kb/s wideo, ' + (rec.max_audio_kbps || 0) + ' kb/s audio, keyint ' + (rec.keyint_sec || 2) + ' s.';
+  else if (d.encode_mode === 'recommended')
+    summary.textContent = 'Zalecane dla ' + ((rec && rec.name) || d.service || 'tej platformy') + ': ' + platformVideoKbps(d) + ' kb/s wideo, ' + ((rec && rec.max_audio_kbps) || 160) + ' kb/s audio, keyint ' + ((rec && rec.keyint_sec) || 2) + ' s. Wpisanie innej liczby przełącza na Ręcznie.';
   else if (d.encode_mode === 'twitch_partner')
     summary.textContent = 'Profil Twitch Partner: najmocniejszy klasyczny profil, keyint 2 s, CBR.';
   else if (d.encode_mode === 'auto')
     summary.textContent = 'Auto dobiera bitrate z rozdzielczości i liczby klatek.';
   else
-    summary.textContent = 'Jak w OBS: bitrate, rozmiar i klatka kluczowa biorą się z Wyjście w OBS. Pola poniżej obowiązują tylko przy Ręcznie.';
+    summary.textContent = 'Jak w OBS: bitrate, rozmiar i klatka kluczowa biorą się z Wyjście w OBS. Wpisanie bitrate wideo przełącza tę platformę na Ręcznie.';
   const manual = document.createElement('div');
   manual.className = 'manual' + (manualOn ? '' : ' off');
   function num(key, label, min, max) {
@@ -613,7 +640,6 @@ function renderForm() {
   rc.disabled = !manualOn;
   rc.addEventListener('change', () => { d.rate_control = rc.value; });
   manual.append(
-    num('video_kbps', 'Bitrate wideo', 0, 100000),
     num('audio_kbps', 'Bitrate audio', 0, 512),
     num('keyint_sec', 'Interwał klatek kluczowych (s)', 0, 10),
     field('Kontrola bitrate', rc),
@@ -687,8 +713,8 @@ function renderOverlay() {
 document.getElementById('addDest').addEventListener('click', () => {
   dests.push({
     name: 'Nowa platforma', service: 'Twitch', server: '', url: 'rtmp://live.twitch.tv/app', key: '',
-    ingest_key: '', autostart: true, enabled: true, encode_mode: 'obs',
-    video_kbps: 6000, audio_kbps: 160, keyint_sec: 2, rate_control: 'CBR',
+    ingest_key: '', autostart: true, enabled: true, encode_mode: 'recommended',
+    video_kbps: 0, audio_kbps: 160, keyint_sec: 2, rate_control: 'CBR',
     width: 0, height: 0, audio_track: 0, vod_track: 0, enhanced: false
   });
   sel = dests.length - 1;
