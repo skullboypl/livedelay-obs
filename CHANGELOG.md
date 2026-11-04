@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.40 – 2026-11-04
+
+- **New settings show their names again.** An update of the flat plugin DLL wrote the locale files next to OBS instead of next to the plugin, so OBS kept the old file and the new rows appeared as `Encode.BufferCodec`. The install now puts those files in the plugin folder, and a missing line is downloaded on startup.
+
 ## 1.0.39 – 2026-11-04
 
 - **Start Streaming no longer swaps the OBS service mid-start.** A stock key that was not `_idle` used to rebuild the service while OBS was already starting, so `rtmp_output` failed with no error and platforms never connected.

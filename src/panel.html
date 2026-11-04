@@ -174,6 +174,7 @@ input.capturing { border-color: var(--tally); color: var(--tally); }
           </select>
         </label>
         <label class="check" style="align-self:end"><input id="single_pc" type="checkbox">Jeden PC — jeden enkoder (lżej dla FPS w grze)</label>
+        <label class="check" style="align-self:end"><input id="obs_live" type="checkbox">Wymuś live z OBS — podgląd z transmisji, bez drugiego enkodera</label>
         <label class="field"><span class="tag">Nasłuch RTMP</span><input class="code" id="listen" type="text" required spellcheck="false" autocomplete="off"></label>
         <label class="field"><span class="tag">Adres API</span><input class="code" id="api" type="text" required spellcheck="false" autocomplete="off"></label>
         <label class="field"><span class="tag">Język wtyczki OBS</span>
@@ -827,6 +828,7 @@ async function load() {
   document.getElementById('buffer').value = c.max_buffer_mb;
   document.getElementById('buffer_codec').value = ['obs', 'h264', 'hevc', 'av1'].includes(c.buffer_codec) ? c.buffer_codec : 'obs';
   document.getElementById('single_pc').checked = !!c.single_pc;
+  document.getElementById('obs_live').checked = !!c.obs_live;
   document.getElementById('listen').value = c.listen;
   document.getElementById('api').value = c.api;
   const lang = document.getElementById('language');
@@ -897,6 +899,7 @@ document.getElementById('save').addEventListener('click', async () => {
     max_buffer_mb: Number(document.getElementById('buffer').value),
     buffer_codec: document.getElementById('buffer_codec').value,
     single_pc: document.getElementById('single_pc').checked,
+    obs_live: document.getElementById('obs_live').checked,
     listen: document.getElementById('listen').value.trim(),
     api: document.getElementById('api').value.trim(),
     language: document.getElementById('language').value,

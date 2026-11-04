@@ -98,7 +98,7 @@ impl Proxy {
         let n = cfg.dests.len().max(1);
         let per_slot = (cfg.max_buffer_mb * 1024 * 1024) / n;
         let pairs: Vec<(String, String)> = cfg.dests.iter().map(|d| (d.name.clone(), d.ingest_key.clone())).collect();
-        let hub = hub::Hub::new(&pairs, per_slot);
+        let hub = hub::Hub::new(&pairs, per_slot, cfg.obs_live);
 
         let mut dests = Vec::new();
         let mut targets = Vec::new();

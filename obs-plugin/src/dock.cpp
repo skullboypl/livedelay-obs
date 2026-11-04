@@ -181,6 +181,7 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 		language_ = s.language;
 		limitsAck_ = QString::fromStdString(s.limits_ack);
 		engine_text_ = EngineText(s);
+		obsLive_ = s.obs_live;
 		configStamp_ = ConfigStamp();
 	}
 
@@ -397,6 +398,13 @@ void Dock::ReloadConfig()
 	// Platforms edited elsewhere leave the engine on its old list and OBS's
 	// per-platform encoders stale. Both come back mid-stream only at the cost
 	// of cutting the stream, so wait for idle.
+	if (s.obs_live != obsLive_) {
+		obsLive_ = s.obs_live;
+		// The second encoder holds the slot the OBS publish needs. Drop it
+		// without restarting the proxy, so the open stream can feed the preview.
+		if (!s.single_pc)
+			OutputsReloadConfig();
+	}
 	const std::string engine = EngineText(s);
 	if (engine != engine_text_) {
 		engine_text_ = engine;

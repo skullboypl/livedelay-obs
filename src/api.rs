@@ -312,11 +312,12 @@ fn config_json(ctx: &Ctx) -> Result<String, String> {
     let text = std::fs::read_to_string(&ctx.ini_path).map_err(|e| e.to_string())?;
     let cfg = config::parse(&text)?;
     let mut j = format!(
-        "{{\"delay\":{},\"max_buffer_mb\":{},\"buffer_codec\":\"{}\",\"single_pc\":{},\"listen\":\"{}\",\"api\":\"{}\",\"host\":\"{}\",\"language\":\"{}\",\"dock_theme\":\"{}\",\"hotkey_arm\":\"{}\",\"hotkey_activate\":\"{}\",\"hotkey_cut\":\"{}\",\"hotkey_cut_after\":\"{}\",\"arm_slots\":[{}],\"dests\":[",
+        "{{\"delay\":{},\"max_buffer_mb\":{},\"buffer_codec\":\"{}\",\"single_pc\":{},\"obs_live\":{},\"listen\":\"{}\",\"api\":\"{}\",\"host\":\"{}\",\"language\":\"{}\",\"dock_theme\":\"{}\",\"hotkey_arm\":\"{}\",\"hotkey_activate\":\"{}\",\"hotkey_cut\":\"{}\",\"hotkey_cut_after\":\"{}\",\"arm_slots\":[{}],\"dests\":[",
         json_number_or(&text, "delay", cfg.delay_s),
         cfg.max_buffer_mb,
         esc(&cfg.buffer_codec),
         if cfg.single_pc { "true" } else { "false" },
+        if cfg.obs_live { "true" } else { "false" },
         esc(&cfg.listen),
         esc(&cfg.api),
         esc(&crate::ffi::host()),
@@ -400,11 +401,13 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
         return Err("buffer_codec".into());
     }
     let single_pc = json_raw(body, "single_pc").map(|v| v == "true").unwrap_or(before.single_pc);
+    let obs_live = json_raw(body, "obs_live").map(|v| v == "true").unwrap_or(before.obs_live);
     let mut upd = IniUpdate {
         delay: Some(json_raw(body, "delay").unwrap_or_else(|| format!("{delay}"))),
         max_buffer_mb: Some(buffer.to_string()),
         buffer_codec: Some(codec.clone()),
         single_pc: Some(single_pc),
+        obs_live: Some(obs_live),
         listen: Some(listen.clone()),
         api: Some(api.clone()),
         hotkey_arm: json_string(body, "hotkey_arm"),
@@ -484,6 +487,7 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
     let _ = std::fs::copy(&ctx.ini_path, &bak);
     std::fs::write(&ctx.ini_path, &next).map_err(|e| e.to_string())?;
 
+    ctx.hub.set_accept_idle(obs_live);
     *ctx.default_delay.lock().unwrap_or_else(|e| e.into_inner()) = Duration::from_secs_f64(delay);
     let n = ctx.hub.slots.len().max(1);
     let per = (buffer * 1024 * 1024) / n;
@@ -672,6 +676,11 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
                     }
                     log!("settings: max_buffer_mb={mb} ({per} bytes/slot)");
                 }
+            }
+            if let Some(v) = query.split('&').find_map(|kv| kv.strip_prefix("obs_live=")) {
+                let on = matches!(v, "1" | "yes" | "true");
+                ctx.hub.set_accept_idle(on);
+                log!("settings: obs_live={}", if on { "yes" } else { "no" });
             }
             let _ = body; // unused; query carries the values
             ctx.hub.bump();

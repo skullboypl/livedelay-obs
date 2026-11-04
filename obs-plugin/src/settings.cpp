@@ -222,6 +222,8 @@ Settings Settings::Load(const std::string &path)
 				s.buffer_codec = v;
 		} else if (k == "single_pc")
 			s.single_pc = Yes(v);
+		else if (k == "obs_live")
+			s.obs_live = Yes(v);
 		else if (k == "limits_ack")
 			s.limits_ack = v;
 		else if (k == "hotkey_arm")
@@ -280,7 +282,8 @@ std::string Settings::Text() const
 	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb
 	  << "\nlanguage = " << language << "\ndock_theme = " << dock_theme
 	  << "\nbuffer_codec = " << (buffer_codec.empty() ? "obs" : buffer_codec)
-	  << "\nsingle_pc = " << (single_pc ? "yes" : "no") << "\n";
+	  << "\nsingle_pc = " << (single_pc ? "yes" : "no")
+	  << "\nobs_live = " << (obs_live ? "yes" : "no") << "\n";
 	if (!limits_ack.empty())
 		o << "limits_ack = " << limits_ack << "\n";
 	// Carried through untouched: these belong to the app, not to this plugin.
@@ -899,8 +902,12 @@ public:
 		singlePc_ = new QCheckBox(T("Settings.SinglePc"));
 		singlePc_->setToolTip(T("Settings.SinglePcTip"));
 		singlePc_->setChecked(s_.single_pc);
+		obsLive_ = new QCheckBox(T("Settings.ObsLive"));
+		obsLive_->setToolTip(T("Settings.ObsLiveTip"));
+		obsLive_->setChecked(s_.obs_live);
 		general->addRow(T("Encode.BufferCodec"), bufferCodec_);
 		general->addRow(QString(), singlePc_);
+		general->addRow(QString(), obsLive_);
 		connect(delay_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { RefreshBufferHint(); });
 		connect(buffer_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { RefreshBufferHint(); });
 		connect(bufferSuggest_, &QPushButton::clicked, this, [this] {
@@ -1346,6 +1353,7 @@ public:
 			if (s_.buffer_codec != "h264" && s_.buffer_codec != "hevc" && s_.buffer_codec != "av1")
 				s_.buffer_codec = "obs";
 			s_.single_pc = singlePc_->isChecked();
+			s_.obs_live = obsLive_->isChecked();
 			for (int i = 0; i < 6 && i < int(hotkeySpins_.size()); ++i)
 				s_.arm_slot[i] = hotkeySpins_[i]->value();
 			ApplyHotkeyPage(hotkeyKeys_, hotkeySpins_);
@@ -1757,6 +1765,13 @@ private:
 			i.hot = true;
 		if (original_.single_pc != s_.single_pc || original_.buffer_codec != s_.buffer_codec)
 			i.outputs = true;
+		if (original_.obs_live != s_.obs_live) {
+			i.hot = true;
+			// A second encoder already holds the first slot. Drop it, or the
+			// OBS publish cannot enter the preview.
+			if (!s_.single_pc)
+				i.outputs = true;
+		}
 		if (original_.dests.size() != s_.dests.size()) {
 			i.proxy = true;
 			i.outputs = true;
@@ -1802,7 +1817,8 @@ private:
 		} else {
 			if (impact.hot) {
 				const std::string q = "settings?delay=" + std::to_string(s_.delay) +
-						      "&max_buffer_mb=" + std::to_string(s_.max_buffer_mb);
+						      "&max_buffer_mb=" + std::to_string(s_.max_buffer_mb) +
+						      "&obs_live=" + (s_.obs_live ? "1" : "0");
 				int status = 0;
 				Request("POST", "/" + q, &status);
 				if (status != 200)
@@ -1828,6 +1844,7 @@ private:
 	QComboBox *dockTheme_ = nullptr;
 	QComboBox *bufferCodec_ = nullptr;
 	QCheckBox *singlePc_ = nullptr;
+	QCheckBox *obsLive_ = nullptr;
 	std::vector<ComboButton *> hotkeyKeys_;
 	std::vector<QSpinBox *> hotkeySpins_;
 	QSpinBox *delay_ = nullptr;

@@ -75,6 +75,7 @@ private:
 	unsigned long long configStamp_ = 0; // livedelay.ini write time we last read
 	std::string language_;
 	std::string engine_text_; // ini parts that only a proxy restart picks up
+	bool obsLive_ = false;
 	std::string last_; // last state JSON, empty while offline
 	std::map<std::string, std::deque<double>> history_;
 	std::chrono::steady_clock::time_point lastSample_{};

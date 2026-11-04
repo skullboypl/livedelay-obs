@@ -65,6 +65,9 @@ struct Settings {
 	/// OBS encodes once into the delay buffer. The plugin does not start another
 	/// NVENC session, which is the FPS cost on a single gaming PC.
 	bool single_pc = false;
+	/// The stream OBS is already sending fills the preview and the kb/s meter.
+	/// No second encoder. The open `_idle` publish is picked up on the next frame.
+	bool obs_live = false;
 	/// Limits warning the user dismissed, keyed to the settings it was about.
 	/// Empty = show it. A different warning brings the banner back.
 	std::string limits_ack;

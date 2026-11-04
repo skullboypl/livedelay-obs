@@ -49,6 +49,60 @@ struct PublishGuard {
     hub: Arc<Hub>,
     key: String,
     shared: Option<Arc<Shared>>,
+    /// Sequence headers seen while this publish was still discarded.
+    held: Vec<(u8, u32, Vec<u8>)>,
+}
+
+fn is_seq_header(kind: u8, d: &[u8]) -> bool {
+    let b0 = d.first().copied().unwrap_or(0);
+    match kind {
+        MSG_VIDEO if b0 & 0x80 != 0 => {
+            let mut pkt = b0 & 0x0f;
+            if pkt == 6 {
+                pkt = d.get(1).copied().unwrap_or(0xff) & 0x0f;
+            }
+            pkt == 0
+        }
+        MSG_VIDEO => matches!(b0 & 0x0f, 7 | 12) && d.get(1) == Some(&0),
+        MSG_AUDIO => {
+            let fmt = b0 >> 4;
+            (fmt == 10 && d.get(1) == Some(&0))
+                || (fmt == 9 && (b0 & 0x0f == 0 || (b0 & 0x0f == 5 && d.get(1).copied().unwrap_or(0xff) & 0x0f == 0)))
+        }
+        MSG_DATA_AMF0 => true,
+        _ => false,
+    }
+}
+
+fn remember_header(held: &mut Vec<(u8, u32, Vec<u8>)>, kind: u8, ts: u32, payload: &[u8]) {
+    if !is_seq_header(kind, payload) {
+        return;
+    }
+    if let Some(slot) = held.iter_mut().find(|h| h.0 == kind) {
+        *slot = (kind, ts, payload.to_vec());
+    } else {
+        held.push((kind, ts, payload.to_vec()));
+    }
+}
+
+/// A stream already connected as `_idle` starts feeding the preview on the
+/// next frame after the option is turned on. Headers seen before that are
+/// replayed so the picture can decode without restarting OBS.
+fn adopt_idle(g: &mut PublishGuard) {
+    if g.shared.is_some() {
+        return;
+    }
+    let Some(shared) = g.hub.adopt_idle(&g.key) else { return };
+    let held = std::mem::take(&mut g.held);
+    shared.with(|e| {
+        e.begin_session();
+        let now = Instant::now();
+        for (kind, ts, payload) in held {
+            e.push(kind, ts, payload, now);
+        }
+    });
+    log!("RTMP: OBS publish ({}) now feeds the preview", g.key);
+    g.shared = Some(shared);
 }
 
 impl Drop for PublishGuard {
@@ -82,15 +136,26 @@ async fn handle(mut sock: TcpStream, hub: &Arc<Hub>) -> io::Result<()> {
         let m = reader.read(&mut rd).await?;
         match m.typ {
             MSG_AUDIO | MSG_VIDEO => {
-                if let Some(g) = guard.as_ref() {
+                if let Some(g) = guard.as_mut() {
+                    if g.shared.is_none() {
+                        adopt_idle(g);
+                        if g.shared.is_none() {
+                            remember_header(&mut g.held, m.typ, m.ts, &m.payload);
+                        }
+                    }
                     if let Some(shared) = &g.shared {
                         shared.with(|e| e.push(m.typ, m.ts, m.payload, Instant::now()));
                     }
-                    // idle: drop
                 }
             }
             MSG_DATA_AMF0 => {
-                if let Some(g) = guard.as_ref() {
+                if let Some(g) = guard.as_mut() {
+                    if g.shared.is_none() {
+                        adopt_idle(g);
+                        if g.shared.is_none() {
+                            remember_header(&mut g.held, m.typ, m.ts, &m.payload);
+                        }
+                    }
                     if let Some(shared) = &g.shared {
                         let v = amf0::decode_all(&m.payload);
                         if v.iter().any(|x| x.as_str() == Some("onMetaData")) {
@@ -147,7 +212,7 @@ async fn handle(mut sock: TcpStream, hub: &Arc<Hub>) -> io::Result<()> {
                                 } else {
                                     log!("RTMP: OBS idle/discard publish ({key})");
                                 }
-                                guard = Some(PublishGuard { hub: hub.clone(), key, shared });
+                                guard = Some(PublishGuard { hub: hub.clone(), key, shared, held: Vec::new() });
                                 ses.send(CS_CONTROL, user_control(0, &STREAM_ID.to_be_bytes()));
                                 ses.send(CS_COMMAND, command(m.stream_id, &[s("onStatus"), Amf::Number(0.0), Amf::Null, status("NetStream.Publish.Start", "Publishing")]));
                             }

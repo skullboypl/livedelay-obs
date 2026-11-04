@@ -16,6 +16,9 @@ max_buffer_mb = 512
 buffer_codec = obs
 # yes = OBS encodes once into the buffer (lighter FPS on a single gaming PC).
 single_pc = no
+# yes = the stream OBS is already sending fills the preview and the kb/s meter.
+# No second encoder. Use this when From OBS stays at 0 kb/s.
+obs_live = no
 
 # Overlay texts (Browser source: http://127.0.0.1:7799/overlay).
 # {s} = delay in seconds, {buf} = how much is buffered. Empty = show nothing.
@@ -164,6 +167,8 @@ pub struct Config {
     pub buffer_codec: String,
     /// One OBS encode fills the buffer. The plugin does not start another encoder.
     pub single_pc: bool,
+    /// Accept OBS's stock publish as the preview stream. No second encoder.
+    pub obs_live: bool,
     pub dests: Vec<Dest>,
     /// (action, key combo) pairs for global hotkeys.
     pub hotkeys: Vec<(&'static str, String)>,
@@ -183,6 +188,7 @@ impl Default for Config {
             max_buffer_mb: 512,
             buffer_codec: "obs".into(),
             single_pc: false,
+            obs_live: false,
             dests: vec![],
             hotkeys: vec![],
             overlay: Overlay::default(),
@@ -354,6 +360,7 @@ pub fn parse_report(text: &str) -> ParseReport {
                     }
                 },
                 "single_pc" => c.single_pc = yes(v),
+                "obs_live" => c.obs_live = yes(v),
                 // Plugin UI language; the proxy itself has no texts to translate.
                 "language" => {}
                 "overlay_live" => c.overlay.live = v.into(),
@@ -408,6 +415,7 @@ pub struct IniUpdate {
     pub max_buffer_mb: Option<String>,
     pub buffer_codec: Option<String>,
     pub single_pc: Option<bool>,
+    pub obs_live: Option<bool>,
     pub listen: Option<String>,
     pub api: Option<String>,
     pub language: Option<String>,
@@ -545,6 +553,9 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
     setg(&mut global, "buffer_codec", &upd.buffer_codec);
     if let Some(on) = upd.single_pc {
         set_line(&mut global, "single_pc", if on { "yes" } else { "no" });
+    }
+    if let Some(on) = upd.obs_live {
+        set_line(&mut global, "obs_live", if on { "yes" } else { "no" });
     }
     setg(&mut global, "listen", &upd.listen);
     setg(&mut global, "api", &upd.api);
@@ -733,6 +744,7 @@ mod tests {
         assert_eq!(c.delay_s, 15.0);
         assert_eq!(c.buffer_codec, "obs");
         assert!(!c.single_pc);
+        assert!(!c.obs_live);
         assert_eq!(c.dests.len(), 1);
         assert!(!c.dests[0].enabled);
         assert_eq!(c.dests[0].encode_mode, EncodeMode::Obs);

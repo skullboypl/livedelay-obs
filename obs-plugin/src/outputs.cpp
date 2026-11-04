@@ -326,16 +326,16 @@ void Rebuild(bool restart_live)
 
 	Settings s = Settings::Load(ConfigPath());
 	g_outs.resize(s.dests.size());
-	// Single-PC: OBS's own encode is the buffer. Creating the plugin encoders
-	// here would open a second NVENC session for a picture that is thrown away.
-	if (!s.single_pc) {
+	// Single-PC, and "force live from OBS": OBS's own encode is the buffer.
+	// Creating the plugin encoders here would open a second NVENC session.
+	if (!s.single_pc && !s.obs_live) {
 		for (size_t i = 0; i < s.dests.size(); ++i) {
 			if (s.dests[i].ingest_key.empty())
 				s.dests[i].ingest_key = "ld" + std::to_string(i);
 			BuildOne(g_outs[i], s.dests[i], i);
 		}
 	}
-	if (restart_live && !s.single_pc) {
+	if (restart_live && !s.single_pc && !s.obs_live) {
 		for (size_t i = 0; i < g_outs.size(); ++i) {
 			if (i < was_live.size() && was_live[i] && s.dests[i].enabled)
 				StartIndex(i);
@@ -618,6 +618,11 @@ void StopArmTimer()
 void StartReadyPlatforms()
 {
 	Settings s = Settings::Load(ConfigPath());
+	if (s.obs_live && !s.single_pc) {
+		// Preview takes the OBS publish. Platforms stay on their Live button.
+		StopArmTimer();
+		return;
+	}
 	if (s.single_pc) {
 		bool started = false;
 		for (size_t i = 0; i < s.dests.size(); ++i) {
@@ -792,7 +797,8 @@ void OutputsOnStreamingStopping()
 
 bool OutputStartDest(size_t index)
 {
-	if (Settings::Load(ConfigPath()).single_pc)
+	const Settings s = Settings::Load(ConfigPath());
+	if (s.single_pc || s.obs_live)
 		return true;
 	if (g_outs.empty())
 		Rebuild(false);

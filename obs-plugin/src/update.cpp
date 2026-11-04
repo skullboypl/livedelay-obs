@@ -251,12 +251,17 @@ bool ResolveInstallDirs(const QString &dllPath, QString *dllDestDir, QString *da
 	}
 	*dllDestDir = QDir::toNativeSeparators(fi.absolutePath());
 	const QString native = QDir::toNativeSeparators(dllPath);
-	// …\plugins\livedelay-obs\bin\64bit\livedelay-obs.dll
+	// ProgramData plugin. Flat OBS 33+ loads …\plugins\livedelay-obs\livedelay-obs.dll.
+	// Older OBS loads …\plugins\livedelay-obs\bin\64bit\livedelay-obs.dll.
+	// Data is always …\plugins\livedelay-obs\data. Walking up from the flat DLL
+	// lands in obs-studio\data, and the new strings never reach the file OBS reads.
 	if (native.contains(QStringLiteral("\\plugins\\livedelay-obs\\"), Qt::CaseInsensitive)) {
-		QDir bin(fi.absolutePath()); // …/bin/64bit
-		bin.cdUp(); // bin
-		bin.cdUp(); // livedelay-obs
-		*dataDestDir = QDir::toNativeSeparators(bin.filePath(QStringLiteral("data")));
+		QDir plugin(fi.absolutePath());
+		if (native.contains(QStringLiteral("\\bin\\64bit\\"), Qt::CaseInsensitive)) {
+			plugin.cdUp(); // bin
+			plugin.cdUp(); // livedelay-obs
+		}
+		*dataDestDir = QDir::toNativeSeparators(plugin.filePath(QStringLiteral("data")));
 		return true;
 	}
 	// …\obs-studio\obs-plugins\64bit\livedelay-obs.dll
@@ -283,7 +288,7 @@ bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &
 	const QString logPath = QDir::temp().filePath(QStringLiteral("livedelay-update.log"));
 	const QString primaryDll = QDir::toNativeSeparators(QDir(dllDestDir).filePath(QStringLiteral("livedelay-obs.dll")));
 
-	// When loaded from ProgramData\...\bin\64bit\, also refresh the flat DLL (OBS 33+).
+	// Keep both copies in step: the flat DLL (OBS 33+) and bin\64bit (older OBS).
 	QString flatDll;
 	{
 		const QString native = QDir::toNativeSeparators(dllDestDir);
@@ -292,6 +297,8 @@ bool WriteUpdaterScript(const QString &scriptPath, DWORD obsPid, const QString &
 			bin64.cdUp(); // bin
 			bin64.cdUp(); // livedelay-obs
 			flatDll = QDir::toNativeSeparators(bin64.filePath(QStringLiteral("livedelay-obs.dll")));
+		} else if (native.contains(QStringLiteral("\\plugins\\livedelay-obs"), Qt::CaseInsensitive)) {
+			flatDll = QDir::toNativeSeparators(QDir(dllDestDir).filePath(QStringLiteral("bin/64bit/livedelay-obs.dll")));
 		}
 	}
 
@@ -843,6 +850,7 @@ const ReleaseNote kReleaseNotes[] = {
 	{"1.0.37", "WhatsNew.Body1037"},
 	{"1.0.38", "WhatsNew.Body1038"},
 	{"1.0.39", "WhatsNew.Body1039"},
+	{"1.0.40", "WhatsNew.Body1040"},
 };
 
 QString SeenVersionPath()

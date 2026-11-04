@@ -30,13 +30,15 @@ pub struct Hub {
     claimed: Mutex<HashMap<String, String>>,
     /// Stock OBS is publishing to `_idle` / legacy (media discarded, but OBS is live).
     idle_active: AtomicBool,
+    /// When set, `_idle` is the preview stream instead of being discarded.
+    accept_idle: AtomicBool,
     /// Aggregated change counter for SSE / tray.
     pub state: watch::Sender<u64>,
 }
 
 impl Hub {
     /// `per_slot_bytes` is the buffer cap for each engine.
-    pub fn new(dests: &[(String, String)], per_slot_bytes: usize) -> Arc<Self> {
+    pub fn new(dests: &[(String, String)], per_slot_bytes: usize, accept_idle: bool) -> Arc<Self> {
         let (state, _) = watch::channel(0u64);
         let mut slots = Vec::new();
         let mut index = HashMap::new();
@@ -56,12 +58,36 @@ impl Hub {
             busy: Mutex::new(HashMap::new()),
             claimed: Mutex::new(HashMap::new()),
             idle_active: AtomicBool::new(false),
+            accept_idle: AtomicBool::new(accept_idle),
             state,
         })
     }
 
     pub fn idle_active(&self) -> bool {
         self.idle_active.load(Ordering::Relaxed)
+    }
+
+    pub fn accept_idle(&self) -> bool {
+        self.accept_idle.load(Ordering::Relaxed)
+    }
+
+    /// Hot-apply. The open `_idle` connection picks this up on the next frame.
+    pub fn set_accept_idle(&self, on: bool) {
+        self.accept_idle.store(on, Ordering::Relaxed);
+        self.state.send_modify(|v| *v += 1);
+    }
+
+    /// Feed a discarded OBS publish into the first slot so the preview and the
+    /// kb/s meter see it. `None` when the option is off or that slot is taken.
+    pub fn adopt_idle(&self, key: &str) -> Option<Arc<Shared>> {
+        let key = key.trim();
+        if !self.accept_idle() || !Self::is_idle_key(key) {
+            return None;
+        }
+        if self.claimed.lock().unwrap().contains_key(key) {
+            return None;
+        }
+        self.claim_first_free(key)
     }
 
     /// Call inside the tokio runtime so engine state changes refresh the dock.
@@ -125,9 +151,9 @@ impl Hub {
     pub fn try_claim(&self, key: &str) -> Result<Option<Arc<Shared>>, &'static str> {
         let key = key.trim();
         if Self::is_idle_key(key) {
-            // The plugin discards `_idle`: its real encode arrives separately as ld0.
-            // The standalone app has only this one publish, so it is the stream.
-            if crate::ffi::host() != "obs" {
+            // The plugin discards `_idle` while a second encode arrives as ld0.
+            // The standalone app, and "force live from OBS", have only this publish.
+            if crate::ffi::host() != "obs" || self.accept_idle() {
                 if let Some(shared) = self.claim_first_free(key) {
                     log!("RTMP: key '{key}' — accepting it as the stream from this PC");
                     return Ok(Some(shared));
@@ -168,15 +194,15 @@ impl Hub {
     pub fn release(&self, key: &str) {
         let key = key.trim();
         let mut busy = self.busy.lock().unwrap();
-        if let Some(slot_key) = self.claimed.lock().unwrap().remove(key) {
-            busy.insert(slot_key, false);
-            drop(busy);
-            self.state.send_modify(|v| *v += 1);
-            return;
+        let claimed = self.claimed.lock().unwrap().remove(key);
+        if let Some(ref slot_key) = claimed {
+            busy.insert(slot_key.clone(), false);
         }
-        if Self::is_idle_key(key) {
-            busy.insert(IDLE_KEY.to_string(), false);
-            self.idle_active.store(false, Ordering::Relaxed);
+        if Self::is_idle_key(key) || claimed.is_some() {
+            if Self::is_idle_key(key) {
+                busy.insert(IDLE_KEY.to_string(), false);
+                self.idle_active.store(false, Ordering::Relaxed);
+            }
             drop(busy);
             self.state.send_modify(|v| *v += 1);
             return;
