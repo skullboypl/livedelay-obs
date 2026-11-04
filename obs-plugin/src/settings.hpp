@@ -59,6 +59,12 @@ struct Settings {
 	int arm_slot[6] = {15, 30, 45, 60, 90, 120};
 	std::string language = "auto"; // auto = follow OBS, or en-US / pl-PL / de-DE / ru-RU
 	std::string dock_theme = "obs"; // obs = follow OBS's theme, or dark / contrast
+	/// obs | h264 | hevc | av1. "obs" keeps the OBS Output encoder and does not
+	/// open a second NVENC codec. Kick may still require H.264, and only then.
+	std::string buffer_codec = "obs";
+	/// OBS encodes once into the delay buffer. The plugin does not start another
+	/// NVENC session, which is the FPS cost on a single gaming PC.
+	bool single_pc = false;
 	/// Limits warning the user dismissed, keyed to the settings it was about.
 	/// Empty = show it. A different warning brings the banner back.
 	std::string limits_ack;
@@ -95,7 +101,9 @@ bool SaveLimitsAck(const std::string &key);
 bool ObsRoutedToLiveDelay();
 // If already routed: turn off stock OBS Enhanced Broadcasting (Multitrack) and
 // enable custom-server VOD track support. Safe to call on every OBS load.
-void HardenObsForLiveDelay();
+/// `during_start` is OBS_FRONTEND_EVENT_STREAMING_STARTING. Replacing the
+/// service object there makes rtmp_output fail before it connects.
+void HardenObsForLiveDelay(bool during_start = false);
 // Moves OBS's current server and key onto LiveDelay's platform list, saves,
 // restarts the proxy and points OBS at LiveDelay. Tells the user what happened.
 void RouteObsThroughLiveDelay(QWidget *parent);

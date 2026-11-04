@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.39 – 2026-11-04
+
+- **Start Streaming no longer swaps the OBS service mid-start.** A stock key that was not `_idle` used to rebuild the service while OBS was already starting, so `rtmp_output` failed with no error and platforms never connected.
+- **Twitch is not Kick.** The automatic Twitch ingest on `ingest.global-contribute.live-video.net` no longer forces H.264. NVENC stays on the codec OBS is already using unless Kick is enabled and the stream is actually going there.
+- **Buffer codec.** Settings and the web panel can keep OBS's encoder or pick H.264, HEVC or AV1. The choice stays on the same GPU encoder. It does not fall back to x264.
+- **Single PC.** One checkbox makes OBS's own encode the delay buffer, so a game on the same machine does not pay for a second NVENC session.
+
 ## 1.0.38 – 2026-10-31
 
 - **The VOD track stays on Twitch.** Kick, YouTube, Facebook and a custom RTMP server get a checkbox instead. LiveDelay asks before showing the picker, because it does not expect that platform to keep a separate recording track. Confirming sends the second AAC anyway.

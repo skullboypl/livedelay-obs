@@ -11,6 +11,11 @@ api = 127.0.0.1:7799
 delay = 15
 # memory limit for the buffer (MB). Split across platforms when multi-encoding.
 max_buffer_mb = 512
+# Codec stored in the delay buffer: obs | h264 | hevc | av1.
+# obs keeps the OBS Output encoder and does not open a second NVENC codec.
+buffer_codec = obs
+# yes = OBS encodes once into the buffer (lighter FPS on a single gaming PC).
+single_pc = no
 
 # Overlay texts (Browser source: http://127.0.0.1:7799/overlay).
 # {s} = delay in seconds, {buf} = how much is buffered. Empty = show nothing.
@@ -155,6 +160,10 @@ pub struct Config {
     pub api: String,
     pub delay_s: f64,
     pub max_buffer_mb: usize,
+    /// `obs`, `h264`, `hevc` or `av1`. `obs` does not retarget NVENC.
+    pub buffer_codec: String,
+    /// One OBS encode fills the buffer. The plugin does not start another encoder.
+    pub single_pc: bool,
     pub dests: Vec<Dest>,
     /// (action, key combo) pairs for global hotkeys.
     pub hotkeys: Vec<(&'static str, String)>,
@@ -172,6 +181,8 @@ impl Default for Config {
             api: "127.0.0.1:7799".into(),
             delay_s: 15.0,
             max_buffer_mb: 512,
+            buffer_codec: "obs".into(),
+            single_pc: false,
             dests: vec![],
             hotkeys: vec![],
             overlay: Overlay::default(),
@@ -335,6 +346,14 @@ pub fn parse_report(text: &str) -> ParseReport {
                         dropped.push(note("max_buffer_mb must be a number"));
                     }
                 },
+                "buffer_codec" => match v {
+                    "obs" | "h264" | "hevc" | "av1" => c.buffer_codec = v.into(),
+                    _ => {
+                        keep = false;
+                        dropped.push(note("buffer_codec must be obs, h264, hevc or av1"));
+                    }
+                },
+                "single_pc" => c.single_pc = yes(v),
                 // Plugin UI language; the proxy itself has no texts to translate.
                 "language" => {}
                 "overlay_live" => c.overlay.live = v.into(),
@@ -387,6 +406,8 @@ fn finish(path: &Path, mut c: Config) -> Config {
 pub struct IniUpdate {
     pub delay: Option<String>,
     pub max_buffer_mb: Option<String>,
+    pub buffer_codec: Option<String>,
+    pub single_pc: Option<bool>,
     pub listen: Option<String>,
     pub api: Option<String>,
     pub language: Option<String>,
@@ -521,6 +542,10 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
     };
     setg(&mut global, "delay", &upd.delay);
     setg(&mut global, "max_buffer_mb", &upd.max_buffer_mb);
+    setg(&mut global, "buffer_codec", &upd.buffer_codec);
+    if let Some(on) = upd.single_pc {
+        set_line(&mut global, "single_pc", if on { "yes" } else { "no" });
+    }
     setg(&mut global, "listen", &upd.listen);
     setg(&mut global, "api", &upd.api);
     setg(&mut global, "hotkey_arm", &upd.hotkey_arm);
@@ -706,6 +731,8 @@ mod tests {
     fn example_parses() {
         let c = parse(EXAMPLE).unwrap();
         assert_eq!(c.delay_s, 15.0);
+        assert_eq!(c.buffer_codec, "obs");
+        assert!(!c.single_pc);
         assert_eq!(c.dests.len(), 1);
         assert!(!c.dests[0].enabled);
         assert_eq!(c.dests[0].encode_mode, EncodeMode::Obs);

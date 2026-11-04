@@ -161,10 +161,19 @@ input.capturing { border-color: var(--tally); color: var(--tally); }
 
     <section class="page" id="page-general">
       <h1>Ogólne</h1>
-      <p class="hint">Opóźnienie i limit bufora wchodzą od razu. Zmiana nasłuchu, adresu API albo liczby platform podnosi silnik i na moment urywa transmisję.</p>
+      <p class="hint">Opóźnienie i limit bufora wchodzą od razu. Zmiana nasłuchu, adresu API albo liczby platform podnosi silnik i na moment urywa transmisję. Kodek „Jak w OBS” nie przerzuca NVENC na inny kodek. Kick dostaje H.264 tylko gdy jest włączony i naprawdę na niego nadajesz. Jeden PC zostawia jeden enkoder OBS, żeby gra nie traciła klatek na drugą sesję NVENC.</p>
       <div class="grid2">
         <label class="field"><span class="tag">Domyślne opóźnienie (s)</span><input id="delay" type="number" min="1" max="3600" required></label>
         <label class="field"><span class="tag">Limit pamięci bufora (MB)</span><input id="buffer" type="number" min="64" max="16384" required></label>
+        <label class="field"><span class="tag">Kodek bufora</span>
+          <select id="buffer_codec">
+            <option value="obs">Jak w OBS</option>
+            <option value="h264">H.264</option>
+            <option value="hevc">HEVC</option>
+            <option value="av1">AV1</option>
+          </select>
+        </label>
+        <label class="check" style="align-self:end"><input id="single_pc" type="checkbox">Jeden PC — jeden enkoder (lżej dla FPS w grze)</label>
         <label class="field"><span class="tag">Nasłuch RTMP</span><input class="code" id="listen" type="text" required spellcheck="false" autocomplete="off"></label>
         <label class="field"><span class="tag">Adres API</span><input class="code" id="api" type="text" required spellcheck="false" autocomplete="off"></label>
         <label class="field"><span class="tag">Język wtyczki OBS</span>
@@ -305,8 +314,13 @@ function say(text, kind) {
   msg.className = kind || '';
 }
 function isKick(d) {
-  const s = ((d.service || '') + ' ' + (d.url || '')).toLowerCase();
-  return s.includes('kick') || s.includes('global-contribute.live-video.net');
+  const service = (d.service || '').toLowerCase();
+  const url = (d.url || '').toLowerCase();
+  if (service.includes('twitch')) return false;
+  if (url.includes('twitch.tv') || url.includes('ttvnw.net') || url.includes('ingest.global-contribute.live-video.net'))
+    return false;
+  if (service.includes('kick') || url.includes('kick.com')) return true;
+  return url.includes('global-contribute.live-video.net') && !url.includes('ingest.global-contribute');
 }
 function isTwitch(d) {
   if (isKick(d)) return false;
@@ -811,6 +825,8 @@ async function load() {
   const c = await r.json();
   document.getElementById('delay').value = c.delay;
   document.getElementById('buffer').value = c.max_buffer_mb;
+  document.getElementById('buffer_codec').value = ['obs', 'h264', 'hevc', 'av1'].includes(c.buffer_codec) ? c.buffer_codec : 'obs';
+  document.getElementById('single_pc').checked = !!c.single_pc;
   document.getElementById('listen').value = c.listen;
   document.getElementById('api').value = c.api;
   const lang = document.getElementById('language');
@@ -879,6 +895,8 @@ document.getElementById('save').addEventListener('click', async () => {
   const body = {
     delay: Number(document.getElementById('delay').value),
     max_buffer_mb: Number(document.getElementById('buffer').value),
+    buffer_codec: document.getElementById('buffer_codec').value,
+    single_pc: document.getElementById('single_pc').checked,
     listen: document.getElementById('listen').value.trim(),
     api: document.getElementById('api').value.trim(),
     language: document.getElementById('language').value,

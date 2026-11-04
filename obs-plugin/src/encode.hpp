@@ -22,8 +22,8 @@ struct EncodeSettings {
 EncodeMode ParseEncodeMode(const std::string &s);
 const char *EncodeModeKey(EncodeMode m);
 
-// Kick's own ingest lives on global-contribute.live-video.net, the same domain
-// family as Twitch. Kick is decided first so that host is not treated as Twitch.
+// Twitch auto-ingest is ingest.global-contribute.live-video.net. That host is
+// not Kick. Kick is the service name, kick.com, or another tenant on that host.
 bool IsKickTarget(const QString &service, const QString &url);
 bool IsTwitchTarget(const QString &service, const QString &url);
 // Twitch ingest stores a second AAC as the VOD mix. Other RTMP platforms do not.
@@ -46,5 +46,9 @@ QString MultiEncodeInfo();
 // Encoder id OBS itself uses for streaming (simple or advanced).
 QString ObsStreamVideoEncoderId();
 QString ObsStreamAudioEncoderId();
+
+// One-PC mode: the buffer codec is OBS's own stream encoder. Writes the profile
+// when the user picked H.264, HEVC or AV1, and stays on the same GPU vendor.
+void SyncObsEncoderToBufferCodec();
 
 } // namespace livedelay

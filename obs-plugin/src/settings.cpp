@@ -217,6 +217,11 @@ Settings Settings::Load(const std::string &path)
 			s.language = v.empty() ? "auto" : v;
 		else if (k == "dock_theme")
 			s.dock_theme = DockThemeKey(ParseDockTheme(v));
+		else if (k == "buffer_codec") {
+			if (v == "h264" || v == "hevc" || v == "av1" || v == "obs")
+				s.buffer_codec = v;
+		} else if (k == "single_pc")
+			s.single_pc = Yes(v);
 		else if (k == "limits_ack")
 			s.limits_ack = v;
 		else if (k == "hotkey_arm")
@@ -272,8 +277,10 @@ std::string Settings::Text() const
 {
 	std::ostringstream o;
 	o << "# LiveDelay settings (edited from OBS: Tools -> LiveDelay)\n\n"
-	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb << "\nlanguage = " << language << "\ndock_theme = " << dock_theme
-	  << "\n";
+	  << "listen = " << listen << "\napi = " << api << "\ndelay = " << delay << "\nmax_buffer_mb = " << max_buffer_mb
+	  << "\nlanguage = " << language << "\ndock_theme = " << dock_theme
+	  << "\nbuffer_codec = " << (buffer_codec.empty() ? "obs" : buffer_codec)
+	  << "\nsingle_pc = " << (single_pc ? "yes" : "no") << "\n";
 	if (!limits_ack.empty())
 		o << "limits_ack = " << limits_ack << "\n";
 	// Carried through untouched: these belong to the app, not to this plugin.
@@ -508,7 +515,7 @@ void TryResetObsOutputs()
 	     "[livedelay] could not ResetOutputs; restart OBS once if Enhanced Broadcasting was on");
 }
 
-bool DisableObsStockEnhancedBroadcasting()
+bool DisableObsStockEnhancedBroadcasting(bool reset_outputs)
 {
 	config_t *cfg = obs_frontend_get_profile_config();
 	if (!cfg)
@@ -518,10 +525,57 @@ bool DisableObsStockEnhancedBroadcasting()
 		return false;
 	config_set_bool(cfg, "Stream1", "EnableMultitrackVideo", false);
 	config_save_safe(cfg, "tmp", nullptr);
-	TryResetObsOutputs();
+	// ResetOutputs during Start Streaming destroys the output OBS is about to
+	// start, and OBS 32 does not export that method to plugins anyway.
+	if (reset_outputs)
+		TryResetObsOutputs();
 	if (was_on)
 		blog(LOG_INFO, "[livedelay] disabled OBS Stream1 EnableMultitrackVideo (stock Enhanced Broadcasting)");
 	return was_on;
+}
+
+bool PointObsAtLiveDelay(int port);
+
+std::string StockPublishKey(const Settings &s)
+{
+	if (!s.single_pc)
+		return "_idle";
+	for (size_t i = 0; i < s.dests.size(); ++i) {
+		const Destination &d = s.dests[i];
+		if (!d.enabled || !d.autostart || d.url.empty() || d.key.empty())
+			continue;
+		if (!d.ingest_key.empty())
+			return d.ingest_key;
+		return "ld" + std::to_string(i);
+	}
+	return "_idle";
+}
+
+// Changes the key on the service OBS already holds. Replacing the object while
+// Start Streaming is in progress is what makes rtmp_output fail with no error.
+void UpdateRoutedService(int port, const std::string &key, bool during_start)
+{
+	obs_service_t *svc = obs_frontend_get_streaming_service();
+	if (!svc) {
+		if (!during_start)
+			PointObsAtLiveDelay(port);
+		return;
+	}
+	const char *url = obs_service_get_connect_info(svc, OBS_SERVICE_CONNECT_INFO_SERVER_URL);
+	if (!url || std::string(url).find("127.0.0.1:" + std::to_string(port)) == std::string::npos) {
+		if (!during_start)
+			PointObsAtLiveDelay(port);
+		return;
+	}
+	const char *cur = obs_service_get_connect_info(svc, OBS_SERVICE_CONNECT_INFO_STREAM_KEY);
+	if (cur && key == cur)
+		return;
+	obs_data_t *st = obs_service_get_settings(svc);
+	obs_data_set_string(st, "key", key.c_str());
+	obs_service_update(svc, st);
+	obs_data_release(st);
+	obs_frontend_save_streaming_service();
+	blog(LOG_INFO, "[livedelay] stock publish key set to %s on the existing OBS service", key.c_str());
 }
 
 bool RoutedTo(int port)
@@ -537,8 +591,10 @@ bool PointObsAtLiveDelay(int port)
 	obs_data_t *s = obs_data_create();
 	std::string server = "rtmp://127.0.0.1:" + std::to_string(port) + "/live";
 	obs_data_set_string(s, "server", server.c_str());
-	// Stock OBS encode is discarded by the proxy; real platforms use ld0… via plugin outputs.
-	obs_data_set_string(s, "key", "_idle");
+	// _idle is discarded. Single-PC mode publishes on ldN so that one OBS encode
+	// is the delay buffer and a second NVENC session is not started.
+	const std::string key = StockPublishKey(Settings::Load(ConfigPath()));
+	obs_data_set_string(s, "key", key.c_str());
 	obs_data_set_bool(s, "use_auth", false);
 	obs_service_t *svc = obs_service_create("rtmp_custom", "default_service", s, nullptr);
 	obs_frontend_set_streaming_service(svc);
@@ -546,7 +602,7 @@ bool PointObsAtLiveDelay(int port)
 	obs_service_release(svc);
 	obs_data_release(s);
 	// Stock Multitrack/EB cannot negotiate a config URL for Custom → LiveDelay.
-	const bool cleared_eb = DisableObsStockEnhancedBroadcasting();
+	const bool cleared_eb = DisableObsStockEnhancedBroadcasting(true);
 	OutputsEnsureCustomServerVodTrack();
 	// Do not change OBS → Output bitrates here: mode "obs" reads them as the
 	// template for each platform. Stock publish to _idle is discarded by the proxy.
@@ -830,6 +886,21 @@ public:
 		general->addRow(T("Settings.BufferLimit"), bufferRow);
 		general->addRow(T("Settings.Language"), language_);
 		general->addRow(T("Settings.DockTheme"), dockTheme_);
+		bufferCodec_ = new QComboBox;
+		bufferCodec_->addItem(T("Encode.CodecObs"), "obs");
+		bufferCodec_->addItem(T("Encode.CodecH264"), "h264");
+		bufferCodec_->addItem(T("Encode.CodecHevc"), "hevc");
+		bufferCodec_->addItem(T("Encode.CodecAv1"), "av1");
+		bufferCodec_->setToolTip(T("Encode.BufferCodecTip"));
+		{
+			int i = bufferCodec_->findData(Q(s_.buffer_codec.empty() ? "obs" : s_.buffer_codec));
+			bufferCodec_->setCurrentIndex(i < 0 ? 0 : i);
+		}
+		singlePc_ = new QCheckBox(T("Settings.SinglePc"));
+		singlePc_->setToolTip(T("Settings.SinglePcTip"));
+		singlePc_->setChecked(s_.single_pc);
+		general->addRow(T("Encode.BufferCodec"), bufferCodec_);
+		general->addRow(QString(), singlePc_);
 		connect(delay_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { RefreshBufferHint(); });
 		connect(buffer_, qOverload<int>(&QSpinBox::valueChanged), this, [this] { RefreshBufferHint(); });
 		connect(bufferSuggest_, &QPushButton::clicked, this, [this] {
@@ -1271,6 +1342,10 @@ public:
 			SaveOverlay();
 			s_.language = S(language_->currentData().toString());
 			s_.dock_theme = S(dockTheme_->currentData().toString());
+			s_.buffer_codec = S(bufferCodec_->currentData().toString());
+			if (s_.buffer_codec != "h264" && s_.buffer_codec != "hevc" && s_.buffer_codec != "av1")
+				s_.buffer_codec = "obs";
+			s_.single_pc = singlePc_->isChecked();
 			for (int i = 0; i < 6 && i < int(hotkeySpins_.size()); ++i)
 				s_.arm_slot[i] = hotkeySpins_[i]->value();
 			ApplyHotkeyPage(hotkeyKeys_, hotkeySpins_);
@@ -1680,6 +1755,8 @@ private:
 			i.proxy = true;
 		if (original_.delay != s_.delay || original_.max_buffer_mb != s_.max_buffer_mb)
 			i.hot = true;
+		if (original_.single_pc != s_.single_pc || original_.buffer_codec != s_.buffer_codec)
+			i.outputs = true;
 		if (original_.dests.size() != s_.dests.size()) {
 			i.proxy = true;
 			i.outputs = true;
@@ -1715,6 +1792,7 @@ private:
 			QMessageBox::warning(this, "LiveDelay", T("Settings.SaveFailed"));
 			return;
 		}
+		SyncObsEncoderToBufferCodec();
 		if (impact.proxy) {
 			std::string err = StartProxy();
 			if (!err.empty())
@@ -1748,6 +1826,8 @@ private:
 	QCheckBox *armedAsLive_ = nullptr;
 	QComboBox *language_;
 	QComboBox *dockTheme_ = nullptr;
+	QComboBox *bufferCodec_ = nullptr;
+	QCheckBox *singlePc_ = nullptr;
 	std::vector<ComboButton *> hotkeyKeys_;
 	std::vector<QSpinBox *> hotkeySpins_;
 	QSpinBox *delay_ = nullptr;
@@ -1864,22 +1944,17 @@ bool ObsRoutedToLiveDelay()
 	return RoutedTo(Settings::Load(ConfigPath()).RtmpPort());
 }
 
-void HardenObsForLiveDelay()
+void HardenObsForLiveDelay(bool during_start)
 {
-	const int port = Settings::Load(ConfigPath()).RtmpPort();
+	const Settings s = Settings::Load(ConfigPath());
+	const int port = s.RtmpPort();
 	if (!RoutedTo(port))
 		return;
-	DisableObsStockEnhancedBroadcasting();
+	DisableObsStockEnhancedBroadcasting(!during_start);
 	OutputsEnsureCustomServerVodTrack();
-	// Stock key must be _idle. Legacy "livedelay" claimed slot ld0 → publisher busy
-	// and Twitch got the stock encode (player error #1000).
-	obs_service_t *svc = obs_frontend_get_streaming_service();
-	const char *key = svc ? obs_service_get_connect_info(svc, OBS_SERVICE_CONNECT_INFO_STREAM_KEY) : nullptr;
-	const bool bad_key = !key || !*key || strcmp(key, "_idle") != 0;
-	if (bad_key) {
-		blog(LOG_WARNING, "[livedelay] stock stream key was \"%s\" — forcing _idle", key ? key : "");
-		PointObsAtLiveDelay(port);
-	}
+	// In place. Building a new service inside STREAMING_STARTING is what made
+	// rtmp_output fail before OBS ever connected to LiveDelay.
+	UpdateRoutedService(port, StockPublishKey(s), during_start);
 }
 
 void RouteObsThroughLiveDelay(QWidget *parent)

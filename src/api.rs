@@ -312,9 +312,11 @@ fn config_json(ctx: &Ctx) -> Result<String, String> {
     let text = std::fs::read_to_string(&ctx.ini_path).map_err(|e| e.to_string())?;
     let cfg = config::parse(&text)?;
     let mut j = format!(
-        "{{\"delay\":{},\"max_buffer_mb\":{},\"listen\":\"{}\",\"api\":\"{}\",\"host\":\"{}\",\"language\":\"{}\",\"dock_theme\":\"{}\",\"hotkey_arm\":\"{}\",\"hotkey_activate\":\"{}\",\"hotkey_cut\":\"{}\",\"hotkey_cut_after\":\"{}\",\"arm_slots\":[{}],\"dests\":[",
+        "{{\"delay\":{},\"max_buffer_mb\":{},\"buffer_codec\":\"{}\",\"single_pc\":{},\"listen\":\"{}\",\"api\":\"{}\",\"host\":\"{}\",\"language\":\"{}\",\"dock_theme\":\"{}\",\"hotkey_arm\":\"{}\",\"hotkey_activate\":\"{}\",\"hotkey_cut\":\"{}\",\"hotkey_cut_after\":\"{}\",\"arm_slots\":[{}],\"dests\":[",
         json_number_or(&text, "delay", cfg.delay_s),
         cfg.max_buffer_mb,
+        esc(&cfg.buffer_codec),
+        if cfg.single_pc { "true" } else { "false" },
         esc(&cfg.listen),
         esc(&cfg.api),
         esc(&crate::ffi::host()),
@@ -393,9 +395,16 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
             return Err("dock_theme".into());
         }
     }
+    let codec = json_string(body, "buffer_codec").unwrap_or_else(|| before.buffer_codec.clone());
+    if !["obs", "h264", "hevc", "av1"].contains(&codec.as_str()) {
+        return Err("buffer_codec".into());
+    }
+    let single_pc = json_raw(body, "single_pc").map(|v| v == "true").unwrap_or(before.single_pc);
     let mut upd = IniUpdate {
         delay: Some(json_raw(body, "delay").unwrap_or_else(|| format!("{delay}"))),
         max_buffer_mb: Some(buffer.to_string()),
+        buffer_codec: Some(codec.clone()),
+        single_pc: Some(single_pc),
         listen: Some(listen.clone()),
         api: Some(api.clone()),
         hotkey_arm: json_string(body, "hotkey_arm"),
@@ -457,6 +466,8 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
     }
     let structural = listen != before.listen
         || api != before.api
+        || codec != before.buffer_codec
+        || single_pc != before.single_pc
         || before.dests.len() != upd.dests.len()
         || upd.dests.iter().enumerate().any(|(i, p)| {
             let Some(old) = before.dests.get(i) else { return true };

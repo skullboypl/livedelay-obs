@@ -17,9 +17,20 @@ namespace livedelay {
 
 bool IsKickTarget(const QString &service, const QString &url)
 {
-	return service.contains(QStringLiteral("kick"), Qt::CaseInsensitive) ||
-	       url.contains(QStringLiteral("kick.com"), Qt::CaseInsensitive) ||
-	       url.contains(QStringLiteral("global-contribute.live-video.net"), Qt::CaseInsensitive);
+	// Twitch's automatic ingest is ingest.global-contribute.live-video.net.
+	// Treating that host as Kick rewrote a Twitch HEVC encode to H.264 NVENC.
+	if (service.contains(QStringLiteral("twitch"), Qt::CaseInsensitive))
+		return false;
+	if (url.contains(QStringLiteral("twitch.tv"), Qt::CaseInsensitive) ||
+	    url.contains(QStringLiteral("ttvnw.net"), Qt::CaseInsensitive) ||
+	    url.contains(QStringLiteral("ingest.global-contribute.live-video.net"), Qt::CaseInsensitive))
+		return false;
+	if (service.contains(QStringLiteral("kick"), Qt::CaseInsensitive) ||
+	    url.contains(QStringLiteral("kick.com"), Qt::CaseInsensitive))
+		return true;
+	// Kick's dashboard URL is <id>.global-contribute.live-video.net, not Twitch's "ingest." host.
+	return url.contains(QStringLiteral("global-contribute.live-video.net"), Qt::CaseInsensitive) &&
+	       !url.contains(QStringLiteral("ingest.global-contribute"), Qt::CaseInsensitive);
 }
 
 bool IsTwitchTarget(const QString &service, const QString &url)
@@ -199,6 +210,81 @@ bool NeedsClassicH264(const Destination &d)
 	return IsTwitchTarget(QString::fromStdString(d.service), QString::fromStdString(d.url));
 }
 
+// Same GPU family. Jumping from NVENC HEVC to x264 is the single-PC FPS hit.
+bool SameEncoderFamily(const QString &a, const QString &b)
+{
+	auto family = [](QString s) {
+		s = s.toLower();
+		if (s.contains(QStringLiteral("nvenc")))
+			return 1;
+		if (s.contains(QStringLiteral("amf")) || s.contains(QStringLiteral("amd")))
+			return 2;
+		if (s.contains(QStringLiteral("qsv")))
+			return 3;
+		return 4;
+	};
+	return family(a) == family(b);
+}
+
+// Stay on the encoder OBS already uses. A missing AV1/HEVC codec keeps `id`
+// instead of falling back to x264.
+QString CodecOnSameEncoder(const QString &id, const char *nvenc, const char *amf, const char *qsv)
+{
+	const QString l = id.toLower();
+	const char *want = nullptr;
+	if (l.contains(QStringLiteral("nvenc")))
+		want = nvenc;
+	else if (l.contains(QStringLiteral("amf")) || l.contains(QStringLiteral("amd")))
+		want = amf;
+	else if (l.contains(QStringLiteral("qsv")))
+		want = qsv;
+	else if (std::string(nvenc).find("h264") != std::string::npos && obs_encoder_get_display_name("obs_x264"))
+		return QStringLiteral("obs_x264");
+	if (!want || !obs_encoder_get_display_name(want))
+		return id;
+	return QString::fromUtf8(want);
+}
+
+QString ApplyBufferCodec(const QString &id, const std::string &codec)
+{
+	if (codec.empty() || codec == "obs")
+		return id;
+	if (codec == "h264")
+		return CodecOnSameEncoder(id, "obs_nvenc_h264_tex", "h264_texture_amf", "obs_qsv11_v2");
+	if (codec == "hevc")
+		return CodecOnSameEncoder(id, "obs_nvenc_hevc_tex", "h265_texture_amf", "obs_qsv11_hevc");
+	if (codec == "av1")
+		return CodecOnSameEncoder(id, "obs_nvenc_av1_tex", "av1_texture_amf", "obs_qsv11_av1");
+	return id;
+}
+
+const char *SimpleEncoderName(const QString &id)
+{
+	const QString l = id.toLower();
+	if (l.contains(QStringLiteral("nvenc"))) {
+		if (l.contains(QStringLiteral("av1")))
+			return "nvenc_av1";
+		if (l.contains(QStringLiteral("hevc")) || l.contains(QStringLiteral("h265")))
+			return "nvenc_hevc";
+		return "nvenc";
+	}
+	if (l.contains(QStringLiteral("amf")) || l.contains(QStringLiteral("amd"))) {
+		if (l.contains(QStringLiteral("av1")))
+			return "amd_av1";
+		if (l.contains(QStringLiteral("hevc")) || l.contains(QStringLiteral("265")))
+			return "amd_hevc";
+		return "amd";
+	}
+	if (l.contains(QStringLiteral("qsv"))) {
+		if (l.contains(QStringLiteral("av1")))
+			return "qsv_av1";
+		if (l.contains(QStringLiteral("hevc")) || l.contains(QStringLiteral("265")))
+			return "qsv_hevc";
+		return "qsv";
+	}
+	return "x264";
+}
+
 // Classic Twitch RTMP rejects HEVC/AV1 → player error #1000. Map to H.264 sibling.
 QString ForceClassicH264(const QString &id)
 {
@@ -234,6 +320,27 @@ QString FirstAudioEncoder(std::initializer_list<const char *> prefer)
 	return QStringLiteral("ffmpeg_aac");
 }
 
+void SyncObsEncoderToBufferCodec()
+{
+	const Settings s = Settings::Load(ConfigPath());
+	if (!s.single_pc || s.buffer_codec.empty() || s.buffer_codec == "obs")
+		return;
+	config_t *cfg = obs_frontend_get_profile_config();
+	if (!cfg)
+		return;
+	const QString cur = ObsStreamVideoEncoderId();
+	const QString next = ApplyBufferCodec(cur, s.buffer_codec);
+	if (next == cur || !SameEncoderFamily(cur, next))
+		return;
+	const char *mode = config_get_string(cfg, "Output", "Mode");
+	if (mode && std::string(mode) == "Advanced")
+		config_set_string(cfg, "AdvOut", "Encoder", next.toUtf8().constData());
+	else
+		config_set_string(cfg, "SimpleOutput", "StreamEncoder", SimpleEncoderName(next));
+	config_save_safe(cfg, "tmp", nullptr);
+	blog(LOG_INFO, "[livedelay] single-PC buffer uses one OBS encoder: %s", next.toUtf8().constData());
+}
+
 QString ObsStreamAudioEncoderId()
 {
 	config_t *cfg = obs_frontend_get_profile_config();
@@ -259,7 +366,8 @@ QString ObsStreamAudioEncoderId()
 EncodeSettings ResolveEncode(const Destination &d)
 {
 	EncodeSettings e;
-	e.video_encoder_id = ObsStreamVideoEncoderId();
+	const Settings cfg = Settings::Load(ConfigPath());
+	e.video_encoder_id = ApplyBufferCodec(ObsStreamVideoEncoderId(), cfg.buffer_codec);
 	const ObsOutput obs = ReadObsOutput();
 	const Service *s = Svc(d);
 	uint32_t cw = 0, ch = 0;
@@ -325,16 +433,21 @@ EncodeSettings ResolveEncode(const Destination &d)
 		break;
 	}
 	const bool classicTwitch = NeedsClassicH264(d);
-	const bool kickH264 = IsKickTarget(QString::fromStdString(d.service), QString::fromStdString(d.url));
-	if (classicTwitch || kickH264) {
+	// Kick's ingest is H.264 only. Apply that only when this destination is
+	// Kick and it is actually enabled. A Twitch-only stream keeps the OBS
+	// codec, so NVENC is not switched from HEVC to H.264 behind the user's back.
+	// An explicit buffer codec wins over that default.
+	const bool kickLive = d.enabled && cfg.buffer_codec == "obs" &&
+			      IsKickTarget(QString::fromStdString(d.service), QString::fromStdString(d.url));
+	if (kickLive) {
 		const QString was = e.video_encoder_id;
-		e.video_encoder_id = ForceClassicH264(e.video_encoder_id);
-		if (e.video_encoder_id != was) {
-			blog(LOG_WARNING, "[livedelay] %s: %s needs H.264 — mapped %s → %s", d.name.c_str(),
-			     classicTwitch ? "classic Twitch RTMP" : "Kick", was.toUtf8().constData(),
-			     e.video_encoder_id.toUtf8().constData());
-			e.summary += " · H.264";
+		const QString h264 = ForceClassicH264(was);
+		if (h264 != was && SameEncoderFamily(was, h264)) {
+			e.video_encoder_id = h264;
+			e.summary += QStringLiteral(" · H.264 (Kick)");
 		}
+	}
+	if (classicTwitch || kickLive) {
 		// Classic Twitch ingest (no Enhanced Broadcasting): >1080p often
 		// shows LIVE with bitrate but player error #1000 for viewers.
 		// Kick is not capped here. Manual width/height still honored when both are set.

@@ -326,12 +326,16 @@ void Rebuild(bool restart_live)
 
 	Settings s = Settings::Load(ConfigPath());
 	g_outs.resize(s.dests.size());
-	for (size_t i = 0; i < s.dests.size(); ++i) {
-		if (s.dests[i].ingest_key.empty())
-			s.dests[i].ingest_key = "ld" + std::to_string(i);
-		BuildOne(g_outs[i], s.dests[i], i);
+	// Single-PC: OBS's own encode is the buffer. Creating the plugin encoders
+	// here would open a second NVENC session for a picture that is thrown away.
+	if (!s.single_pc) {
+		for (size_t i = 0; i < s.dests.size(); ++i) {
+			if (s.dests[i].ingest_key.empty())
+				s.dests[i].ingest_key = "ld" + std::to_string(i);
+			BuildOne(g_outs[i], s.dests[i], i);
+		}
 	}
-	if (restart_live) {
+	if (restart_live && !s.single_pc) {
 		for (size_t i = 0; i < g_outs.size(); ++i) {
 			if (i < was_live.size() && was_live[i] && s.dests[i].enabled)
 				StartIndex(i);
@@ -614,6 +618,28 @@ void StopArmTimer()
 void StartReadyPlatforms()
 {
 	Settings s = Settings::Load(ConfigPath());
+	if (s.single_pc) {
+		bool started = false;
+		for (size_t i = 0; i < s.dests.size(); ++i) {
+			const Destination &d = s.dests[i];
+			const bool ready = d.enabled && d.autostart && !d.url.empty() && !d.key.empty();
+			if (!ready)
+				continue;
+			if (started) {
+				blog(LOG_INFO, "[livedelay] %s waits: single-PC keeps one encode on the first platform",
+				     d.name.c_str());
+				continue;
+			}
+			started = true;
+			const std::string path = "/dest/start?i=" + std::to_string(i);
+			int status = 0;
+			Request("POST", path, &status);
+			if (status != 200)
+				blog(LOG_WARNING, "[livedelay] dest/start i=%zu HTTP %d", i, status);
+		}
+		StopArmTimer();
+		return;
+	}
 	bool any_left = false;
 	for (size_t i = 0; i < s.dests.size() && i < g_outs.size(); ++i) {
 		Destination &d = s.dests[i];
@@ -746,7 +772,7 @@ void OutputsOnStreamingStarting()
 	// Last chance before we encode to platforms: stock Multitrack off + key=_idle.
 	// Do not start encoders or sleep here. This callback runs before OBS connects
 	// to LiveDelay; blocking it is why platform start failed and _idle arrived after.
-	HardenObsForLiveDelay();
+	HardenObsForLiveDelay(true);
 	if (g_outs.empty())
 		Rebuild(false);
 	g_arm_pending = true;
@@ -766,6 +792,8 @@ void OutputsOnStreamingStopping()
 
 bool OutputStartDest(size_t index)
 {
+	if (Settings::Load(ConfigPath()).single_pc)
+		return true;
 	if (g_outs.empty())
 		Rebuild(false);
 	return StartIndex(index);
