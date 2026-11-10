@@ -504,13 +504,25 @@ pub struct IniUpdate {
     pub hotkey_cut: Option<String>,
     pub hotkey_cut_after: Option<String>,
     pub arm_slots: [Option<String>; 6],
+    /// True when the caller sent a whole input list and the file should end up
+    /// with exactly those.
+    pub replace_inputs: bool,
+    pub inputs: Vec<InputUpdate>,
     pub replace_dests: bool,
     pub dests: Vec<DestUpdate>,
 }
 
 #[derive(Default)]
+pub struct InputUpdate {
+    pub name: Option<String>,
+    pub key: Option<String>,
+}
+
+#[derive(Default)]
 pub struct DestUpdate {
     pub name: Option<String>,
+    /// Name of the input feeding this platform.
+    pub input: Option<String>,
     pub service: Option<String>,
     pub server: Option<String>,
     pub url: Option<String>,
@@ -652,16 +664,44 @@ fn assign_ingest_keys(dests: &mut [Dest]) {
 pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
     let eol = if text.contains("\r\n") { "\r\n" } else { "\n" };
     let mut global = Vec::new();
+    let mut inputs: Vec<(String, Vec<String>)> = Vec::new();
     let mut dests: Vec<(String, Vec<String>)> = Vec::new();
+    // A section we do not know is held apart and written back at the end,
+    // untouched. Keeping it out of the three lists above is what stops a
+    // setter from finding one of its keys and overwriting the wrong line.
+    // Section order carries no meaning here, so moving it costs nothing.
+    let mut extras: Vec<String> = Vec::new();
+    enum At {
+        Global,
+        Input,
+        Dest,
+        Extra,
+    }
+    let mut at = At::Global;
     for raw in text.split('\n') {
         let line = raw.strip_suffix('\r').unwrap_or(raw).to_string();
         let t = line.trim();
-        if t.starts_with("[dest") && t.ends_with(']') {
-            dests.push((line, Vec::new()));
-        } else if let Some((_, lines)) = dests.last_mut() {
-            lines.push(line);
-        } else {
-            global.push(line);
+        if t.starts_with('[') && t.ends_with(']') {
+            let sec = t.trim_start_matches('[').trim_end_matches(']').trim();
+            if section_name(sec, "dest").is_some() {
+                at = At::Dest;
+                dests.push((line, Vec::new()));
+                continue;
+            }
+            if section_name(sec, "input").is_some() {
+                at = At::Input;
+                inputs.push((line, Vec::new()));
+                continue;
+            }
+            at = At::Extra;
+            extras.push(line);
+            continue;
+        }
+        match at {
+            At::Dest => dests.last_mut().expect("a dest block was opened").1.push(line),
+            At::Input => inputs.last_mut().expect("an input block was opened").1.push(line),
+            At::Extra => extras.push(line),
+            At::Global => global.push(line),
         }
     }
     let setg = |lines: &mut Vec<String>, key: &str, value: &Option<String>| {
@@ -697,6 +737,7 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
                 set_line(lines, key, v);
             }
         };
+        set(lines, "input", &patch.input);
         set(lines, "service", &patch.service);
         set(lines, "server", &patch.server);
         set(lines, "url", &patch.url);
@@ -728,6 +769,34 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
         }
     };
 
+    if upd.replace_inputs {
+        inputs.truncate(upd.inputs.len());
+    }
+    for (i, patch) in upd.inputs.iter().enumerate() {
+        if i >= inputs.len() {
+            if !upd.replace_inputs {
+                break;
+            }
+            let name = patch.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| format!("Wejscie {}", i + 1));
+            let mut lines = Vec::new();
+            if let Some(k) = &patch.key {
+                set_line(&mut lines, "key", k);
+            }
+            inputs.push((format!("[input {name}]"), lines));
+            continue;
+        }
+        let (header, lines) = &mut inputs[i];
+        if let Some(name) = &patch.name {
+            let name = name.trim();
+            if !name.is_empty() {
+                *header = format!("[input {name}]");
+            }
+        }
+        if let Some(k) = &patch.key {
+            set_line(lines, "key", k);
+        }
+    }
+
     if upd.replace_dests {
         dests.truncate(upd.dests.len());
     }
@@ -739,7 +808,11 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
             let name = patch.name.clone().filter(|s| !s.is_empty()).unwrap_or_else(|| format!("Platforma {}", i + 1));
             let mut lines = Vec::new();
             apply(&mut lines, patch);
-            set_line(&mut lines, "ingest_key", &next_ld_key(&dests));
+            // Only when there are no inputs: with them, the key belongs to the
+            // input, and one written here would contradict it.
+            if !upd.replace_inputs {
+                set_line(&mut lines, "ingest_key", &next_ld_key(&dests));
+            }
             dests.push((format!("[dest {name}]"), lines));
             continue;
         }
@@ -758,13 +831,23 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
         out.push_str(line);
         out.push_str(eol);
     }
-    for (header, lines) in &dests {
+    for (header, lines) in inputs.iter().chain(dests.iter()) {
+        if !out.is_empty() && !out.ends_with(&format!("{eol}{eol}")) {
+            out.push_str(eol);
+        }
         out.push_str(header);
         out.push_str(eol);
         for line in lines {
             out.push_str(line);
             out.push_str(eol);
         }
+    }
+    if !extras.is_empty() && !out.ends_with(&format!("{eol}{eol}")) {
+        out.push_str(eol);
+    }
+    for line in &extras {
+        out.push_str(line);
+        out.push_str(eol);
     }
     if !text.ends_with('\n') && out.ends_with(eol) {
         out.truncate(out.len() - eol.len());
@@ -924,6 +1007,30 @@ encode_mode = nope
         let c = parse("future_flag = 1\n[dest Kick]\nurl = rtmps://example/app\nkey = k\n").unwrap();
         assert_eq!(c.dests.len(), 1);
         assert_eq!(c.dests[0].key, "k");
+    }
+
+    #[test]
+    fn update_ini_writes_inputs_and_leaves_a_strange_section_alone() {
+        let text = "delay = 15\n[scenes Vertical]\ncos = 1\n\n[dest Twitch]\nurl = rtmp://a/app\nkey = k\n";
+        let upd = IniUpdate {
+            replace_inputs: true,
+            inputs: vec![
+                InputUpdate { name: Some("Poziome".into()), key: Some("ld0".into()) },
+                InputUpdate { name: Some("Pionowe".into()), key: Some("ld1".into()) },
+            ],
+            ..IniUpdate::default()
+        };
+        let out = update_ini(text, &upd);
+        assert!(out.contains("[input Poziome]"));
+        assert!(out.contains("[input Pionowe]"));
+        // The section we do not know comes back whole, keys and all.
+        assert!(out.contains("[scenes Vertical]"));
+        assert!(out.contains("cos = 1"));
+        // And reading it back gives what was written.
+        let c = parse(&out).unwrap();
+        assert_eq!(c.inputs.len(), 2);
+        assert_eq!(c.inputs[1].key, "ld1");
+        assert_eq!(c.delay_s, 15.0);
     }
 
     #[test]

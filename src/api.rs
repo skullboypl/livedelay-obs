@@ -511,6 +511,39 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
             return Err("delay_mode".into());
         }
     }
+    // Inputs, when the caller sent any. A name has to survive being written
+    // back as [input NAME], and two inputs sharing a publish key would make
+    // the pair of them unreachable.
+    let mut input_updates = Vec::new();
+    let mut input_names: Vec<String> = Vec::new();
+    let mut input_keys: Vec<String> = Vec::new();
+    for obj in json_objects(body, "inputs") {
+        let name = json_string(obj, "name").unwrap_or_default();
+        let name = name.trim().to_string();
+        if name.is_empty() || name.contains([']', '\n', '\r']) {
+            return Err("input_name".into());
+        }
+        if input_names.contains(&name) {
+            return Err("input_duplicate".into());
+        }
+        let key = json_string(obj, "key").unwrap_or_default();
+        let key = key.trim().to_string();
+        if !key.is_empty() {
+            if key.contains(['/', ' ', '\n', '\r']) {
+                return Err("input_key".into());
+            }
+            if input_keys.contains(&key) {
+                return Err("input_key_duplicate".into());
+            }
+            input_keys.push(key.clone());
+        }
+        input_names.push(name.clone());
+        input_updates.push(config::InputUpdate {
+            name: Some(name),
+            key: if key.is_empty() { None } else { Some(key) },
+        });
+    }
+    let replace_inputs = body.contains("\"inputs\"");
     let dock_theme = json_string(body, "dock_theme").filter(|s| !s.is_empty());
     if let Some(t) = &dock_theme {
         if !["obs", "dark", "contrast"].contains(&t.as_str()) {
@@ -538,13 +571,15 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
         language: json_string(body, "language"),
         dock_theme,
         delay_mode,
+        replace_inputs,
+        inputs: input_updates,
         arm_slots: std::array::from_fn(|i| json_string(body, &format!("arm_slot_{i}"))),
         replace_dests: body.contains("\"dests\""),
         dests: Vec::new(),
     };
     for obj in json_objects(body, "dests") {
         let name = json_string(obj, "name").unwrap_or_default();
-        if name.contains([']', '\n', '\r']) || name.trim().is_empty() {
+        if name.is_empty() || name.contains([']', '\n', '\r']) {
             return Err("dest_name".into());
         }
         let mode = json_string(obj, "encode_mode").unwrap_or_else(|| "obs".into());
@@ -570,6 +605,17 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
         }
         upd.dests.push(DestUpdate {
             name: Some(name),
+            input: {
+                // Pointing a platform at an input that is not in the list being
+                // written would leave the file describing something unreachable.
+                let want = json_string(obj, "input").map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+                if let Some(name) = &want {
+                    if replace_inputs && !input_names.contains(name) {
+                        return Err("dest_input".into());
+                    }
+                }
+                want
+            },
             service: json_string(obj, "service"),
             server: json_string(obj, "server"),
             url: json_string(obj, "url"),
