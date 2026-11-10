@@ -37,6 +37,8 @@ use tokio::net::{TcpListener, TcpStream};
 pub struct Ctx {
     pub hub: Arc<Hub>,
     pub dests: Vec<Arc<Dest>>,
+    /// Input name feeding each platform, in the same order as `dests`.
+    pub dest_inputs: Vec<String>,
     /// Updated live via POST /settings — Arm without ?delay= uses this.
     pub default_delay: std::sync::Mutex<Duration>,
     pub overlay: crate::overlay::OverlayStore,
@@ -107,7 +109,7 @@ pub fn state_json(ctx: &Ctx) -> String {
     let st = ctx.hub.status(Instant::now());
     let mode = if st.mode == Mode::Delayed { "delayed" } else { "live" };
     let mut j = format!(
-        "{{\"mode\":\"{mode}\",\"host\":\"{}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},\"dests\":[",
+        "{{\"mode\":\"{mode}\",\"host\":\"{}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},",
         esc(&crate::ffi::host()),
         st.input,
         st.delay_s,
@@ -120,14 +122,50 @@ pub fn state_json(ctx: &Ctx) -> String {
         ctx.overlay.rev(),
         ctx.default_delay.lock().unwrap_or_else(|e| e.into_inner()).as_secs_f64(),
     );
-    for (i, dest) in ctx.dests.iter().enumerate() {
-        let d = dest.status.lock().unwrap();
-        let ingest = ctx.hub.slot(i).map(|s| s.ingest_key.as_str()).unwrap_or("");
+    // Always present once the engine understands inputs, even when there is one
+    // made up from an older file. Interfaces read this to decide whether they
+    // may write [input ...] sections at all: an engine without it would delete
+    // them on the next start.
+    j.push_str("\"inputs\":[");
+    for (i, (name, key, w, h, st)) in ctx.hub.input_states(Instant::now()).iter().enumerate() {
         let _ = write!(
             j,
-            "{}{{\"name\":\"{}\",\"state\":\"{}\",\"kbps\":{:.0},\"on\":{},\"autostart\":{},\"error\":\"{}\",\"ingest_key\":\"{}\"}}",
+            "{}{{\"name\":\"{}\",\"key\":\"{}\",\"input\":{},\"in_kbps\":{:.0},\"mode\":\"{}\",\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"width\":{},\"height\":{}}}",
+            if i > 0 { "," } else { "" },
+            esc(name),
+            esc(key),
+            st.input,
+            st.in_kbps,
+            if st.mode == Mode::Delayed { "delayed" } else { "live" },
+            st.delay_s,
+            st.buffer_s,
+            st.buffer_mb,
+            st.arm_delay_s.map(|d| format!("{d:.1}")).unwrap_or("null".into()),
+            st.armed,
+            st.cut_pending,
+            w,
+            h
+        );
+    }
+    j.push_str("],\"dests\":[");
+    for (i, dest) in ctx.dests.iter().enumerate() {
+        let d = dest.status.lock().unwrap();
+        // The key to publish to is the input's, not the platform's own: several
+        // platforms can share one feed, and the slot order no longer matches
+        // the platform order.
+        let ingest = ctx
+            .dest_inputs
+            .get(i)
+            .and_then(|name| ctx.hub.slot_index(name))
+            .and_then(|si| ctx.hub.slot(si))
+            .map(|s| s.ingest_key.as_str())
+            .unwrap_or("");
+        let _ = write!(
+            j,
+            "{}{{\"name\":\"{}\",\"input\":\"{}\",\"state\":\"{}\",\"kbps\":{:.0},\"on\":{},\"autostart\":{},\"error\":\"{}\",\"ingest_key\":\"{}\"}}",
             if i > 0 { "," } else { "" },
             esc(&d.name),
+            esc(ctx.dest_inputs.get(i).map(String::as_str).unwrap_or("")),
             d.state,
             d.kbps,
             dest.is_on(),
@@ -142,7 +180,20 @@ pub fn state_json(ctx: &Ctx) -> String {
 
 /// Runs an action; shared by the HTTP API, the tray menu and hotkeys.
 pub fn act(ctx: &Ctx, action: &str, delay: Option<f64>) -> Result<(), String> {
+    act_on(ctx, action, delay, None)
+}
+
+/// The same, aimed at one input by name or publish key. `None` means every
+/// input, which is what Stream Deck and the panel ask for and must keep doing.
+pub fn act_on(ctx: &Ctx, action: &str, delay: Option<f64>, input: Option<&str>) -> Result<(), String> {
     let now = Instant::now();
+    let one = match input {
+        Some(name) => match ctx.hub.slot_index(name) {
+            Some(i) => Some(i),
+            None => return Err("no_input".to_string()),
+        },
+        None => None,
+    };
     let r = match action {
         "arm" => {
             let d = delay.map(Duration::from_secs_f64).unwrap_or_else(|| {
@@ -151,26 +202,44 @@ pub fn act(ctx: &Ctx, action: &str, delay: Option<f64>) -> Result<(), String> {
             if d.is_zero() || d > Duration::from_secs(3600) {
                 Err("delay_range".to_string())
             } else {
-                ctx.hub.arm_all(d)
+                match one {
+                    Some(i) => ctx.hub.arm_one(i, d),
+                    None => ctx.hub.arm_all(d),
+                }
             }
         }
-        "activate" => ctx.hub.activate_all(now),
-        "cut" => {
-            ctx.hub.cut_all(now);
-            Ok(())
-        }
-        "cut-after" => {
-            ctx.hub.cut_after_all();
-            Ok(())
-        }
-        "disarm" => {
-            ctx.hub.disarm_all();
-            Ok(())
-        }
+        "activate" => match one {
+            Some(i) => ctx.hub.activate_one(i, now),
+            None => ctx.hub.activate_all(now),
+        },
+        "cut" => match one {
+            Some(i) => ctx.hub.cut_one(i, now),
+            None => {
+                ctx.hub.cut_all(now);
+                Ok(())
+            }
+        },
+        "cut-after" => match one {
+            Some(i) => ctx.hub.cut_after_one(i),
+            None => {
+                ctx.hub.cut_after_all();
+                Ok(())
+            }
+        },
+        "disarm" => match one {
+            Some(i) => ctx.hub.disarm_one(i),
+            None => {
+                ctx.hub.disarm_all();
+                Ok(())
+            }
+        },
         _ => Err("unknown_action".to_string()),
     };
     match &r {
-        Ok(()) => log!("action: {action}"),
+        Ok(()) => match input {
+            Some(name) => log!("action: {action} on {name}"),
+            None => log!("action: {action}"),
+        },
         Err(e) => log!("action {action} refused: {e}"),
     }
     r
@@ -207,6 +276,39 @@ async fn respond_typed(sock: &mut TcpStream, code: &str, ctype: &str, body: &str
 
 async fn respond(sock: &mut TcpStream, code: &str, body: &str) -> io::Result<()> {
     respond_typed(sock, code, "application/json", body).await
+}
+
+/// `%20` and `+` back to spaces, so an input named "Pionowe 9:16" survives the
+/// trip. Anything that is not valid UTF-8 after decoding is left alone.
+fn url_decode(v: &str) -> String {
+    let b = v.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'%' if i + 2 < b.len() => {
+                match u8::from_str_radix(&v[i + 1..i + 3], 16) {
+                    Ok(byte) => {
+                        out.push(byte);
+                        i += 3;
+                    }
+                    Err(_) => {
+                        out.push(b[i]);
+                        i += 1;
+                    }
+                }
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| v.to_string())
 }
 
 fn query_i(query: &str) -> Option<usize> {
@@ -312,7 +414,7 @@ fn config_json(ctx: &Ctx) -> Result<String, String> {
     let text = std::fs::read_to_string(&ctx.ini_path).map_err(|e| e.to_string())?;
     let cfg = config::parse(&text)?;
     let mut j = format!(
-        "{{\"delay\":{},\"max_buffer_mb\":{},\"buffer_codec\":\"{}\",\"single_pc\":{},\"obs_live\":{},\"listen\":\"{}\",\"api\":\"{}\",\"host\":\"{}\",\"language\":\"{}\",\"dock_theme\":\"{}\",\"hotkey_arm\":\"{}\",\"hotkey_activate\":\"{}\",\"hotkey_cut\":\"{}\",\"hotkey_cut_after\":\"{}\",\"arm_slots\":[{}],\"dests\":[",
+        "{{\"delay\":{},\"max_buffer_mb\":{},\"buffer_codec\":\"{}\",\"single_pc\":{},\"obs_live\":{},\"listen\":\"{}\",\"api\":\"{}\",\"host\":\"{}\",\"delay_mode\":\"{}\",\"language\":\"{}\",\"dock_theme\":\"{}\",\"hotkey_arm\":\"{}\",\"hotkey_activate\":\"{}\",\"hotkey_cut\":\"{}\",\"hotkey_cut_after\":\"{}\",\"arm_slots\":[{}],",
         json_number_or(&text, "delay", cfg.delay_s),
         cfg.max_buffer_mb,
         esc(&cfg.buffer_codec),
@@ -321,6 +423,7 @@ fn config_json(ctx: &Ctx) -> Result<String, String> {
         esc(&cfg.listen),
         esc(&cfg.api),
         esc(&crate::ffi::host()),
+        esc(&cfg.delay_mode),
         esc(&ini_value(&text, "language")),
         esc(&ini_value(&text, "dock_theme")),
         esc(&ini_value(&text, "hotkey_arm")),
@@ -335,12 +438,24 @@ fn config_json(ctx: &Ctx) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join(","),
     );
+    j.push_str("\"inputs\":[");
+    for (i, inp) in cfg.inputs.iter().enumerate() {
+        let _ = write!(
+            j,
+            "{}{{\"name\":\"{}\",\"key\":\"{}\"}}",
+            if i > 0 { "," } else { "" },
+            esc(&inp.name),
+            esc(&inp.key)
+        );
+    }
+    j.push_str("],\"dests\":[");
     for (i, d) in cfg.dests.iter().enumerate() {
         let _ = write!(
             j,
-            "{}{{\"name\":\"{}\",\"service\":\"{}\",\"server\":\"{}\",\"url\":\"{}\",\"key\":\"{}\",\"ingest_key\":\"{}\",\"autostart\":{},\"enabled\":{},\"encode_mode\":\"{}\",\"video_kbps\":{},\"audio_kbps\":{},\"keyint_sec\":{},\"rate_control\":\"{}\",\"width\":{},\"height\":{},\"audio_track\":{},\"vod_track\":{},\"vod_override\":{},\"enhanced\":{}}}",
+            "{}{{\"name\":\"{}\",\"input\":\"{}\",\"service\":\"{}\",\"server\":\"{}\",\"url\":\"{}\",\"key\":\"{}\",\"ingest_key\":\"{}\",\"autostart\":{},\"enabled\":{},\"encode_mode\":\"{}\",\"video_kbps\":{},\"audio_kbps\":{},\"keyint_sec\":{},\"rate_control\":\"{}\",\"width\":{},\"height\":{},\"audio_track\":{},\"vod_track\":{},\"vod_override\":{},\"enhanced\":{}}}",
             if i > 0 { "," } else { "" },
             esc(&d.name),
+            esc(&d.input),
             esc(&d.service),
             esc(&d.server),
             esc(&d.url),
@@ -390,6 +505,12 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
     }
     let listen = json_string(body, "listen").filter(|s| !s.is_empty()).ok_or("listen")?;
     let api = json_string(body, "api").filter(|s| !s.is_empty()).ok_or("api")?;
+    let delay_mode = json_string(body, "delay_mode").filter(|s| !s.is_empty());
+    if let Some(m) = &delay_mode {
+        if m != "together" && m != "per_input" {
+            return Err("delay_mode".into());
+        }
+    }
     let dock_theme = json_string(body, "dock_theme").filter(|s| !s.is_empty());
     if let Some(t) = &dock_theme {
         if !["obs", "dark", "contrast"].contains(&t.as_str()) {
@@ -416,6 +537,7 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
         hotkey_cut_after: json_string(body, "hotkey_cut_after"),
         language: json_string(body, "language"),
         dock_theme,
+        delay_mode,
         arm_slots: std::array::from_fn(|i| json_string(body, &format!("arm_slot_{i}"))),
         replace_dests: body.contains("\"dests\""),
         dests: Vec::new(),
@@ -550,6 +672,7 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
         }
     }
     let delay = query.split('&').find_map(|kv| kv.strip_prefix("delay=")).and_then(|v| v.parse::<f64>().ok());
+    let input = query.split('&').find_map(|kv| kv.strip_prefix("input=")).map(url_decode).filter(|v| !v.is_empty());
     let slot_i = query_i(query).unwrap_or(0);
     match (method, path) {
         ("GET", "/state") => respond(&mut sock, "200 OK", &state_json(ctx)).await,
@@ -650,7 +773,7 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
                 None => respond(&mut sock, "404 Not Found", "{\"error\":\"unknown_destination\"}").await,
             }
         }
-        ("GET" | "POST", "/arm" | "/activate" | "/cut" | "/cut-after" | "/disarm") => match act(ctx, &path[1..], delay) {
+        ("GET" | "POST", "/arm" | "/activate" | "/cut" | "/cut-after" | "/disarm") => match act_on(ctx, &path[1..], delay, input.as_deref()) {
             Ok(()) => respond(&mut sock, "200 OK", &state_json(ctx)).await,
             Err(e) => respond(&mut sock, "409 Conflict", &format!("{{\"error\":\"{}\"}}", esc(&e))).await,
         },

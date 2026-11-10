@@ -7,6 +7,7 @@
 //! up: players see one continuous stream, never a reconnect.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, watch, Notify};
@@ -164,6 +165,11 @@ pub struct Shared {
     pub out: broadcast::Sender<OutMsg>,
     pub input: broadcast::Sender<OutMsg>,
     pub state: watch::Sender<u64>,
+    /// Picture size the publisher announced in onMetaData, 0 until it arrives.
+    /// It is what lets a caller say "I can see 1080x1920" instead of "it should
+    /// be vertical by now".
+    width: AtomicU32,
+    height: AtomicU32,
 }
 
 impl Shared {
@@ -179,7 +185,21 @@ impl Shared {
             out,
             input,
             state,
+            width: AtomicU32::new(0),
+            height: AtomicU32::new(0),
         })
+    }
+
+    pub fn set_size(&self, w: u32, h: u32) {
+        if w > 0 && h > 0 {
+            self.width.store(w, Ordering::Relaxed);
+            self.height.store(h, Ordering::Relaxed);
+        }
+    }
+
+    /// Width and height, both 0 while nothing has published yet.
+    pub fn size(&self) -> (u32, u32) {
+        (self.width.load(Ordering::Relaxed), self.height.load(Ordering::Relaxed))
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&mut Engine) -> R) -> R {

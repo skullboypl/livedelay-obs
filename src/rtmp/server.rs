@@ -159,6 +159,12 @@ async fn handle(mut sock: TcpStream, hub: &Arc<Hub>) -> io::Result<()> {
                     if let Some(shared) = &g.shared {
                         let v = amf0::decode_all(&m.payload);
                         if v.iter().any(|x| x.as_str() == Some("onMetaData")) {
+                            // The publisher states the picture size here, and
+                            // nowhere else we can read without decoding video.
+                            if let Some(meta) = v.iter().find(|x| x.get("width").is_some()) {
+                                let num = |k: &str| meta.get(k).and_then(Amf::as_num).unwrap_or(0.0);
+                                shared.set_size(num("width") as u32, num("height") as u32);
+                            }
                             let payload = if v.first().and_then(Amf::as_str) == Some("@setDataFrame") {
                                 m.payload
                             } else {

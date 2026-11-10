@@ -95,14 +95,17 @@ impl Proxy {
         on_fatal: impl FnOnce(String) + Send + 'static,
         extra: impl FnOnce(&Arc<hub::Hub>) + Send + 'static,
     ) -> Proxy {
-        let n = cfg.dests.len().max(1);
+        // One slot per input, not per platform: several platforms can share a
+        // feed, which is what stops OBS encoding the same picture twice.
+        let n = cfg.inputs.len().max(1);
         let per_slot = (cfg.max_buffer_mb * 1024 * 1024) / n;
-        let pairs: Vec<(String, String)> = cfg.dests.iter().map(|d| (d.name.clone(), d.ingest_key.clone())).collect();
+        let pairs: Vec<(String, String)> = cfg.inputs.iter().map(|i| (i.name.clone(), i.key.clone())).collect();
         let hub = hub::Hub::new(&pairs, per_slot, cfg.obs_live);
 
         let mut dests = Vec::new();
+        let mut dest_inputs = Vec::new();
         let mut targets = Vec::new();
-        for (i, d) in cfg.dests.iter().enumerate() {
+        for d in cfg.dests.iter() {
             match rtmp::client::parse_url(&d.url, &d.key) {
                 Ok(t) => {
                     // Keep real autostart flag for the dock; want follows enabled+autostart
@@ -112,7 +115,10 @@ impl Proxy {
                         dest.set_on(false);
                     }
                     dests.push(dest.clone());
-                    if let Some(slot) = hub.slot(i) {
+                    dest_inputs.push(d.input.clone());
+                    // By the input's name, so reordering the file changes nothing.
+                    let slot_i = cfg.inputs.iter().position(|i| i.name == d.input).unwrap_or(0);
+                    if let Some(slot) = hub.slot(slot_i) {
                         targets.push((dest, slot.shared.clone()));
                     }
                 }
@@ -125,6 +131,7 @@ impl Proxy {
         let ctx = Arc::new(api::Ctx {
             hub: hub.clone(),
             dests,
+            dest_inputs,
             default_delay: std::sync::Mutex::new(Duration::from_secs_f64(cfg.delay_s)),
             overlay: overlay::OverlayStore::load(cfg.overlay_file.clone(), &cfg.overlay),
             ini_path: cfg.ini_path.clone(),

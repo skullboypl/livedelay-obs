@@ -268,6 +268,52 @@ impl Hub {
         self.bump();
     }
 
+    /// Finds a slot by the input's name or by its publish key, so a caller can
+    /// say either. `None` when nothing matches.
+    pub fn slot_index(&self, input: &str) -> Option<usize> {
+        self.slots
+            .iter()
+            .position(|s| s.name == input)
+            .or_else(|| self.slots.iter().position(|s| s.ingest_key == input))
+    }
+
+    // One input at a time. The *_all versions above stay exactly as they were,
+    // because Stream Deck and the panel call them without naming an input.
+    pub fn arm_one(&self, i: usize, delay: Duration) -> Result<(), String> {
+        let slot = self.slots.get(i).ok_or("no_input")?;
+        slot.shared.with(|eng| eng.arm(delay)).map_err(|e| e.to_string())?;
+        self.bump();
+        Ok(())
+    }
+
+    pub fn disarm_one(&self, i: usize) -> Result<(), String> {
+        let slot = self.slots.get(i).ok_or("no_input")?;
+        slot.shared.with(|e| e.disarm());
+        self.bump();
+        Ok(())
+    }
+
+    pub fn activate_one(&self, i: usize, now: Instant) -> Result<(), String> {
+        let slot = self.slots.get(i).ok_or("no_input")?;
+        slot.shared.with(|e| e.activate(now)).map_err(|e| e.to_string())?;
+        self.bump();
+        Ok(())
+    }
+
+    pub fn cut_one(&self, i: usize, now: Instant) -> Result<(), String> {
+        let slot = self.slots.get(i).ok_or("no_input")?;
+        slot.shared.with(|e| e.cut(now));
+        self.bump();
+        Ok(())
+    }
+
+    pub fn cut_after_one(&self, i: usize) -> Result<(), String> {
+        let slot = self.slots.get(i).ok_or("no_input")?;
+        slot.shared.with(|e| e.cut_after_airs());
+        self.bump();
+        Ok(())
+    }
+
     /// Aggregate status for the dock.
     pub fn status(&self, now: Instant) -> Status {
         if self.slots.is_empty() {
@@ -302,6 +348,18 @@ impl Hub {
             None => false,
         };
         out
+    }
+
+    /// Per-input state, in file order: name, key, picture size and the delay
+    /// state of that input alone.
+    pub fn input_states(&self, now: Instant) -> Vec<(String, String, u32, u32, Status)> {
+        self.slots
+            .iter()
+            .map(|s| {
+                let (w, h) = s.shared.size();
+                (s.name.clone(), s.ingest_key.clone(), w, h, s.shared.eng.lock().unwrap().status(now))
+            })
+            .collect()
     }
 
     pub fn bump(&self) {

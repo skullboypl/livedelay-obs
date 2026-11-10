@@ -78,6 +78,17 @@ impl EncodeMode {
     }
 }
 
+/// One RTMP feed coming in. It owns a delay engine and a buffer, and any
+/// number of platforms can be fed from it, which is the whole point: OBS
+/// encodes and uploads a picture once, not once per platform.
+#[derive(Clone, Debug, Default)]
+pub struct Input {
+    pub name: String,
+    /// RTMP publish key into this proxy (`ld0`, …). Empty takes the next free one.
+    pub key: String,
+}
+
+
 #[derive(Clone, Debug)]
 pub struct Dest {
     pub name: String,
@@ -94,6 +105,9 @@ pub struct Dest {
     pub autostart: bool,
     /// RTMP publish key into this proxy (`ld0`, …). Empty or duplicated keys take the next free `ldN`.
     pub ingest_key: String,
+    /// Name of the input feeding this platform. Empty in a file written
+    /// before inputs existed, and filled in from the platform itself.
+    pub input: String,
     pub encode_mode: EncodeMode,
     pub video_kbps: u32,
     pub audio_kbps: u32,
@@ -122,6 +136,7 @@ impl Default for Dest {
             enabled: true,
             autostart: true,
             ingest_key: String::new(),
+            input: String::new(),
             encode_mode: EncodeMode::Obs,
             video_kbps: 0,
             audio_kbps: 0,
@@ -169,6 +184,12 @@ pub struct Config {
     pub single_pc: bool,
     /// Accept OBS's stock publish as the preview stream. No second encoder.
     pub obs_live: bool,
+    /// Declared inputs. Never empty once loaded: a file without any is given
+    /// one per platform, which is exactly how the proxy behaved before.
+    pub inputs: Vec<Input>,
+    /// `together` (as before) or `per_input`. The engine does not read this;
+    /// it tells the interfaces whether to show one set of buttons or one per input.
+    pub delay_mode: String,
     pub dests: Vec<Dest>,
     /// (action, key combo) pairs for global hotkeys.
     pub hotkeys: Vec<(&'static str, String)>,
@@ -189,6 +210,8 @@ impl Default for Config {
             buffer_codec: "obs".into(),
             single_pc: false,
             obs_live: false,
+            inputs: vec![],
+            delay_mode: "together".into(),
             dests: vec![],
             hotkeys: vec![],
             overlay: Overlay::default(),
@@ -222,14 +245,37 @@ fn broken_path(path: &Path) -> std::path::PathBuf {
     path.with_file_name(name)
 }
 
+/// `[dest Twitch]` with `word` = "dest" gives "Twitch"; `[destiny]` gives None,
+/// so a section that merely starts with the word is not mistaken for one.
+fn section_name<'a>(sec: &'a str, word: &str) -> Option<&'a str> {
+    let rest = sec.strip_prefix(word)?;
+    if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+        Some(rest.trim())
+    } else {
+        None
+    }
+}
+
+/// Which section the reader is inside. `Unknown` is the one that matters: a
+/// section from a newer build is copied out untouched, and its keys are not
+/// applied to anything, because reading them as global settings would quietly
+/// change the file's meaning.
+enum Section {
+    Global,
+    Dest,
+    Input,
+    Unknown,
+}
+
 /// Reads the ini. A bad line is skipped and listed in `dropped`; unknown keys
-/// stay in `repaired` so a newer or older build does not wipe them.
+/// and unknown sections stay in `repaired` so a newer or older build does not
+/// wipe them.
 pub fn parse_report(text: &str) -> ParseReport {
     let text = text.trim_start_matches('\u{feff}');
     let mut c = Config::default();
     let mut dropped = Vec::new();
     let mut kept: Vec<&str> = Vec::new();
-    let mut in_dest = false;
+    let mut section = Section::Global;
     for (n, raw) in text.lines().enumerate() {
         let line = raw.trim();
         let note = |m: &str| format!("livedelay.ini, line {}: {m}", n + 1);
@@ -238,19 +284,30 @@ pub fn parse_report(text: &str) -> ParseReport {
             continue;
         }
         if line.starts_with('[') {
-            if let Some(sec) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
-                if let Some(name) = sec.trim().strip_prefix("dest") {
-                    in_dest = true;
-                    c.dests.push(Dest { name: name.trim().to_string(), ..Dest::default() });
-                    kept.push(raw);
-                } else {
-                    in_dest = false;
-                    dropped.push(note("a section must look like [dest Name]"));
+            let sec = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')).map(str::trim);
+            match sec {
+                Some(s) if section_name(s, "dest").is_some() => {
+                    section = Section::Dest;
+                    let name = section_name(s, "dest").unwrap_or_default();
+                    c.dests.push(Dest { name: name.to_string(), ..Dest::default() });
                 }
-            } else {
-                in_dest = false;
-                dropped.push(note("a section must look like [dest Name]"));
+                Some(s) if section_name(s, "input").is_some() => {
+                    section = Section::Input;
+                    let name = section_name(s, "input").unwrap_or_default();
+                    c.inputs.push(Input { name: name.to_string(), ..Input::default() });
+                }
+                // Not ours to judge: a section this build does not know is kept
+                // word for word, exactly as unknown keys inside [dest] are.
+                _ => section = Section::Unknown,
             }
+            kept.push(raw);
+            continue;
+        }
+        // Inside a section we do not understand nothing is applied, and every
+        // line survives — including ones we could not parse, since we cannot
+        // tell a typo from a key a later build will add.
+        if matches!(section, Section::Unknown) {
+            kept.push(raw);
             continue;
         }
         let Some((k, v)) = line.split_once('=') else {
@@ -259,7 +316,16 @@ pub fn parse_report(text: &str) -> ParseReport {
         };
         let (k, v) = (k.trim(), v.trim());
         let mut keep = true;
-        if in_dest {
+        if let Section::Input = section {
+            if let Some(inp) = c.inputs.last_mut() {
+                if k == "key" {
+                    inp.key = v.into();
+                }
+            }
+            kept.push(raw);
+            continue;
+        }
+        if matches!(section, Section::Dest) {
             if let Some(d) = c.dests.last_mut() {
                 match k {
                     "url" => d.url = v.into(),
@@ -269,6 +335,7 @@ pub fn parse_report(text: &str) -> ParseReport {
                     "enabled" => d.enabled = yes(v),
                     "autostart" => d.autostart = yes(v),
                     "ingest_key" => d.ingest_key = v.into(),
+                    "input" => d.input = v.into(),
                     "encode_mode" => match EncodeMode::parse(v) {
                         Some(m) => d.encode_mode = m,
                         None => {
@@ -360,6 +427,13 @@ pub fn parse_report(text: &str) -> ParseReport {
                     }
                 },
                 "single_pc" => c.single_pc = yes(v),
+                "delay_mode" => match v {
+                    "together" | "per_input" => c.delay_mode = v.into(),
+                    _ => {
+                        keep = false;
+                        dropped.push(note("delay_mode must be together or per_input"));
+                    }
+                },
                 "obs_live" => c.obs_live = yes(v),
                 // Plugin UI language; the proxy itself has no texts to translate.
                 "language" => {}
@@ -388,6 +462,7 @@ pub fn parse_report(text: &str) -> ParseReport {
         }
     }
     assign_ingest_keys(&mut c.dests);
+    finish_inputs(&mut c, &mut dropped);
     let mut repaired = kept.join("\n");
     if text.ends_with('\n') || text.ends_with("\r\n") {
         repaired.push('\n');
@@ -419,6 +494,8 @@ pub struct IniUpdate {
     pub listen: Option<String>,
     pub api: Option<String>,
     pub language: Option<String>,
+    /// `together` or `per_input`; the engine only carries it for the interfaces.
+    pub delay_mode: Option<String>,
     /// Look of the OBS dock: "obs", "dark" or "contrast". The engine only
     /// carries it; the plugin is what reads it.
     pub dock_theme: Option<String>,
@@ -508,6 +585,50 @@ fn next_ld_key(dests: &[(String, Vec<String>)]) -> String {
     }
 }
 
+/// Gives every input a unique publish key, then ties each platform to one.
+///
+/// A file written before inputs existed has none, so each platform gets one of
+/// its own carrying its name and its key: one slot per platform, which is what
+/// the proxy did before and must keep doing.
+fn finish_inputs(c: &mut Config, dropped: &mut Vec<String>) {
+    if c.inputs.is_empty() {
+        for d in &c.dests {
+            c.inputs.push(Input { name: d.name.clone(), key: d.ingest_key.clone() });
+        }
+        let names: Vec<String> = c.inputs.iter().map(|i| i.name.clone()).collect();
+        for (d, name) in c.dests.iter_mut().zip(names) {
+            d.input = name;
+        }
+    }
+    let mut used: Vec<String> = Vec::new();
+    for (i, inp) in c.inputs.iter_mut().enumerate() {
+        if inp.key.is_empty() || used.contains(&inp.key) {
+            let mut n = i;
+            loop {
+                let key = format!("ld{n}");
+                n += 1;
+                if !used.contains(&key) {
+                    inp.key = key;
+                    break;
+                }
+            }
+        }
+        used.push(inp.key.clone());
+    }
+    // A platform pointing at an input that is not there is a mistake worth
+    // saying out loud, rather than quietly feeding it the first one.
+    let names: Vec<String> = c.inputs.iter().map(|i| i.name.clone()).collect();
+    let first = names.first().cloned().unwrap_or_default();
+    for d in c.dests.iter_mut() {
+        if d.input.is_empty() {
+            d.input = first.clone();
+        } else if !names.contains(&d.input) {
+            dropped.push(format!("livedelay.ini: platform {} points at input {}, which is not there", d.name, d.input));
+            d.input = first.clone();
+        }
+    }
+}
+
 fn assign_ingest_keys(dests: &mut [Dest]) {
     let mut used = Vec::new();
     for d in dests.iter_mut() {
@@ -564,6 +685,7 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
     setg(&mut global, "hotkey_cut", &upd.hotkey_cut);
     setg(&mut global, "hotkey_cut_after", &upd.hotkey_cut_after);
     setg(&mut global, "language", &upd.language);
+    setg(&mut global, "delay_mode", &upd.delay_mode);
     setg(&mut global, "dock_theme", &upd.dock_theme);
     for i in 0..6 {
         setg(&mut global, &format!("arm_slot_{i}"), &upd.arm_slots[i]);
@@ -802,6 +924,77 @@ encode_mode = nope
         let c = parse("future_flag = 1\n[dest Kick]\nurl = rtmps://example/app\nkey = k\n").unwrap();
         assert_eq!(c.dests.len(), 1);
         assert_eq!(c.dests[0].key, "k");
+    }
+
+    #[test]
+    fn a_file_without_inputs_gets_one_per_platform() {
+        let c = parse("[dest Twitch]
+url = rtmp://a/app
+key = k
+[dest Kick]
+url = rtmp://b/app
+key = k2
+").unwrap();
+        assert_eq!(c.inputs.len(), 2);
+        assert_eq!(c.inputs[0].name, "Twitch");
+        assert_eq!(c.inputs[0].key, "ld0");
+        assert_eq!(c.inputs[1].key, "ld1");
+        // Each platform keeps its own feed, exactly as before inputs existed.
+        assert_eq!(c.dests[0].input, "Twitch");
+        assert_eq!(c.dests[1].input, "Kick");
+    }
+
+    #[test]
+    fn platforms_share_an_input_by_name() {
+        let text = "[input Poziome]
+key = ld0
+[input Pionowe]
+key = ld1
+                    [dest Twitch]
+input = Poziome
+url = rtmp://a/app
+key = k
+                    [dest TikTok]
+input = Pionowe
+url = rtmp://b/app
+key = k2
+";
+        let c = parse(text).unwrap();
+        assert_eq!(c.inputs.len(), 2);
+        assert_eq!(c.dests[0].input, "Poziome");
+        assert_eq!(c.dests[1].input, "Pionowe");
+    }
+
+    #[test]
+    fn an_unknown_section_survives_and_stays_out_of_the_globals() {
+        // A section from a later build. Its keys must not become global
+        // settings, and the whole block must come back out untouched.
+        let text = "delay = 15
+[scenes Vertical]
+delay = 20
+name = TikTok
+[dest Twitch]
+url = rtmp://a/app
+key = k
+";
+        let report = parse_report(text);
+        assert_eq!(report.config.delay_s, 15.0, "an unknown section changed a global setting");
+        assert!(report.repaired.contains("[scenes Vertical]"));
+        assert!(report.repaired.contains("name = TikTok"));
+        assert!(report.dropped.is_empty(), "an unknown section must not count as damage");
+    }
+
+    #[test]
+    fn a_section_merely_starting_with_a_known_word_is_left_alone() {
+        let report = parse_report("[inputs]
+key = ld9
+[destiny]
+url = x
+");
+        assert!(report.config.inputs.is_empty());
+        assert!(report.config.dests.is_empty());
+        assert!(report.repaired.contains("[inputs]"));
+        assert!(report.repaired.contains("[destiny]"));
     }
 
     #[test]
