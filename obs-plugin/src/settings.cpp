@@ -10,6 +10,7 @@
 #include "services.hpp"
 #include "limits.hpp"
 #include "log.hpp"
+#include "panels.hpp"
 #include "outputs.hpp"
 #include "client.hpp"
 
@@ -166,6 +167,8 @@ Settings Settings::Load(const std::string &path)
 				dest->server_pick = v;
 			else if (k == "service")
 				dest->service = v;
+			else if (k == "channel")
+				dest->channel = v;
 			else if (k == "key")
 				dest->key = v;
 			else if (k == "enabled")
@@ -301,6 +304,8 @@ std::string Settings::Text() const
 		const Destination &d = dests[i];
 		const std::string ingest = d.ingest_key.empty() ? ("ld" + std::to_string(i)) : d.ingest_key;
 		o << "\n[dest " << d.name << "]\nservice = " << d.service << "\nurl = " << d.url;
+		if (!d.channel.empty())
+			o << "\nchannel = " << d.channel;
 		if (!d.server_pick.empty())
 			o << "\nserver = " << d.server_pick;
 		o << "\nkey = " << d.key
@@ -930,6 +935,28 @@ public:
 		url_ = new QLineEdit;
 		url_->setPlaceholderText(T("Settings.ServerPlaceholder"));
 		key_ = new QLineEdit;
+		channel_ = new QLineEdit;
+		channel_->setPlaceholderText(T("Settings.ChannelPlaceholder"));
+		channel_->setToolTip(T("Settings.ChannelTip"));
+		panelsBox_ = new QGroupBox(T("Panels.Title"));
+		auto *panelsLay = new QVBoxLayout(panelsBox_);
+		panelsAbout_ = new QLabel(T("Panels.About"));
+		panelsAbout_->setWordWrap(true);
+		panelsAbout_->setOpenExternalLinks(true);
+		panelsLay->addWidget(panelsAbout_);
+		panelsList_ = new QWidget;
+		panelsListLay_ = new QVBoxLayout(panelsList_);
+		panelsListLay_->setContentsMargins(0, 0, 0, 0);
+		panelsLay->addWidget(panelsList_);
+		panelsAdd_ = new QPushButton(T("Panels.Add"));
+		panelsNote_ = new QLabel;
+		panelsNote_->setWordWrap(true);
+		auto *panelsRow = new QHBoxLayout;
+		panelsRow->addWidget(panelsAdd_);
+		panelsRow->addWidget(panelsNote_, 1);
+		panelsLay->addLayout(panelsRow);
+		connect(channel_, &QLineEdit::textChanged, this, [this] { RefreshPanels(); });
+		connect(panelsAdd_, &QPushButton::clicked, this, [this] { AddPickedPanels(); });
 		key_->setEchoMode(QLineEdit::Password);
 		auto *show = new QCheckBox(T("Settings.Show"));
 		enabled_ = new QCheckBox(T("Settings.SendHere"));
@@ -989,6 +1016,8 @@ public:
 		form->addRow(T("Settings.Server"), url_);
 		form->addRow(T("Settings.Key"), keyRow);
 		form->addRow(QString(), keyLink_);
+		form->addRow(T("Settings.Channel"), channel_);
+		form->addRow(QString(), panelsBox_);
 		enabled_->hide(); // superseded by autostart + Start/Stop in the panel
 		form->addRow(QString(), autostart_);
 		form->addRow(T("Encode.Mode"), encodeMode_);
@@ -1237,6 +1266,7 @@ public:
 					list_->item(current_)->setText(name_->text());
 			}
 			UpdateEncodeFields();
+			RefreshPanels();
 		});
 		connect(server_, &QComboBox::activated, this, [this](int i) {
 			const QString fill = server_->itemData(i).toString();
@@ -1414,6 +1444,51 @@ private:
 	// Lists the servers (regions) of `service`. `pick` is the saved row
 	// ("auto" or a server name). Auto shares its URL with the closest ingest,
 	// so a URL match alone would snap the combo back to that ingest.
+	// The browser docks we can offer for the platform on screen. OBS shows them
+	// in Docks once it restarts, so nothing here touches the current session.
+	void RefreshPanels()
+	{
+		while (QLayoutItem *item = panelsListLay_->takeAt(0)) {
+			delete item->widget();
+			delete item;
+		}
+		panelChecks_.clear();
+		panelDefs_ = PanelsForService(service_->currentIndex() > 0 ? service_->currentText() : QString());
+		panelsBox_->setVisible(!panelDefs_.isEmpty());
+		if (panelDefs_.isEmpty())
+			return;
+		bool wantsChannel = false;
+		for (const BrowserPanel &panel : panelDefs_) {
+			const QString url = PanelAddress(panel, channel_->text());
+			auto *box = new QCheckBox(T(panel.nameKey));
+			box->setEnabled(!url.isEmpty());
+			box->setChecked(!url.isEmpty() && panel.onByDefault);
+			box->setToolTip(url.isEmpty() ? T("Panels.NeedChannel") : url);
+			if (url.isEmpty())
+				wantsChannel = true;
+			panelChecks_.push_back(box);
+			panelsListLay_->addWidget(box);
+		}
+		panelsNote_->setText(wantsChannel ? T("Panels.NeedChannel") : QString());
+	}
+
+	void AddPickedPanels()
+	{
+		int picked = 0;
+		for (int i = 0; i < panelChecks_.size() && i < panelDefs_.size(); ++i) {
+			if (!panelChecks_[i]->isChecked() || !panelChecks_[i]->isEnabled())
+				continue;
+			const QString url = PanelAddress(panelDefs_[i], channel_->text());
+			if (url.isEmpty())
+				continue;
+			QueueBrowserDock(PanelTitle(panelDefs_[i], name_->text()), url);
+			++picked;
+		}
+		panelsNote_->setText(picked == 0 ? T("Panels.NothingPicked")
+						 : T("Panels.Queued").arg(QueuedBrowserDockCount()));
+	}
+
+
 	void FillServers(const QString &service, const QString &url, const QString &pick)
 	{
 		server_->clear();
@@ -1457,6 +1532,7 @@ private:
 		if (d.server_pick == "custom")
 			d.server_pick.clear();
 		d.key = S(key_->text());
+		d.channel = S(channel_->text());
 		d.service = service_->currentIndex() > 0 ? S(service_->currentText()) : "";
 		d.enabled = true;
 		d.autostart = autostart_->isChecked();
@@ -1665,6 +1741,8 @@ private:
 				url_->setText(resolved);
 		}
 		key_->setText(Q(d.key));
+		channel_->setText(Q(d.channel));
+		RefreshPanels();
 		enabled_->setChecked(d.enabled);
 		autostart_->setChecked(d.autostart && d.enabled);
 		const int modeIdx = encodeMode_->findData(int(d.encode_mode));
@@ -1858,6 +1936,15 @@ private:
 	QComboBox *service_;
 	QComboBox *server_;
 	QLabel *keyLink_;
+	QLineEdit *channel_ = nullptr;
+	QGroupBox *panelsBox_ = nullptr;
+	QWidget *panelsList_ = nullptr;
+	QVBoxLayout *panelsListLay_ = nullptr;
+	QLabel *panelsAbout_ = nullptr;
+	QLabel *panelsNote_ = nullptr;
+	QPushButton *panelsAdd_ = nullptr;
+	QVector<QCheckBox *> panelChecks_;
+	QVector<BrowserPanel> panelDefs_;
 	QCheckBox *enabled_;
 	QCheckBox *autostart_;
 	QComboBox *encodeMode_;

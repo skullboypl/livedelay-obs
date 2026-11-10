@@ -22,6 +22,7 @@ add_library(livedelay-obs MODULE
   src/icons.cpp src/limits.cpp src/encode.cpp src/outputs.cpp src/update.cpp src/update.hpp
   src/hotkeys.cpp src/hotkeys.hpp src/i18n.cpp src/i18n.hpp src/log.cpp src/log.hpp
   src/golive.cpp src/golive.hpp
+  src/panels.cpp src/panels.hpp
   src/version.rc)
 set_target_properties(livedelay-obs PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_compile_options(livedelay-obs PRIVATE /utf-8 /W3 /Zc:__cplusplus /permissive-)

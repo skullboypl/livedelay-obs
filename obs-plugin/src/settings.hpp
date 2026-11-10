@@ -27,6 +27,9 @@ struct Destination {
 	bool enabled = true;
 	bool autostart = true;
 	std::string service; // name from OBS's service list, empty = custom server
+	/// Channel name on that platform, as it appears in its own URLs. Chat and
+	/// dashboard pages are per channel, so the browser panels need it.
+	std::string channel;
 	std::string ingest_key; // RTMP key into LiveDelay (ld0, …)
 	EncodeMode encode_mode = EncodeMode::Obs;
 	uint32_t video_kbps = 0;

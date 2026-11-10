@@ -16,6 +16,7 @@
 #include "i18n.hpp"
 #include "log.hpp"
 #include "outputs.hpp"
+#include "panels.hpp"
 #include "settings.hpp"
 #include "update.hpp"
 
@@ -68,6 +69,9 @@ bool obs_module_load(void)
 	if (!err.empty())
 		blog(LOG_WARNING, "[livedelay] %s", err.c_str());
 	livedelay::OutputsInit();
+	// Browser panels the user picked are written while OBS closes, after OBS
+	// has saved its own list of them.
+	livedelay::InstallBrowserDockWriter();
 
 	livedelay::RegisterHotkeys([](const std::string &action) {
 		// Hotkeys fire on OBS's hotkey thread; the panel lives on the UI thread.
@@ -106,6 +110,7 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	obs_frontend_remove_save_callback(OnSave, nullptr);
+	livedelay::RemoveBrowserDockWriter();
 	livedelay::UnregisterHotkeys();
 	// OBS owns and deletes the dock widget.
 	dock = nullptr;
