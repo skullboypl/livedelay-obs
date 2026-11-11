@@ -552,9 +552,15 @@ QString MultiEncodeInfo()
 	bool have = false;
 	bool differ = false;
 	int n = 0;
+	std::vector<std::string> seen;
 	for (const Destination &d : s.dests) {
 		if (!d.enabled)
 			continue;
+		if (const Input *in = s.FindInput(d.input)) {
+			if (in->external || std::find(seen.begin(), seen.end(), in->key) != seen.end())
+				continue;
+			seen.push_back(in->key);
+		}
 		++n;
 		if (d.enhanced_broadcasting &&
 		    IsTwitchTarget(QString::fromStdString(d.service), QString::fromStdString(d.url)))

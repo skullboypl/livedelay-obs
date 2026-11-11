@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.43 – 2026-11-11
+
+- **Inputs and outputs in the plugin.** Settings has an **Inputs** tab and the platforms tab is now **Outputs (platforms)**. Inputs lists OBS itself and any input another program feeds; each output picks its input: *OBS — own encode* (as before), *OBS — shared encode*, or one of the others.
+- **Shared encode.** Platforms ticked under Inputs → OBS get one stream: OBS encodes and uploads the picture once instead of once per platform. The plugin starts one encoder for them, keeps it running while any of them is live, and the note about separate encodes counts encodes, not platforms. Nothing changes for a settings file that does not use it.
+- **Vertical stream wizard.** Tools → *LiveDelay: vertical stream*. It tells you whether Aitum Vertical is loaded in this OBS, makes an input for it, gives you the address and key to paste, waits until the picture actually arrives — "I can see 720×1280, 2500 kb/s", and whether it is really vertical — and then points platforms at it. The plugin never starts an encoder of its own on an input another program feeds.
+- **Delay shared or per input.** Inputs → Delay. Per input, each input gets one button in the dock that does the next thing for it: arm, switch the delay on, go back live. The big buttons still act on everything.
+- **The dock groups platforms under a shared input** and stays as it was — one line for OBS, then the platforms — while every platform encodes for itself.
+- **Single PC feeds every platform on the shared encode,** not only the first one. Saving with Single PC on and several separate encodes asks whether to switch them to the shared one.
+- **The plugin no longer mangles inputs written by the app or the web panel.** Its settings reader knew only platforms, so `key = ld1` under `[input …]` was read as the stream key of the platform above it, and a save dropped the section. It now reads inputs, and keeps every key and section it does not know.
+
 ## 1.0.42 – 2026-11-11
 
 - **The update from 1.0.41 sticks.** 1.0.41 carried the right code but still called itself 1.0.40, so the dock kept offering the same update after it had been installed. The version now comes from one place in the build, so the two cannot drift apart again.

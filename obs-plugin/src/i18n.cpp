@@ -34,6 +34,7 @@ const char *kProbes[] = {
 	"Settings.TabAudio", "Encode.VodTrack", "WhatsNew.Title", "WhatsNew.Body1032", "Danger.Title",
 	"Dock.Panel", "Settings.DockTheme", "Settings.ServerFromDashboard", "Settings.NotRtmp",
 	"Encode.BufferCodec", "Settings.SinglePc", "Settings.ObsLive", "WhatsNew.Body1040",
+	"Settings.TabInputs", "Inputs.About", "Wizard.Title", "Wizard.SignalSeen", "WhatsNew.Body1043",
 };
 
 std::unordered_map<std::string, std::string> overlay;

@@ -312,13 +312,37 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index, const char *for
 bool StartIndex(size_t i);
 bool ProxyHasInput();
 
+// The first platform on the same input: its output encodes for all of them,
+// because one input is one picture going into LiveDelay once. Without inputs
+// in the file every platform is its own owner, as before.
+size_t OwnerOf(const Settings &s, size_t i)
+{
+	if (s.inputs.empty() || i >= s.dests.size())
+		return i;
+	for (size_t j = 0; j < i; ++j)
+		if (s.dests[j].ingest_key == s.dests[i].ingest_key)
+			return j;
+	return i;
+}
+
+// Aitum Vertical or another program publishes this input itself. Encoding
+// the OBS canvas onto the same key would knock it off.
+bool FedFromOutside(const Settings &s, size_t i)
+{
+	if (i >= s.dests.size())
+		return false;
+	const Input *in = s.FindInput(s.dests[i].input);
+	return in && in->external;
+}
+
 void Rebuild(bool restart_live)
 {
 	std::vector<bool> was_live;
 	was_live.reserve(g_outs.size());
 	for (DestOutput &o : g_outs) {
-		const bool live = o.want || (o.output && obs_output_active(o.output));
-		was_live.push_back(live);
+		// `want` is per platform now: an output running for a platform that
+		// shares its input says nothing about the platform that owns it.
+		was_live.push_back(o.want);
 		if (o.output && obs_output_active(o.output))
 			obs_output_force_stop(o.output);
 	}
@@ -332,7 +356,8 @@ void Rebuild(bool restart_live)
 		for (size_t i = 0; i < s.dests.size(); ++i) {
 			if (s.dests[i].ingest_key.empty())
 				s.dests[i].ingest_key = "ld" + std::to_string(i);
-			BuildOne(g_outs[i], s.dests[i], i);
+			if (OwnerOf(s, i) == i && !FedFromOutside(s, i))
+				BuildOne(g_outs[i], s.dests[i], i);
 		}
 	}
 	if (restart_live && !s.single_pc && !s.obs_live) {
@@ -525,7 +550,9 @@ bool TryAttachGoLive(DestOutput &o, const Destination &d)
 	return true;
 }
 
-bool StartIndex(size_t i)
+// Starts the encode owned by platform `i`. Who wants it is the caller's
+// business: `want` is per platform, the output may serve several.
+bool StartOutput(size_t i)
 {
 	if (i >= g_outs.size())
 		return false;
@@ -537,10 +564,8 @@ bool StartIndex(size_t i)
 		if (!BuildOne(o, s.dests[i], i))
 			return false;
 	}
-	if (obs_output_active(o.output)) {
-		o.want = true;
+	if (obs_output_active(o.output))
 		return true;
-	}
 	Settings live = Settings::Load(ConfigPath());
 	if (i < live.dests.size()) {
 		const Destination &d = live.dests[i];
@@ -561,7 +586,6 @@ bool StartIndex(size_t i)
 	}
 	RebindMedia(o);
 	if (o.output && obs_output_start(o.output)) {
-		o.want = true;
 		blog(LOG_INFO, "[livedelay] started encode for %s%s", o.name.c_str(), o.golive ? " (GoLive)" : "");
 		return true;
 	}
@@ -571,7 +595,6 @@ bool StartIndex(size_t i)
 			PushEgress(i, live.dests[i].url, live.dests[i].key);
 			RebindMedia(o);
 			if (o.output && obs_output_start(o.output)) {
-				o.want = true;
 				blog(LOG_INFO, "[livedelay] started encode for %s", o.name.c_str());
 				return true;
 			}
@@ -583,8 +606,33 @@ bool StartIndex(size_t i)
 	return false;
 }
 
+bool StartIndex(size_t i)
+{
+	if (i >= g_outs.size())
+		return false;
+	const Settings s = Settings::Load(ConfigPath());
+	if (!FedFromOutside(s, i) && !StartOutput(OwnerOf(s, i)))
+		return false;
+	g_outs[i].want = true;
+	return true;
+}
+
+// Platform `i` has its picture: its own encode is running, or another program
+// feeds its input.
+bool Running(const Settings &s, size_t i)
+{
+	if (FedFromOutside(s, i))
+		return true;
+	const size_t owner = OwnerOf(s, i);
+	return owner < g_outs.size() && g_outs[owner].output && obs_output_active(g_outs[owner].output);
+}
+
 bool FallbackX264(size_t i)
 {
+	{
+		const Settings s = Settings::Load(ConfigPath());
+		i = OwnerOf(s, i);
+	}
 	if (i >= g_outs.size() || g_outs[i].tried_x264)
 		return false;
 	const char *id = g_outs[i].video ? obs_encoder_get_id(g_outs[i].video) : nullptr;
@@ -624,18 +672,27 @@ void StartReadyPlatforms()
 		return;
 	}
 	if (s.single_pc) {
-		bool started = false;
+		// OBS's own encode is the one stream there is, and it goes in on one
+		// key: the first ready platform's. Every platform sharing that input
+		// gets it; one fed by another program needs nothing from OBS.
+		std::string fed;
 		for (size_t i = 0; i < s.dests.size(); ++i) {
 			const Destination &d = s.dests[i];
 			const bool ready = d.enabled && d.autostart && !d.url.empty() && !d.key.empty();
 			if (!ready)
 				continue;
-			if (started) {
-				blog(LOG_INFO, "[livedelay] %s waits: single-PC keeps one encode on the first platform",
-				     d.name.c_str());
-				continue;
+			if (!FedFromOutside(s, i)) {
+				const std::string key = d.ingest_key.empty() ? "ld" + std::to_string(i) : d.ingest_key;
+				if (fed.empty())
+					fed = key;
+				if (key != fed) {
+					blog(LOG_INFO,
+					     "[livedelay] %s waits: single-PC has one encode and it feeds another input. "
+					     "Give this platform the shared encode in Settings -> Inputs.",
+					     d.name.c_str());
+					continue;
+				}
 			}
-			started = true;
 			const std::string path = "/dest/start?i=" + std::to_string(i);
 			int status = 0;
 			Request("POST", path, &status);
@@ -654,7 +711,7 @@ void StartReadyPlatforms()
 		const bool ready = d.enabled && d.autostart && !d.url.empty() && !d.key.empty();
 		if (!ready && !g_outs[i].want)
 			continue;
-		if (g_outs[i].want && g_outs[i].output && obs_output_active(g_outs[i].output))
+		if (g_outs[i].want && Running(s, i))
 			continue;
 		if (!StartIndex(i)) {
 			if (FallbackX264(i) && StartIndex(i)) {
@@ -724,8 +781,16 @@ void StopIndex(size_t i)
 {
 	if (i >= g_outs.size())
 		return;
-	DestOutput &o = g_outs[i];
-	o.want = false;
+	g_outs[i].want = false;
+	const Settings s = Settings::Load(ConfigPath());
+	const size_t owner = OwnerOf(s, i);
+	// Another platform on the same input still needs the picture.
+	for (size_t j = 0; j < g_outs.size(); ++j)
+		if (j != i && g_outs[j].want && OwnerOf(s, j) == owner)
+			return;
+	if (owner >= g_outs.size())
+		return;
+	DestOutput &o = g_outs[owner];
 	if (o.output && obs_output_active(o.output))
 		obs_output_stop(o.output);
 }

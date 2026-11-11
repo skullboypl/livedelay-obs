@@ -19,6 +19,25 @@ const char *DockThemeKey(DockTheme theme);
 /// The theme saved in livedelay.ini right now.
 DockTheme CurrentDockTheme();
 
+/// One RTMP feed into LiveDelay. A platform names the input that feeds it, so
+/// several platforms can share one picture and one encode. A file without any
+/// [input …] runs as it always did: one input per platform, on its ingest_key.
+struct Input {
+	std::string name;
+	std::string key; // RTMP publish key into LiveDelay (ld0, …)
+	/// Fed by another program — Aitum Vertical, a second OBS — rather than by
+	/// an encoder this plugin starts. The plugin then never publishes on its
+	/// key, or two programs would fight over it. `feed = external` in the ini.
+	bool external = false;
+	/// One platform's own encode: the arrangement every older file has, named
+	/// after the platform it feeds. The interfaces show it as that platform's
+	/// "own encode", never as an input. `own = yes` in the ini; an unmarked
+	/// input that feeds exactly one platform of its own name counts too.
+	bool own = false;
+	/// Lines of the section this build does not use, written back as they were.
+	std::vector<std::string> extra;
+};
+
 // livedelay.ini as the settings window sees it. The proxy reads the same file.
 struct Destination {
 	std::string name, url, key;
@@ -31,6 +50,12 @@ struct Destination {
 	/// dashboard pages are per channel, so the browser panels need it.
 	std::string channel;
 	std::string ingest_key; // RTMP key into LiveDelay (ld0, …)
+	/// Name of the input feeding this platform. With inputs in the file,
+	/// Load() also sets ingest_key to that input's key, so the output code
+	/// keeps asking one field.
+	std::string input;
+	/// Lines this build does not know, kept so a save does not erase them.
+	std::vector<std::string> extra;
 	EncodeMode encode_mode = EncodeMode::Obs;
 	uint32_t video_kbps = 0;
 	uint32_t audio_kbps = 0;
@@ -82,12 +107,31 @@ struct Settings {
 	std::string overlay_armed = "ARMED {s}s";
 	std::string overlay_delayed = "DELAY {s}s";
 	std::vector<Destination> dests;
+	/// Empty = the file has no [input …]: one per platform, as before.
+	std::vector<Input> inputs;
+	/// "together" (one set of buttons for everything) or "per_input". The
+	/// engine does not care; it tells the dock what to show.
+	std::string delay_mode = "together";
+	/// Global lines this build does not know, and whole sections it does not
+	/// know (header included). Both go back into the file untouched: the app,
+	/// the web panel or a newer build may have written them.
+	std::vector<std::string> extra;
+	std::vector<std::string> foreign;
 
 	static Settings Load(const std::string &path);
 	bool Save(const std::string &path) const;
 	std::string Text() const; // the ini as written by Save()
 	int RtmpPort() const;
+	/// The input called `name`, or nullptr.
+	const Input *FindInput(const std::string &name) const;
+	/// The inputs as the engine runs them: the file's own, or — for a file
+	/// without any — one per platform named after it, on its ingest key.
+	std::vector<Input> EffectiveInputs() const;
+	bool PerInputDelay() const { return delay_mode == "per_input"; }
 };
+
+/// The next ld… that no input and no platform publishes on.
+std::string FreeIngestKey(const Settings &s);
 
 // Path of the ini inside OBS's plugin config folder (created if missing).
 std::string ConfigPath();

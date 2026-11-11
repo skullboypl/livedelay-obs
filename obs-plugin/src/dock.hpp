@@ -8,6 +8,7 @@
 #include <chrono>
 #include <deque>
 #include <map>
+#include <set>
 #include <memory>
 #include <string>
 
@@ -48,6 +49,7 @@ private:
 	void ShowError(const QString &msg);
 	void ShowDestinations(const std::string &json);
 	void UpdateBanner();
+	void ReadInputs(const Settings &s);
 
 	QFrame *banner_;
 	QFrame *limits_;
@@ -76,6 +78,10 @@ private:
 	std::string language_;
 	std::string engine_text_; // ini parts that only a proxy restart picks up
 	bool obsLive_ = false;
+	bool perInput_ = false; // delay_mode = per_input: a delay button on each input
+	std::set<std::string> ownInputs_, sharedInputs_; // by name, from the ini
+	std::map<std::string, int> inputDelay_;           // seconds typed per input key
+	std::map<std::string, int> inputArmSeen_;         // armed seconds last drawn, per input key
 	std::string last_; // last state JSON, empty while offline
 	std::map<std::string, std::deque<double>> history_;
 	std::chrono::steady_clock::time_point lastSample_{};

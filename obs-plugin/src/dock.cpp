@@ -14,10 +14,14 @@
 
 #include <obs-frontend-api.h>
 
+#include <QApplication>
 #include <QDesktopServices>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QMetaObject>
 #include <QPainter>
@@ -139,8 +143,11 @@ static QString LimitsKey(const QStringList &problems)
 // unlike a delay or a theme, which are picked up as they are.
 static std::string EngineText(const Settings &s)
 {
+	// Every section counts: [input …] sits before the platforms and decides
+	// which slot feeds which, so an input changed in the web panel or the app
+	// needs the same restart as a platform does.
 	const std::string all = s.Text();
-	const size_t at = all.find("[dest ");
+	const size_t at = all.find("\n[");
 	return s.listen + "|" + s.api + "|" + (at == std::string::npos ? std::string() : all.substr(at));
 }
 
@@ -182,6 +189,7 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 		limitsAck_ = QString::fromStdString(s.limits_ack);
 		engine_text_ = EngineText(s);
 		obsLive_ = s.obs_live;
+		ReadInputs(s);
 		configStamp_ = ConfigStamp();
 	}
 
@@ -225,6 +233,11 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	delay_->setSuffix(" s");
 	delay_->setToolTip(T("Dock.DelayTip"));
 	delay_->setMinimumHeight(32);
+	// Other seconds than the armed ones turn Arm into "arm again".
+	connect(delay_, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+		if (!last_.empty())
+			ShowState(std::string(last_));
+	});
 	arm_ = Button("Dock.Arm", "Dock.ArmTip", Icon::Arm, Accent::Arm);
 	activate_ = Button("Dock.Activate", "Dock.ActivateTip", Icon::Activate, Accent::Tally);
 	cut_ = Button("Dock.Cut", "Dock.CutTip", Icon::Live, Accent::Live);
@@ -391,6 +404,7 @@ void Dock::ReloadConfig()
 		ApplyTheme();
 	}
 	limitsAck_ = QString::fromStdString(s.limits_ack);
+	ReadInputs(s);
 	if (s.language != language_) {
 		language_ = s.language;
 		ApplyLanguage(s.language); // retranslates the dock through plugin.cpp
@@ -419,6 +433,17 @@ void Dock::ReloadConfig()
 	    s.delay <= delay_->maximum())
 		delay_->setValue(s.delay);
 	UpdateBanner();
+}
+
+// Which inputs are a platform's own encode and which are shared: the dock
+// draws the first kind as the platform's row and the second as a heading.
+void Dock::ReadInputs(const Settings &s)
+{
+	perInput_ = s.PerInputDelay();
+	ownInputs_.clear();
+	sharedInputs_.clear();
+	for (const Input &in : s.EffectiveInputs())
+		(in.own ? ownInputs_ : sharedInputs_).insert(in.name);
 }
 
 void Dock::Act(const std::string &action)
@@ -506,6 +531,9 @@ void Dock::ShowOffline()
 
 void Dock::ShowDestinations(const std::string &j)
 {
+	QString focusKey;
+	if (QWidget *f = QApplication::focusWidget(); f && dests_->isAncestorOf(f))
+		focusKey = f->property("ldInputKey").toString();
 	// Rebuild the rows; there are only a handful and state changes are rare.
 	while (QLayoutItem *item = destGrid_->takeAt(0)) {
 		delete item->widget();
@@ -526,51 +554,170 @@ void Dock::ShowDestinations(const std::string &j)
 		return h;
 	};
 
+	const QJsonObject doc = QJsonDocument::fromJson(QByteArray::fromStdString(j)).object();
+	const QJsonArray inputs = doc.value("inputs").toArray();
+	const QJsonArray dests = doc.value("dests").toArray();
+	const QString muted = QStringLiteral("color: %1;").arg(pal_.muted.name());
+
+	// Columns: dot, name, sparkline, state (two wide), Live/Stop.
 	int row = 0;
-	{
-		const bool input = JsonBool(j, "input");
-		const double kbps = input ? JsonNumber(j, "in_kbps") : 0;
-		const QColor inColor = input ? pal_.text : pal_.muted;
-		auto *dot = new QLabel(QString::fromUtf8("●"));
-		// What OBS feeds in is none of the three on-air states, so it stays in
-		// the panel's own greys: bright when there is signal, dim when not.
-		dot->setStyleSheet(QStringLiteral("color: %1;").arg(inColor.name()));
-		auto *name = new QLabel(T("Dock.InputRow"));
-		auto *rate = new QLabel(input ? QString("%1 kb/s").arg(kbps, 0, 'f', 0) : T("Dock.NoSignalShort"));
-		rate->setStyleSheet(QStringLiteral("color: %1;").arg(pal_.muted.name()));
-		destGrid_->addWidget(dot, row, 0);
-		destGrid_->addWidget(name, row, 1);
-		destGrid_->addWidget(new Sparkline(history("in", kbps), inColor), row, 2);
-		destGrid_->addWidget(rate, row, 3);
-		row++;
-	}
-	// Inputs carry a "name" too and come before the platforms, so the rows are
-	// read from the dests array alone. Reading every "name" in the document
-	// listed each input as a platform and shifted every row's dest/start index.
-	const size_t destsAt = j.find("\"dests\":[");
-	size_t p = destsAt == std::string::npos ? j.size() : destsAt;
-	int index = 0;
-	while ((p = j.find("\"name\":\"", p)) != std::string::npos) {
-		const std::string state = JsonString(j, "state", p);
-		const bool on = JsonBool(j, "on", p);
-		const double kbps = JsonNumber(j, "kbps", 0, p);
-		const std::string error = JsonString(j, "error", p);
+	std::map<QString, QSpinBox *> spins;
+
+	// The delay state of one input, in words, for the line that names it.
+	auto delayState = [&](const QJsonObject &in) -> QString {
+		if (!perInput_)
+			return {};
+		const bool delayed = in.value("mode").toString() == "delayed";
+		const bool armed = in.value("armed").toBool();
+		const int arm = int(in.value("arm_delay").toDouble(-1) + 0.5);
+		const int active = int(in.value("active_delay").toDouble(-1) + 0.5);
+		const int buffer = int(in.value("buffer_s").toDouble());
+		const QString next = arm <= 0 ? QString() : armed ? T("Inputs.ArmedShort").arg(arm) : T("Inputs.Filling").arg(buffer).arg(arm);
+		if (!delayed)
+			return next;
+		QString s = T("Inputs.DelayedShort").arg(active > 0 ? active : int(in.value("delay").toDouble() + 0.5));
+		if (arm > 0 && active > 0 && arm != active)
+			s += QStringLiteral(" → ") + next;
+		return s;
+	};
+
+	// With delay_mode = per_input every input carries its own small copy of
+	// the controls above — seconds and Arm, then Activate, Live, Live after and
+	// Disarm — and the big ones are hidden, so nothing on screen claims to act
+	// on everything.
+	auto delayControls = [&](const QJsonObject &in) -> QWidget * {
+		const QString qkey = in.value("key").toString();
+		const std::string key = qkey.toStdString();
+		if (!perInput_ || key.empty())
+			return nullptr;
+		const QString inputName = in.value("name").toString();
+		const bool delayed = in.value("mode").toString() == "delayed";
+		const bool armed = in.value("armed").toBool();
+		const bool cutPending = in.value("cut_pending").toBool();
+		const int arm = int(in.value("arm_delay").toDouble(-1) + 0.5);
+		const int active = int(in.value("active_delay").toDouble(-1) + 0.5);
+		const bool retime = delayed && arm > 0 && active > 0 && arm != active;
+		int &want = inputDelay_[key];
+		if (want <= 0)
+			want = arm > 0 ? arm : delay_->value();
+		// Armed from elsewhere — a hotkey, Stream Deck, the web panel: the box
+		// follows, or it would offer to arm again the moment it was armed.
+		int &seen = inputArmSeen_[key];
+		if (arm > 0 && arm != seen)
+			want = arm;
+		seen = arm;
+
+		auto *spin = new QSpinBox;
+		spin->setRange(1, 3600);
+		spin->setSuffix(QStringLiteral(" s"));
+		spin->setValue(want);
+		spin->setFixedWidth(70);
+		spin->setToolTip(T("Inputs.DelayTip").arg(inputName));
+		spin->setProperty("ldInputKey", qkey);
+		spins[qkey] = spin;
+
+		struct Mini {
+			QPushButton *b;
+			Icon icon;
+			QColor color;
+		};
+		const std::string who = "?input=" + key;
+		auto make = [&](const char *text, const char *tip, Icon icon, const QColor &c, const std::string &action) {
+			auto *b = new QPushButton(T(text));
+			b->setToolTip(T(tip).arg(inputName));
+			b->setIconSize(QSize(12, 12));
+			b->setCursor(Qt::PointingHandCursor);
+			if (!action.empty())
+				connect(b, &QPushButton::clicked, this, [this, action] { Act(action); });
+			return Mini{b, icon, c};
+		};
+		const Mini armBtn = make("Dock.Arm", "Inputs.ArmOneTip", Icon::Arm, pal_.arm, std::string());
+		const Mini actBtn = make(retime ? "Inputs.RetimeShort" : "Inputs.ActivateShort",
+					 retime ? "Inputs.RetimeOneTip" : "Inputs.ActivateOneTip", Icon::Activate, pal_.tally,
+					 "activate" + who);
+		const Mini cutBtn = make("Dock.Cut", "Inputs.CutOneTip", Icon::Live, pal_.live, "cut" + who);
+		const Mini afterBtn = make("Inputs.CutAfterShort", "Inputs.CutAfterOneTip", Icon::LiveAfter, pal_.live, "cut-after" + who);
+		const Mini disBtn = make("Dock.Disarm", "Inputs.DisarmOneTip", Icon::Disarm, pal_.muted, "disarm" + who);
+		connect(armBtn.b, &QPushButton::clicked, this,
+			[this, spin, who] { Act("arm" + who + "&delay=" + std::to_string(spin->value())); });
+		actBtn.b->setEnabled(armed && (!delayed || retime));
+		cutBtn.b->setEnabled(delayed);
+		afterBtn.b->setEnabled(delayed && !cutPending);
+		disBtn.b->setEnabled(arm > 0 && (!delayed || retime));
+
+		// The same seconds cannot be armed twice; other seconds can, and that
+		// is what turns Arm into "arm again". Whatever the input is heading
+		// towards is the one filled button, as above.
+		const Palette pal = pal_;
+		auto show = [=](int seconds) {
+			const bool rearm = (arm > 0 && arm != seconds) || (delayed && arm <= 0 && active > 0 && active != seconds);
+			armBtn.b->setText(T(rearm ? "Dock.Rearm" : "Dock.Arm"));
+			armBtn.b->setToolTip(T(rearm ? "Inputs.RearmOneTip" : "Inputs.ArmOneTip").arg(inputName));
+			armBtn.b->setEnabled((!delayed && arm <= 0) || rearm);
+			const QPushButton *primary = rearm ? armBtn.b
+						     : retime ? actBtn.b
+						     : delayed ? cutBtn.b
+						     : arm > 0 ? actBtn.b
+							       : armBtn.b;
+			for (const Mini &m : {armBtn, actBtn, cutBtn, afterBtn, disBtn}) {
+				const bool loud = m.b == primary && m.b->isEnabled();
+				m.b->setStyleSheet((loud ? FilledButton(m.color) : GhostButton(m.color, pal.text)) +
+						   QStringLiteral(" QPushButton { padding: 2px 6px; }"));
+				m.b->setIcon(MakeIcon(m.icon, loud ? InkOn(m.color) : m.b->isEnabled() ? m.color : pal.muted));
+			}
+		};
+		show(want);
+		connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, [this, key, show](int v) {
+			inputDelay_[key] = v;
+			show(v);
+		});
+
+		auto *box = new QWidget;
+		auto *lay = new QVBoxLayout(box);
+		lay->setContentsMargins(0, 0, 0, 6);
+		lay->setSpacing(4);
+		auto *top = new QHBoxLayout;
+		top->setSpacing(4);
+		top->addWidget(spin);
+		top->addWidget(armBtn.b, 1);
+		auto *bottom = new QHBoxLayout;
+		bottom->setSpacing(4);
+		for (const Mini &m : {actBtn, cutBtn, afterBtn, disBtn})
+			bottom->addWidget(m.b, 1);
+		lay->addLayout(top);
+		lay->addLayout(bottom);
+		return box;
+	};
+
+	// One platform row. `index` is its place in the engine's list: that is what
+	// dest/start and the OBS outputs are addressed by, whatever order it is shown
+	// in. `own` is the input feeding only this platform, when its delay controls
+	// belong under this row.
+	auto addDest = [&](int index, bool indent, const QJsonObject &own) {
+		const QJsonObject d = dests.at(index).toObject();
+		const std::string state = d.value("state").toString().toStdString();
+		const bool on = d.value("on").toBool();
+		const double kbps = d.value("kbps").toDouble();
+		const QString error = d.value("error").toString();
 		const QColor color = state == "live"	 ? pal_.live
 				     : state == "error"	 ? pal_.tally
 				     : state == "stopped" ? pal_.muted
 							  : pal_.arm;
-
 		auto *dot = new QLabel(QString::fromUtf8("●"));
 		dot->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
-		const std::string destName = JsonString(j, "name", p);
-		auto *name = new QLabel(QString::fromStdString(destName));
+		const QString destName = d.value("name").toString();
+		auto *name = new QLabel(destName);
+		if (indent)
+			name->setContentsMargins(14, 0, 0, 0);
 		QString st = T(("Dest." + state).c_str());
 		if (kbps > 0)
 			st += QString(" · %1 kb/s").arg(kbps, 0, 'f', 0);
+		if (const QString ds = delayState(own); !ds.isEmpty())
+			st += QStringLiteral(" · ") + ds;
 		auto *stateLabel = new QLabel(st);
-		stateLabel->setStyleSheet(QStringLiteral("color: %1;").arg(pal_.muted.name()));
-		if (!error.empty())
-			stateLabel->setToolTip(QString::fromStdString(error));
+		stateLabel->setStyleSheet(muted);
+		if (!error.isEmpty())
+			stateLabel->setToolTip(error);
 		// Per-platform Start / Stop never shouts: the dock's loud button is
 		// the delay action, not one of a handful of rows.
 		auto *toggle = new QPushButton(on ? T("Dock.DestStop") : T("Dock.DestStart"));
@@ -580,31 +727,119 @@ void Dock::ShowDestinations(const std::string &j)
 		toggle->setIconSize(QSize(12, 12));
 		toggle->setCursor(Qt::PointingHandCursor);
 		const std::string path = std::string(on ? "dest/stop" : "dest/start") + "?i=" + std::to_string(index);
-		const int destIndex = index;
 		const bool turningOn = !on;
-		connect(toggle, &QPushButton::clicked, this, [this, path, destIndex, turningOn] {
+		connect(toggle, &QPushButton::clicked, this, [this, path, index, turningOn] {
 			if (turningOn)
-				OutputStartDest(size_t(destIndex));
+				OutputStartDest(size_t(index));
 			else
-				OutputStopDest(size_t(destIndex));
+				OutputStopDest(size_t(index));
 			Act(path);
 		});
-
 		destGrid_->addWidget(dot, row, 0);
 		destGrid_->addWidget(name, row, 1);
-		destGrid_->addWidget(new Sparkline(history(destName, state == "live" ? kbps : 0), color), row, 2);
-		destGrid_->addWidget(stateLabel, row, 3);
-		destGrid_->addWidget(toggle, row, 4);
-		p += 8;
+		destGrid_->addWidget(new Sparkline(history(destName.toStdString(), state == "live" ? kbps : 0), color), row, 2);
+		destGrid_->addWidget(stateLabel, row, 3, 1, 2);
+		destGrid_->addWidget(toggle, row, 5);
 		row++;
-		index++;
+		if (QWidget *delay = delayControls(own)) {
+			destGrid_->addWidget(delay, row, 1, 1, 5);
+			row++;
+		}
+	};
+
+	// What comes in: a shared input, or everything OBS sends taken as one line.
+	// Neither of the on-air colours unless it is delayed or armed: bright when
+	// there is signal, dim when not.
+	auto addInput = [&](const QString &label, const QJsonObject &in, bool shared) {
+		const bool signal = in.value("input").toBool();
+		const double kbps = signal ? in.value("in_kbps").toDouble() : 0;
+		const bool delayed = in.value("mode").toString() == "delayed";
+		const bool armed = in.value("armed").toBool() || in.value("arm_delay").toDouble(-1) > 0;
+		const QColor color = !shared ? (signal ? pal_.text : pal_.muted)
+					     : delayed ? pal_.tally : armed ? pal_.arm : signal ? pal_.text : pal_.muted;
+		auto *dot = new QLabel(QString::fromUtf8("●"));
+		dot->setStyleSheet(QStringLiteral("color: %1;").arg(color.name()));
+		auto *name = new QLabel(label);
+		if (shared)
+			name->setStyleSheet(QStringLiteral("font-weight: 600;"));
+		QString st = signal ? QString("%1 kb/s").arg(kbps, 0, 'f', 0) : T("Dock.NoSignalShort");
+		if (shared) {
+			if (const QString ds = delayState(in); !ds.isEmpty())
+				st += QStringLiteral(" · ") + ds;
+			else if (delayed)
+				st += QStringLiteral(" · ") + T("Inputs.DelayedShort").arg(int(in.value("delay").toDouble() + 0.5));
+		}
+		auto *rate = new QLabel(st);
+		rate->setStyleSheet(muted);
+		destGrid_->addWidget(dot, row, 0);
+		destGrid_->addWidget(name, row, 1);
+		destGrid_->addWidget(new Sparkline(history("in:" + in.value("key").toString().toStdString(), kbps), color), row, 2);
+		destGrid_->addWidget(rate, row, 3, 1, 3);
+		row++;
+		if (QWidget *delay = shared ? delayControls(in) : nullptr) {
+			destGrid_->addWidget(delay, row, 1, 1, 5);
+			row++;
+		}
+	};
+
+	// A platform's own input is not shown as an input: it is that platform's
+	// row. The settings say which ones those are; an engine still running on
+	// an older reading of the file is judged by the same rule the file is.
+	auto isOwn = [&](const QJsonObject &in) {
+		const QString name = in.value("name").toString();
+		if (ownInputs_.count(name.toStdString()))
+			return true;
+		if (sharedInputs_.count(name.toStdString()))
+			return false;
+		int fed = 0;
+		bool same = false;
+		for (const QJsonValue &d : dests)
+			if (d.toObject().value("input").toString() == name) {
+				++fed;
+				same = d.toObject().value("name").toString() == name;
+			}
+		return fed == 1 && same;
+	};
+
+	bool anyShared = false;
+	for (const QJsonValue &v : inputs)
+		anyShared = anyShared || !isOwn(v.toObject());
+
+	// Every platform encoding for itself is the picture the dock always had:
+	// one line for what OBS sends, then the platforms.
+	if (!anyShared) {
+		QJsonObject whole;
+		whole.insert("input", doc.value("input"));
+		whole.insert("in_kbps", doc.value("in_kbps"));
+		addInput(T("Dock.InputRow"), whole, false);
 	}
-	if (index == 0) {
+	std::vector<bool> shown(size_t(dests.size()), false);
+	for (const QJsonValue &v : inputs) {
+		const QJsonObject in = v.toObject();
+		const QString name = in.value("name").toString();
+		const bool own = isOwn(in);
+		if (!own)
+			addInput(name, in, true);
+		for (int n = 0; n < dests.size(); ++n)
+			if (dests.at(n).toObject().value("input").toString() == name) {
+				addDest(n, !own, own ? in : QJsonObject());
+				shown[size_t(n)] = true;
+			}
+	}
+	// An engine too old to report inputs, or a platform naming one that is
+	// not there: the row still has to be on screen.
+	for (int n = 0; n < dests.size(); ++n)
+		if (!shown[size_t(n)])
+			addDest(n, false, QJsonObject());
+	if (dests.isEmpty()) {
 		auto *none = new QLabel(T("Dock.NoPlatforms"));
 		none->setWordWrap(true);
-		none->setStyleSheet(QStringLiteral("color: %1;").arg(pal_.muted.name()));
-		destGrid_->addWidget(none, row, 0, 1, 5);
+		none->setStyleSheet(muted);
+		destGrid_->addWidget(none, row, 0, 1, 6);
 	}
+	// The rows were rebuilt under whoever was typing seconds: give the box back.
+	if (auto it = spins.find(focusKey); !focusKey.isEmpty() && it != spins.end())
+		it->second->setFocus();
 	dests_->show();
 }
 
@@ -623,11 +858,19 @@ void Dock::ShowState(const std::string &j)
 
 	if (!delay_set_) {
 		delay_set_ = true;
+		delay_->blockSignals(true);
 		delay_->setValue(int(arm_delay > 0 ? arm_delay : JsonNumber(j, "default_delay", 15)));
+		delay_->blockSignals(false);
 	}
+	// The armed delay that is on air. Arming another value while delayed does
+	// not change it until Activate is pressed again.
+	const double active = JsonNumber(j, "active_delay", -1);
+	const int armS = int(arm_delay + 0.5), activeS = int(active + 0.5), wantS = delay_->value();
+	const bool retime = delayed && arm_delay > 0 && active > 0 && armS != activeS;
+	const bool rearm = (arm_delay > 0 && armS != wantS) || (delayed && arm_delay <= 0 && active > 0 && activeS != wantS);
 
 	// Show configured Arm seconds, not measured keyframe lag (always a bit higher).
-	const double shown_delay = arm_delay > 0 ? arm_delay : delay;
+	const double shown_delay = active > 0 ? active : arm_delay > 0 ? arm_delay : delay;
 	if (delayed)
 		Pill(status_, T("Dock.StateDelayed").arg(shown_delay, 0, 'f', 0), pal_.tally, pal_);
 	else if (!input)
@@ -639,8 +882,8 @@ void Dock::ShowState(const std::string &j)
 	else
 		Pill(status_, T("Dock.StateLive"), pal_.live, pal_);
 
-	const bool filling = input && !delayed && arm_delay > 0 && !armed;
-	fill_->setVisible(filling);
+	const bool filling = input && arm_delay > 0 && !armed && (!delayed || retime);
+	fill_->setVisible(filling && !perInput_);
 	if (filling) {
 		fill_->setRange(0, int(arm_delay * 10));
 		fill_->setValue(int(buffer * 10));
@@ -651,17 +894,30 @@ void Dock::ShowState(const std::string &j)
 		d = T(delayed ? "Dock.DrainingTail" : "Dock.WaitingHint");
 	if (cut_pending)
 		d += T("Dock.CutPending");
+	if (retime && !perInput_)
+		d += armed ? T("Dock.RetimeReady").arg(armS) : T("Dock.RetimeFilling").arg(buffer, 0, 'f', 0).arg(armS);
 	detail_->setText(d);
 	detail_->setVisible(!d.isEmpty());
 	ShowDestinations(j);
 
-	arm_->setEnabled(!delayed);
-	activate_->setEnabled(!delayed && armed);
+	// The same seconds cannot be armed twice; other seconds can, at any time —
+	// also while the delay is on, which is how it is made longer or shorter
+	// without going live in between.
+	arm_->setText(T(rearm ? "Dock.Rearm" : "Dock.Arm"));
+	arm_->setToolTip(T(rearm ? "Dock.RearmTip" : "Dock.ArmTip"));
+	arm_->setEnabled((!delayed && arm_delay <= 0) || rearm);
+	activate_->setText(retime ? T("Dock.Retime").arg(armS) : T("Dock.Activate"));
+	activate_->setToolTip(retime ? T("Dock.RetimeTip").arg(armS) : T("Dock.ActivateTip"));
+	activate_->setEnabled(armed && (!delayed || retime));
 	cut_->setEnabled(delayed);
 	cut_after_->setEnabled(delayed && !cut_pending);
-	disarm_->setEnabled(!delayed && arm_delay > 0);
+	disarm_->setEnabled(arm_delay > 0 && (!delayed || retime));
+	// With a delay per input every input has these on its own row, and one big
+	// set acting on all of them at once would only mislead.
+	for (QWidget *w : std::initializer_list<QWidget *>{delay_, arm_, activate_, cut_, cut_after_, disarm_})
+		w->setVisible(!perInput_);
 	// Whatever this state is heading towards is the one loud button.
-	SetPrimary(delayed ? cut_ : arm_delay > 0 ? activate_ : arm_);
+	SetPrimary(rearm ? arm_ : retime ? activate_ : delayed ? cut_ : arm_delay > 0 ? activate_ : arm_);
 }
 
 } // namespace livedelay

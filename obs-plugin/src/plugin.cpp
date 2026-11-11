@@ -19,6 +19,7 @@
 #include "panels.hpp"
 #include "settings.hpp"
 #include "update.hpp"
+#include "wizard.hpp"
 
 extern "C" {
 typedef void (*ld_log_fn)(const char *msg);
@@ -90,6 +91,11 @@ bool obs_module_load(void)
 	obs_frontend_add_tools_menu_item(
 		"LiveDelay",
 		[](void *) { livedelay::ShowSettings(static_cast<QWidget *>(obs_frontend_get_main_window())); },
+		nullptr);
+	// The case most people want a second input for gets its own way in.
+	obs_frontend_add_tools_menu_item(
+		livedelay::T("Wizard.Menu").toUtf8().constData(),
+		[](void *) { livedelay::ShowVerticalWizard(static_cast<QWidget *>(obs_frontend_get_main_window())); },
 		nullptr);
 	auto showNotes = [] {
 		QTimer::singleShot(700, qApp, [] {

@@ -109,13 +109,14 @@ pub fn state_json(ctx: &Ctx) -> String {
     let st = ctx.hub.status(Instant::now());
     let mode = if st.mode == Mode::Delayed { "delayed" } else { "live" };
     let mut j = format!(
-        "{{\"mode\":\"{mode}\",\"host\":\"{}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},",
+        "{{\"mode\":\"{mode}\",\"host\":\"{}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"active_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},",
         esc(&crate::ffi::host()),
         st.input,
         st.delay_s,
         st.buffer_s,
         st.buffer_mb,
         st.arm_delay_s.map(|d| format!("{d:.1}")).unwrap_or("null".into()),
+        st.active_s.map(|d| format!("{d:.1}")).unwrap_or("null".into()),
         st.armed,
         st.cut_pending,
         st.in_kbps,
@@ -130,7 +131,7 @@ pub fn state_json(ctx: &Ctx) -> String {
     for (i, (name, key, w, h, st)) in ctx.hub.input_states(Instant::now()).iter().enumerate() {
         let _ = write!(
             j,
-            "{}{{\"name\":\"{}\",\"key\":\"{}\",\"input\":{},\"in_kbps\":{:.0},\"mode\":\"{}\",\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"armed\":{},\"cut_pending\":{},\"width\":{},\"height\":{}}}",
+            "{}{{\"name\":\"{}\",\"key\":\"{}\",\"input\":{},\"in_kbps\":{:.0},\"mode\":\"{}\",\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"active_delay\":{},\"armed\":{},\"cut_pending\":{},\"width\":{},\"height\":{}}}",
             if i > 0 { "," } else { "" },
             esc(name),
             esc(key),
@@ -141,6 +142,7 @@ pub fn state_json(ctx: &Ctx) -> String {
             st.buffer_s,
             st.buffer_mb,
             st.arm_delay_s.map(|d| format!("{d:.1}")).unwrap_or("null".into()),
+            st.active_s.map(|d| format!("{d:.1}")).unwrap_or("null".into()),
             st.armed,
             st.cut_pending,
             w,

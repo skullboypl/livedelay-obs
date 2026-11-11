@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(livedelay-obs VERSION 1.0.42 LANGUAGES CXX)
+project(livedelay-obs VERSION 1.0.43 LANGUAGES CXX)
 
 # Built against OBS 31 headers and import libraries generated from the installed
 # obs.dll / obs-frontend-api.dll (see ../../deps), plus OBS's own prebuilt Qt 6.6.3.
@@ -24,6 +24,7 @@ add_library(livedelay-obs MODULE
   src/hotkeys.cpp src/hotkeys.hpp src/i18n.cpp src/i18n.hpp src/log.cpp src/log.hpp
   src/golive.cpp src/golive.hpp
   src/panels.cpp src/panels.hpp
+  src/wizard.cpp src/wizard.hpp
   ${CMAKE_CURRENT_BINARY_DIR}/version.rc)
 set_target_properties(livedelay-obs PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 target_compile_options(livedelay-obs PRIVATE /utf-8 /W3 /Zc:__cplusplus /permissive-)

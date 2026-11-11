@@ -13,6 +13,7 @@
 #include "panels.hpp"
 #include "outputs.hpp"
 #include "client.hpp"
+#include "wizard.hpp"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -139,29 +140,62 @@ Settings Settings::Load(const std::string &path)
 	Settings s;
 	std::ifstream in(path, std::ios::binary);
 	std::string line;
-	Destination *dest = nullptr;
+	// Which section the next key belongs to. Before 1.0.43 only [dest] was
+	// known, and any other header left the previous platform open — so
+	// `key = ld1` under [input Pionowe] became that platform's stream key.
+	enum class In { Global, Dest, Input, Foreign } at = In::Global;
 	while (std::getline(in, line)) {
 		line = Trim(line);
 		if (line.size() >= 3 && static_cast<unsigned char>(line[0]) == 0xEF)
 			line = line.substr(3); // BOM
-		if (line.empty() || line[0] == '#' || line[0] == ';')
+		if (line.empty())
 			continue;
 		if (line.front() == '[' && line.back() == ']') {
 			std::string sec = Trim(line.substr(1, line.size() - 2));
-			if (sec.rfind("dest", 0) == 0) {
+			if (sec.rfind("dest ", 0) == 0 || sec == "dest") {
 				Destination d;
 				d.name = Trim(sec.substr(4));
 				s.dests.push_back(d);
-				dest = &s.dests.back();
+				at = In::Dest;
+			} else if (sec.rfind("input ", 0) == 0 && !Trim(sec.substr(6)).empty()) {
+				Input i;
+				i.name = Trim(sec.substr(6));
+				s.inputs.push_back(i);
+				at = In::Input;
+			} else {
+				s.foreign.push_back(line);
+				at = In::Foreign;
 			}
 			continue;
 		}
+		// A section we do not know is copied word for word, comments included.
+		if (at == In::Foreign) {
+			s.foreign.push_back(line);
+			continue;
+		}
+		if (line[0] == '#' || line[0] == ';')
+			continue;
 		size_t eq = line.find('=');
 		if (eq == std::string::npos)
 			continue;
 		std::string k = Trim(line.substr(0, eq)), v = Trim(line.substr(eq + 1));
-		if (dest) {
-			if (k == "url")
+		if (at == In::Input) {
+			Input &i = s.inputs.back();
+			if (k == "key")
+				i.key = v;
+			else if (k == "feed")
+				i.external = v == "external";
+			else if (k == "own")
+				i.own = Yes(v);
+			else
+				i.extra.push_back(line);
+			continue;
+		}
+		if (at == In::Dest) {
+			Destination *dest = &s.dests.back();
+			if (k == "input")
+				dest->input = v;
+			else if (k == "url")
 				dest->url = v;
 			else if (k == "server")
 				dest->server_pick = v;
@@ -206,6 +240,8 @@ Settings Settings::Load(const std::string &path)
 				dest->vod_override = Yes(v);
 			else if (k == "enhanced_broadcasting" || k == "enhanced")
 				dest->enhanced_broadcasting = Yes(v);
+			else
+				dest->extra.push_back(line);
 			continue;
 		}
 		if (k == "listen")
@@ -256,13 +292,87 @@ Settings Settings::Load(const std::string &path)
 			s.overlay_armed = v;
 		else if (k == "overlay_delayed")
 			s.overlay_delayed = v;
+		else if (k == "delay_mode")
+			s.delay_mode = v == "per_input" ? "per_input" : "together";
+		else
+			s.extra.push_back(line);
 	}
 	if (s.delay < 1)
 		s.delay = 15;
 	if (s.max_buffer_mb < 16)
 		s.max_buffer_mb = 512;
-	AssignIngestKeys(s.dests);
+	if (s.inputs.empty()) {
+		AssignIngestKeys(s.dests);
+		return s;
+	}
+	// Same rule as the engine: an input without a key takes ld{i} by order.
+	for (size_t i = 0; i < s.inputs.size(); ++i)
+		if (s.inputs[i].key.empty())
+			s.inputs[i].key = "ld" + std::to_string(i);
+	// A platform publishes on its input's key, so platforms sharing an input
+	// share an encode. A platform naming no input, or one that is not there,
+	// takes the first — the same choice the engine makes, so the plugin
+	// encodes onto the key the engine listens for.
+	for (Destination &d : s.dests) {
+		const Input *i = s.FindInput(d.input);
+		if (!i) {
+			i = &s.inputs.front();
+			d.input = i->name;
+		}
+		d.ingest_key = i->key;
+	}
+	// A file the app or the web panel wrote carries no mark: an input feeding
+	// exactly one platform of its own name is that platform's own encode.
+	for (Input &i : s.inputs) {
+		if (i.own || i.external)
+			continue;
+		int fed = 0;
+		bool same = false;
+		for (const Destination &d : s.dests)
+			if (d.input == i.name) {
+				++fed;
+				same = d.name == i.name;
+			}
+		i.own = fed == 1 && same;
+	}
 	return s;
+}
+
+const Input *Settings::FindInput(const std::string &name) const
+{
+	for (const Input &i : inputs)
+		if (i.name == name)
+			return &i;
+	return nullptr;
+}
+
+std::vector<Input> Settings::EffectiveInputs() const
+{
+	if (!inputs.empty())
+		return inputs;
+	std::vector<Input> made;
+	for (size_t n = 0; n < dests.size(); ++n) {
+		Input i;
+		i.name = dests[n].name;
+		i.key = dests[n].ingest_key.empty() ? "ld" + std::to_string(n) : dests[n].ingest_key;
+		i.own = true;
+		made.push_back(i);
+	}
+	return made;
+}
+
+std::string FreeIngestKey(const Settings &s)
+{
+	for (int n = 0;; ++n) {
+		const std::string key = "ld" + std::to_string(n);
+		bool taken = false;
+		for (const Input &i : s.inputs)
+			taken = taken || i.key == key;
+		for (const Destination &d : s.dests)
+			taken = taken || d.ingest_key == key;
+		if (!taken)
+			return key;
+	}
 }
 
 bool Settings::Save(const std::string &path) const
@@ -300,6 +410,18 @@ std::string Settings::Text() const
 	}
 	for (int i = 0; i < 6; ++i)
 		o << "arm_slot_" << i << " = " << arm_slot[i] << "\n";
+	o << "delay_mode = " << (delay_mode == "per_input" ? "per_input" : "together") << "\n";
+	for (const std::string &line : extra)
+		o << line << "\n";
+	for (const Input &in : inputs) {
+		o << "\n[input " << in.name << "]\nkey = " << in.key << "\n";
+		if (in.external)
+			o << "feed = external\n";
+		if (in.own)
+			o << "own = yes\n";
+		for (const std::string &line : in.extra)
+			o << line << "\n";
+	}
 	for (size_t i = 0; i < dests.size(); ++i) {
 		const Destination &d = dests[i];
 		const std::string ingest = d.ingest_key.empty() ? ("ld" + std::to_string(i)) : d.ingest_key;
@@ -308,8 +430,14 @@ std::string Settings::Text() const
 			o << "\nchannel = " << d.channel;
 		if (!d.server_pick.empty())
 			o << "\nserver = " << d.server_pick;
-		o << "\nkey = " << d.key
-		  << "\ningest_key = " << ingest << "\nencode_mode = " << EncodeModeKey(d.encode_mode)
+		o << "\nkey = " << d.key;
+		// With inputs the publish key belongs to the input. Writing one on the
+		// platform as well would say two different things about the same feed.
+		if (inputs.empty())
+			o << "\ningest_key = " << ingest;
+		else
+			o << "\ninput = " << d.input;
+		o << "\nencode_mode = " << EncodeModeKey(d.encode_mode)
 		  << "\nenabled = " << (d.enabled ? "yes" : "no") << "\nautostart = " << (d.autostart ? "yes" : "no");
 		if (d.encode_mode == EncodeMode::Manual) {
 			o << "\nvideo_kbps = " << d.video_kbps << "\naudio_kbps = " << d.audio_kbps
@@ -322,6 +450,15 @@ std::string Settings::Text() const
 		  << "\nvod_audio = " << (vod > 0 ? "yes" : "no")
 		  << "\nvod_override = " << (d.vod_override ? "yes" : "no")
 		  << "\nenhanced_broadcasting = " << (d.enhanced_broadcasting ? "yes" : "no") << "\n";
+		for (const std::string &line : d.extra)
+			o << line << "\n";
+	}
+	// Sections nobody here owns go back as they came, at the end: order carries
+	// no meaning in this file.
+	for (const std::string &line : foreign) {
+		if (!line.empty() && line.front() == '[')
+			o << "\n";
+		o << line << "\n";
 	}
 	return o.str();
 }
@@ -551,6 +688,8 @@ std::string StockPublishKey(const Settings &s)
 	for (size_t i = 0; i < s.dests.size(); ++i) {
 		const Destination &d = s.dests[i];
 		if (!d.enabled || !d.autostart || d.url.empty() || d.key.empty())
+			continue;
+		if (const Input *in = s.FindInput(d.input); in && in->external)
 			continue;
 		if (!d.ingest_key.empty())
 			return d.ingest_key;
@@ -888,6 +1027,13 @@ public:
 			int i = dockTheme_->findData(Q(s_.dock_theme));
 			dockTheme_->setCurrentIndex(i < 0 ? 0 : i);
 		}
+		// Inputs as the engine runs them. A file without any gets one per
+		// platform named after it; each platform points at its own, so the
+		// pickers below have something true to show.
+		ins_ = s_.EffectiveInputs();
+		if (s_.inputs.empty())
+			for (size_t n = 0; n < s_.dests.size() && n < ins_.size(); ++n)
+				s_.dests[n].input = ins_[n].name;
 		original_ = s_;
 		auto *general = new QFormLayout;
 		general->addRow(T("Settings.DefaultDelay"), delay_);
@@ -1009,8 +1155,16 @@ public:
 		auto *keyRow = new QHBoxLayout;
 		keyRow->addWidget(key_, 1);
 		keyRow->addWidget(show);
+		input_ = new QComboBox;
+		input_->setToolTip(T("Inputs.PlatformInputTip"));
+		connect(input_, &QComboBox::activated, this, [this] {
+			Store();
+			if (inFields_)
+				ShowIn();
+		});
 		auto *form = new QFormLayout;
 		form->addRow(T("Settings.Name"), name_);
+		form->addRow(T("Inputs.PlatformInput"), input_);
 		form->addRow(T("Settings.Service"), service_);
 		form->addRow(T("Settings.ServerRegion"), server_);
 		form->addRow(T("Settings.Server"), url_);
@@ -1229,7 +1383,13 @@ public:
 		auto *tabs = new QTabWidget;
 		tabs->addTab(ScrollWrap(generalPage), T("Settings.TabGeneral"));
 		tabs->addTab(ScrollWrap(hotkeyPage), T("Settings.TabHotkeys"));
+		tabs->addTab(BuildInputsPage(), T("Settings.TabInputs"));
 		tabs->addTab(destPage, T("Settings.TabPlatforms"));
+		connect(tabs, &QTabWidget::currentChanged, this, [this] {
+			Store();
+			InStore();
+			ShowIn();
+		});
 		tabs->addTab(ScrollWrap(BuildAudioPage()), T("Settings.TabAudio"));
 		tabs->addTab(ScrollWrap(ovPage), T("Settings.TabOverlay"));
 		tabs->addTab(MakeLogPage(), T("Settings.TabLogs"));
@@ -1291,10 +1451,11 @@ public:
 		});
 		connect(enhanced_, &QCheckBox::toggled, this, [this] { UpdateEncodeFields(); });
 		connect(add, &QPushButton::clicked, this, [this] {
+			Store();
 			Destination d;
 			d.name = S(T("Settings.NewPlatform"));
 			d.encode_mode = EncodeMode::Recommended;
-			d.ingest_key = NextIngestKey(s_.dests);
+			GiveInput(d);
 			s_.dests.push_back(d);
 			list_->addItem(T("Settings.NewPlatform"));
 			list_->setCurrentRow(list_->count() - 1);
@@ -1305,9 +1466,27 @@ public:
 			if (row < 0)
 				return;
 			current_ = -1;
+			InStore();
+			// Its own input goes with it; a shared one stays for the others.
+			{
+				const std::string selected =
+					inCurrent_ >= 0 && inCurrent_ < int(ins_.size()) ? ins_[inCurrent_].name : "";
+				const std::string fed = s_.dests[row].input;
+				for (size_t n = 0; n < ins_.size(); ++n)
+					if (ins_[n].name == fed && ins_[n].own) {
+						ins_.erase(ins_.begin() + n);
+						break;
+					}
+				inCurrent_ = -1;
+				for (size_t n = 0; n < ins_.size(); ++n)
+					if (!selected.empty() && ins_[n].name == selected)
+						inCurrent_ = int(n);
+			}
 			s_.dests.erase(s_.dests.begin() + row);
 			delete list_->takeItem(row);
 			Select(list_->currentRow());
+			RebuildInList();
+			ShowIn();
 		});
 		connect(name_, &QLineEdit::textEdited, this, [this](const QString &t) {
 			if (current_ >= 0)
@@ -1373,7 +1552,47 @@ public:
 		connect(site, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl("https://livedelay.vxh.pl/")); });
 		connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 		connect(buttons, &QDialogButtonBox::accepted, this, [this] {
+			openWizard_ = false;
+			SaveFromFields();
+		});
+
+		FillInputCombo();
+		list_->setCurrentRow(s_.dests.empty() ? -1 : 0);
+		Select(list_->currentRow());
+		RefreshBufferHint();
+	}
+
+	void SaveFromFields()
+	{
+		{
 			Store();
+			InStore();
+			s_.delay_mode = S(delayMode_->currentData().toString()) == "per_input" ? "per_input" : "together";
+			// Single PC: OBS encodes once, into one input. Platforms left on
+			// encodes of their own would wait for a picture that never comes.
+			if (singlePc_->isChecked() && ObsEncodes() > 1 &&
+			    QMessageBox::question(this, QStringLiteral("LiveDelay"), T("Inputs.SinglePcAsk"),
+						  QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::Yes) {
+				for (size_t n = 0; n < s_.dests.size(); ++n)
+					if (const Input *in = FindIn(s_.dests[n].input); !in || !in->external)
+						MoveDest(n, EnsureObsShared());
+			}
+			// Every platform publishes on the key of what feeds it.
+			for (Destination &d : s_.dests) {
+				if (!FindIn(d.input)) {
+					const Input own = OwnFor(d.name);
+					ins_.push_back(own);
+					d.input = own.name;
+				}
+				d.ingest_key = FindIn(d.input)->key;
+			}
+			// Inputs reach the file only when one of them is shared. A file in
+			// which every platform encodes for itself keeps the shape it always
+			// had: an ingest_key per platform and no [input …] at all.
+			bool shared = false;
+			for (const Input &in : ins_)
+				shared = shared || !in.own;
+			s_.inputs = shared ? ins_ : std::vector<Input>();
 			s_.delay = delay_->value();
 			s_.max_buffer_mb = buffer_->value();
 			SaveOverlay();
@@ -1388,14 +1607,493 @@ public:
 				s_.arm_slot[i] = hotkeySpins_[i]->value();
 			ApplyHotkeyPage(hotkeyKeys_, hotkeySpins_);
 			SaveAndRestart();
-		});
-
-		list_->setCurrentRow(s_.dests.empty() ? -1 : 0);
-		Select(list_->currentRow());
-		RefreshBufferHint();
+		}
 	}
 
+	/// Set when the user asked for the vertical-stream wizard from here: the
+	/// window saves, closes, and ShowSettings opens the wizard after it.
+	bool openWizard_ = false;
+
 private:
+	// ---- inputs ------------------------------------------------------------
+	//
+	// What the window shows is simpler than what the file holds. There is
+	// always "OBS": the picture of this OBS. Behind it sit the platforms' own
+	// inputs (each encoding for itself, as every older file has it) and at
+	// most one shared input for the platforms that share an encode. Every
+	// other input is one another program publishes to — Aitum Vertical, say —
+	// and those are the remaining rows of the list.
+
+	QWidget *BuildInputsPage()
+	{
+		delayMode_ = new QComboBox;
+		delayMode_->addItem(T("Inputs.DelayTogether"), "together");
+		delayMode_->addItem(T("Inputs.DelayPerInput"), "per_input");
+		delayMode_->setCurrentIndex(s_.PerInputDelay() ? 1 : 0);
+		delayMode_->setToolTip(T("Inputs.DelayModeTip"));
+
+		inList_ = new QListWidget;
+		inList_->setMinimumWidth(120);
+		inList_->setMaximumWidth(220);
+		auto *add = new QPushButton(T("Settings.Add"));
+		add->setToolTip(T("Inputs.AddTip"));
+		inRemove_ = new QPushButton(T("Settings.Remove"));
+		auto *listCol = new QVBoxLayout;
+		listCol->setContentsMargins(0, 0, 0, 0);
+		listCol->addWidget(inList_, 1);
+		auto *listBtns = new QHBoxLayout;
+		listBtns->addWidget(add);
+		listBtns->addWidget(inRemove_);
+		listCol->addLayout(listBtns);
+		auto *listWrap = new QWidget;
+		listWrap->setLayout(listCol);
+
+		// The OBS row: nothing to name or paste, only who shares an encode.
+		obsPanel_ = new QWidget;
+		auto *obsLay = new QVBoxLayout(obsPanel_);
+		obsLay->setContentsMargins(0, 0, 0, 0);
+		obsLay->addWidget(Hint(T("Inputs.ObsAbout")));
+		const QString address = QStringLiteral("rtmp://127.0.0.1:%1/live").arg(s_.RtmpPort());
+		{
+			auto *obsAddr = new QLineEdit(address);
+			obsAddr->setReadOnly(true);
+			auto *obsCopy = new QPushButton(T("Settings.Copy"));
+			connect(obsCopy, &QPushButton::clicked, this, [address] { QApplication::clipboard()->setText(address); });
+			auto *row = new QHBoxLayout;
+			row->addWidget(obsAddr, 1);
+			row->addWidget(obsCopy);
+			auto *addrForm = new QFormLayout;
+			addrForm->setContentsMargins(0, 0, 0, 0);
+			addrForm->addRow(T("Inputs.Address"), row);
+			obsLay->addLayout(addrForm);
+		}
+		auto *sharedTitle = new QLabel(T("Inputs.ObsShared"));
+		sharedTitle->setStyleSheet(QStringLiteral("font-weight: 600;"));
+		obsLay->addWidget(sharedTitle);
+		obsBoxes_ = new QWidget;
+		obsBoxesLay_ = new QVBoxLayout(obsBoxes_);
+		obsBoxesLay_->setContentsMargins(0, 0, 0, 0);
+		obsBoxesLay_->setSpacing(4);
+		obsLay->addWidget(obsBoxes_);
+		obsSingle_ = new QLabel(T("Inputs.SinglePcNote"));
+		obsSingle_->setWordWrap(true);
+		obsSingle_->setStyleSheet(QStringLiteral("color: #ffbf3c;"));
+		obsLay->addWidget(obsSingle_);
+		obsLay->addWidget(Hint(T("Inputs.ObsSharedNote")));
+
+		// An input another program feeds.
+		inName_ = new QLineEdit;
+		inKey_ = new QLineEdit;
+		inKey_->setReadOnly(true);
+		inKey_->setToolTip(T("Inputs.KeyTip"));
+		auto *copyKey = new QPushButton(T("Settings.Copy"));
+		auto *keyRow = new QHBoxLayout;
+		keyRow->addWidget(inKey_, 1);
+		keyRow->addWidget(copyKey);
+		auto *addr = new QLineEdit(address);
+		addr->setReadOnly(true);
+		auto *copyAddr = new QPushButton(T("Settings.Copy"));
+		auto *addrRow = new QHBoxLayout;
+		addrRow->addWidget(addr, 1);
+		addrRow->addWidget(copyAddr);
+		inPlatforms_ = new QWidget;
+		inPlatformsLay_ = new QVBoxLayout(inPlatforms_);
+		inPlatformsLay_->setContentsMargins(0, 0, 0, 0);
+		inPlatformsLay_->setSpacing(4);
+		auto *form = new QFormLayout;
+		form->setContentsMargins(0, 0, 0, 0);
+		form->addRow(Hint(T("Inputs.ExternalAbout")));
+		form->addRow(T("Settings.Name"), inName_);
+		form->addRow(T("Inputs.Address"), addrRow);
+		form->addRow(T("Inputs.Key"), keyRow);
+		form->addRow(T("Inputs.Platforms"), inPlatforms_);
+		inFields_ = new QWidget;
+		inFields_->setLayout(form);
+
+		auto *right = new QWidget;
+		auto *rightLay = new QVBoxLayout(right);
+		rightLay->setContentsMargins(8, 0, 0, 0);
+		rightLay->addWidget(obsPanel_);
+		rightLay->addWidget(inFields_);
+		rightLay->addStretch();
+
+		auto *splitter = new QSplitter(Qt::Horizontal);
+		splitter->addWidget(listWrap);
+		splitter->addWidget(right);
+		splitter->setStretchFactor(0, 0);
+		splitter->setStretchFactor(1, 1);
+		splitter->setSizes({160, 480});
+
+		auto *wizard = new QPushButton(T("Wizard.Open"));
+		wizard->setToolTip(T("Wizard.OpenTip"));
+
+		auto *page = new QWidget;
+		auto *lay = new QVBoxLayout(page);
+		lay->setContentsMargins(8, 8, 8, 8);
+		lay->addWidget(Hint(T("Inputs.About")));
+		lay->addWidget(splitter, 1);
+		auto *modeRow = new QFormLayout;
+		modeRow->addRow(T("Inputs.DelayMode"), delayMode_);
+		lay->addLayout(modeRow);
+		lay->addWidget(Hint(T("Inputs.BufferNote")));
+		lay->addWidget(wizard, 0, Qt::AlignLeft);
+
+		connect(inList_, &QListWidget::currentRowChanged, this, [this](int row) {
+			InStore();
+			const int at = row < 0 ? kObsRow : inList_->item(row)->data(Qt::UserRole).toInt();
+			inCurrent_ = at == kObsRow ? -1 : at;
+			ShowIn();
+		});
+		connect(inName_, &QLineEdit::textEdited, this, [this](const QString &t) {
+			if (QListWidgetItem *item = inList_->currentItem(); item && inCurrent_ >= 0)
+				item->setText(t);
+		});
+		connect(inName_, &QLineEdit::editingFinished, this, [this] { InStore(); });
+		connect(copyKey, &QPushButton::clicked, this, [this] { QApplication::clipboard()->setText(inKey_->text()); });
+		connect(copyAddr, &QPushButton::clicked, this, [address] { QApplication::clipboard()->setText(address); });
+		connect(add, &QPushButton::clicked, this, [this] {
+			InStore();
+			Store();
+			// OBS is always there, so whatever is added comes from elsewhere.
+			Input in;
+			in.external = true;
+			in.name = S(T("Wizard.InputName"));
+			for (int n = 2; FindIn(in.name); ++n)
+				in.name = S(T("Inputs.NewName").arg(n));
+			in.key = FreeKeyHere();
+			ins_.push_back(in);
+			inCurrent_ = int(ins_.size()) - 1;
+			RebuildInList();
+			ShowIn();
+			FillInputCombo();
+			inName_->setFocus();
+			inName_->selectAll();
+		});
+		connect(inRemove_, &QPushButton::clicked, this, [this] {
+			if (inCurrent_ < 0 || inCurrent_ >= int(ins_.size()))
+				return;
+			Store();
+			const std::string gone = ins_[inCurrent_].name;
+			// Its platforms go back to the picture of OBS, encoding for themselves.
+			for (size_t n = 0; n < s_.dests.size(); ++n)
+				if (s_.dests[n].input == gone)
+					MoveDest(n, std::string());
+			for (size_t n = 0; n < ins_.size(); ++n)
+				if (ins_[n].name == gone) {
+					ins_.erase(ins_.begin() + n);
+					break;
+				}
+			inCurrent_ = -1;
+			RebuildInList();
+			ShowIn();
+			FillInputCombo();
+		});
+		connect(wizard, &QPushButton::clicked, this, [this] {
+			openWizard_ = true;
+			SaveFromFields();
+		});
+
+		RebuildInList();
+		ShowIn();
+		return ScrollWrap(page);
+	}
+
+	Input *FindIn(const std::string &name)
+	{
+		for (Input &in : ins_)
+			if (in.name == name)
+				return &in;
+		return nullptr;
+	}
+
+	/// The input shared by the platforms that share OBS's encode, or -1.
+	int ObsShared() const
+	{
+		for (int n = 0; n < int(ins_.size()); ++n)
+			if (!ins_[n].own && !ins_[n].external)
+				return n;
+		return -1;
+	}
+
+	/// Its name, making it first if nobody shares an encode yet.
+	std::string EnsureObsShared()
+	{
+		if (const int at = ObsShared(); at >= 0)
+			return ins_[at].name;
+		Input in;
+		in.name = "OBS";
+		for (int n = 2; FindIn(in.name); ++n)
+			in.name = "OBS " + std::to_string(n);
+		in.key = FreeKeyHere();
+		ins_.push_back(in);
+		return in.name;
+	}
+
+	std::string FreeKeyHere() const
+	{
+		for (int n = 0;; ++n) {
+			const std::string key = "ld" + std::to_string(n);
+			bool taken = false;
+			for (const Input &in : ins_)
+				taken = taken || in.key == key;
+			if (!taken)
+				return key;
+		}
+	}
+
+	/// A platform's own input: named after it, on a key nobody uses.
+	Input OwnFor(const std::string &platform)
+	{
+		Input own;
+		own.own = true;
+		own.name = platform;
+		for (int n = 2; FindIn(own.name); ++n)
+			own.name = platform + " " + std::to_string(n);
+		own.key = FreeKeyHere();
+		return own;
+	}
+
+	/// What feeds a platform that just appeared: OBS, encoded for it alone.
+	void GiveInput(Destination &d)
+	{
+		const Input own = OwnFor(d.name);
+		ins_.push_back(own);
+		d.input = own.name;
+		d.ingest_key = own.key;
+		FillInputCombo();
+	}
+
+	/// Points platform `n` at the input `target`, or — with an empty name —
+	/// back at OBS with an encode of its own. An own input nobody needs any
+	/// more goes with the move, and so does the shared one once it is empty.
+	/// ins_ may shift, so the selection is found again by name.
+	void MoveDest(size_t n, const std::string &target)
+	{
+		if (n >= s_.dests.size())
+			return;
+		Destination &d = s_.dests[n];
+		const std::string selected = inCurrent_ >= 0 && inCurrent_ < int(ins_.size()) ? ins_[inCurrent_].name : "";
+		auto drop = [this](const std::string &name) {
+			for (size_t i = 0; i < ins_.size(); ++i)
+				if (ins_[i].name == name) {
+					ins_.erase(ins_.begin() + i);
+					return;
+				}
+		};
+		const Input *cur = FindIn(d.input);
+		const bool hadOwn = cur && cur->own;
+		if (target.empty()) {
+			if (hadOwn)
+				return;
+			const Input own = OwnFor(d.name);
+			ins_.push_back(own);
+			d.input = own.name;
+		} else {
+			if (d.input == target || !FindIn(target))
+				return;
+			const std::string old = d.input;
+			d.input = target;
+			if (hadOwn)
+				drop(old);
+		}
+		if (const Input *in = FindIn(d.input))
+			d.ingest_key = in->key;
+		// A shared encode nobody shares is just an entry in the file.
+		if (const int shared = ObsShared(); shared >= 0) {
+			bool used = false;
+			for (const Destination &e : s_.dests)
+				used = used || e.input == ins_[shared].name;
+			if (!used)
+				drop(std::string(ins_[shared].name));
+		}
+		inCurrent_ = -1;
+		for (size_t i = 0; i < ins_.size(); ++i)
+			if (!selected.empty() && ins_[i].name == selected)
+				inCurrent_ = int(i);
+		RebuildInList();
+	}
+
+	/// Row one is OBS. The rest are the inputs other programs feed; each row
+	/// carries its place in ins_.
+	void RebuildInList()
+	{
+		if (!inList_)
+			return;
+		inList_->blockSignals(true);
+		inList_->clear();
+		auto *obs = new QListWidgetItem(QStringLiteral("OBS"));
+		obs->setData(Qt::UserRole, kObsRow);
+		inList_->addItem(obs);
+		int row = 0;
+		const int shared = ObsShared();
+		for (int n = 0; n < int(ins_.size()); ++n) {
+			if (ins_[n].own || n == shared)
+				continue;
+			auto *item = new QListWidgetItem(Q(ins_[n].name));
+			item->setData(Qt::UserRole, n);
+			inList_->addItem(item);
+			if (n == inCurrent_)
+				row = inList_->count() - 1;
+		}
+		inList_->setCurrentRow(row);
+		inList_->blockSignals(false);
+		if (row == 0)
+			inCurrent_ = -1;
+	}
+
+	static void ClearLayout(QLayout *lay)
+	{
+		while (QLayoutItem *item = lay->takeAt(0)) {
+			delete item->widget();
+			delete item;
+		}
+	}
+
+	/// Fills the right-hand side for the row selected in the list.
+	void ShowIn()
+	{
+		const bool other = inCurrent_ >= 0 && inCurrent_ < int(ins_.size());
+		obsPanel_->setVisible(!other);
+		inFields_->setVisible(other);
+		inRemove_->setEnabled(other);
+		ClearLayout(obsBoxesLay_);
+		ClearLayout(inPlatformsLay_);
+		obsKeys_.clear();
+		inShown_.clear();
+		if (s_.dests.empty())
+			(other ? inPlatformsLay_ : obsBoxesLay_)->addWidget(Hint(T("Dock.NoPlatforms")));
+		if (!other) {
+			const int shared = ObsShared();
+			for (size_t n = 0; n < s_.dests.size(); ++n) {
+				const Destination &d = s_.dests[n];
+				auto *box = new QCheckBox(Q(d.name));
+				box->setChecked(shared >= 0 && d.input == ins_[shared].name);
+				if (const Input *from = FindIn(d.input); from && from->external)
+					box->setToolTip(T("Inputs.TakesFrom").arg(Q(from->name)));
+				connect(box, &QCheckBox::toggled, this, [this, n](bool on) {
+					Store();
+					MoveDest(n, on ? EnsureObsShared() : std::string());
+					FillInputCombo();
+					RefreshObsKeys();
+				});
+				auto *key = new QLabel;
+				key->setStyleSheet(QStringLiteral("color: %1;").arg(ThemeColor(true)));
+				key->setTextInteractionFlags(Qt::TextSelectableByMouse);
+				obsKeys_.push_back(key);
+				auto *line = new QWidget;
+				auto *lineLay = new QHBoxLayout(line);
+				lineLay->setContentsMargins(0, 0, 0, 0);
+				lineLay->addWidget(box);
+				lineLay->addStretch();
+				lineLay->addWidget(key);
+				obsBoxesLay_->addWidget(line);
+			}
+			RefreshObsKeys();
+			return;
+		}
+		const Input &in = ins_[inCurrent_];
+		inShown_ = in.name;
+		inName_->setText(Q(in.name));
+		inKey_->setText(Q(in.key));
+		for (size_t n = 0; n < s_.dests.size(); ++n) {
+			const Destination &d = s_.dests[n];
+			auto *box = new QCheckBox(Q(d.name));
+			box->setChecked(d.input == in.name);
+			connect(box, &QCheckBox::toggled, this, [this, n](bool on) {
+				if (inCurrent_ < 0 || inCurrent_ >= int(ins_.size()))
+					return;
+				Store();
+				InStore();
+				MoveDest(n, on ? std::string(ins_[inCurrent_].name) : std::string());
+				FillInputCombo();
+			});
+			inPlatformsLay_->addWidget(box);
+		}
+	}
+
+	/// Beside each platform on the OBS row: the key its picture is published
+	/// on. Every encode has its own, and the shared one is one for all.
+	/// How many separate encodes of OBS's picture the platforms ask for.
+	int ObsEncodes() const
+	{
+		std::vector<std::string> keys;
+		for (const Destination &d : s_.dests)
+			for (const Input &in : ins_)
+				if (in.name == d.input && !in.external &&
+				    std::find(keys.begin(), keys.end(), in.key) == keys.end())
+					keys.push_back(in.key);
+		return int(keys.size());
+	}
+
+	void RefreshObsKeys()
+	{
+		// Single PC has exactly one encode to give.
+		if (obsSingle_)
+			obsSingle_->setVisible(singlePc_ && singlePc_->isChecked() && ObsEncodes() > 1);
+		const int shared = ObsShared();
+		for (size_t n = 0; n < obsKeys_.size() && n < s_.dests.size(); ++n) {
+			const Input *in = FindIn(s_.dests[n].input);
+			if (!in)
+				obsKeys_[n]->clear();
+			else if (in->external)
+				obsKeys_[n]->setText(T("Inputs.TakesFrom").arg(Q(in->name)));
+			else
+				obsKeys_[n]->setText(
+					T(shared >= 0 && in == &ins_[shared] ? "Inputs.KeyShared" : "Inputs.KeyOwn").arg(Q(in->key)));
+		}
+	}
+
+	void InStore()
+	{
+		if (!inFields_ || inCurrent_ < 0 || inCurrent_ >= int(ins_.size()) || ins_[inCurrent_].own)
+			return;
+		Input &in = ins_[inCurrent_];
+		// The fields have to be showing this very input, or its name would be
+		// overwritten with another one's.
+		if (in.name != inShown_)
+			return;
+		std::string name = S(inName_->text());
+		name.erase(std::remove(name.begin(), name.end(), ']'), name.end());
+		if (name.empty() || (name != in.name && FindIn(name))) {
+			// Empty or taken: keep the old name rather than make two inputs one.
+			inName_->setText(Q(in.name));
+			if (QListWidgetItem *item = inList_->currentItem())
+				item->setText(Q(in.name));
+			name = in.name;
+		}
+		if (name != in.name) {
+			for (Destination &d : s_.dests)
+				if (d.input == in.name)
+					d.input = name;
+			in.name = name;
+			inShown_ = name;
+			FillInputCombo();
+		}
+	}
+
+	// Refills the platform's picker and selects what the model says, not what
+	// the widget showed: after a rename or a move the old entry may be gone.
+	// Callers Store() first, so the model holds whatever was picked.
+	void FillInputCombo()
+	{
+		if (!input_)
+			return;
+		input_->blockSignals(true);
+		input_->clear();
+		input_->addItem(T("Inputs.Own"), QString());
+		input_->addItem(T("Inputs.Shared"), QString::fromLatin1(kPickShared));
+		const int shared = ObsShared();
+		for (int n = 0; n < int(ins_.size()); ++n)
+			if (!ins_[n].own && n != shared)
+				input_->addItem(Q(ins_[n].name), Q(ins_[n].name));
+		int at = 0;
+		if (current_ >= 0 && current_ < int(s_.dests.size()))
+			if (const Input *in = FindIn(s_.dests[current_].input); in && !in->own)
+				at = shared >= 0 && in == &ins_[shared] ? 1 : std::max(0, input_->findData(Q(in->name)));
+		input_->setCurrentIndex(at);
+		input_->blockSignals(false);
+	}
+
 	struct OverlayRow {
 		QString kind, color;
 		QCheckBox *show = nullptr;
@@ -1526,7 +2224,31 @@ private:
 		if (current_ < 0 || current_ >= int(s_.dests.size()))
 			return;
 		Destination &d = s_.dests[current_];
+		const std::string wasName = d.name;
 		d.name = S(name_->text()).empty() ? "Platform" : S(name_->text());
+		// Its own input carries its name; keep the two in step.
+		if (d.name != wasName) {
+			if (Input *own = FindIn(d.input); own && own->own && !FindIn(d.name)) {
+				own->name = d.name;
+				d.input = d.name;
+			}
+		}
+		if (input_ && input_->count() > 0) {
+			const std::string picked = S(input_->currentData().toString());
+			const Input *cur = FindIn(d.input);
+			const int shared = ObsShared();
+			const bool onOwn = !cur || cur->own;
+			const bool onShared = cur && shared >= 0 && cur == &ins_[shared];
+			if (picked.empty()) {
+				if (!onOwn)
+					MoveDest(size_t(current_), std::string());
+			} else if (picked == kPickShared) {
+				if (!onShared)
+					MoveDest(size_t(current_), EnsureObsShared());
+			} else if (picked != d.input) {
+				MoveDest(size_t(current_), picked);
+			}
+		}
 		d.url = S(url_->text());
 		d.server_pick = S(server_->currentData(Qt::UserRole + 1).toString());
 		if (d.server_pick == "custom")
@@ -1725,6 +2447,7 @@ private:
 		const Destination empty;
 		const Destination &d = row >= 0 ? s_.dests[row] : empty;
 		name_->setText(Q(d.name));
+		FillInputCombo();
 		url_->setText(Q(d.url));
 		QString svc = Q(d.service);
 		if (svc.isEmpty())
@@ -1792,6 +2515,9 @@ private:
 		Destination d;
 		bool already = false;
 		if (CurrentObsTarget(d, already, s_.RtmpPort()) && !already) {
+			if (d.ingest_key.empty())
+				d.ingest_key = NextIngestKey(s_.dests);
+			GiveInput(d);
 			s_.dests.push_back(d);
 			list_->addItem(Q(d.name));
 			list_->setCurrentRow(list_->count() - 1);
@@ -1801,6 +2527,7 @@ private:
 			Destination neu;
 			neu.name = S(T("Settings.NewPlatform"));
 			neu.ingest_key = NextIngestKey(s_.dests);
+			GiveInput(neu);
 			s_.dests.push_back(neu);
 			list_->addItem(T("Settings.NewPlatform"));
 			list_->setCurrentRow(list_->count() - 1);
@@ -1849,6 +2576,20 @@ private:
 			// OBS publish cannot enter the preview.
 			if (!s_.single_pc)
 				i.outputs = true;
+		}
+		// What feeds what. Writing an old file's made-up inputs down changes
+		// nothing the engine runs, so only a real difference restarts it.
+		{
+			const std::vector<Input> a = original_.EffectiveInputs(), b = s_.EffectiveInputs();
+			bool same = a.size() == b.size();
+			for (size_t n = 0; same && n < a.size(); ++n)
+				same = a[n].key == b[n].key && a[n].external == b[n].external;
+			for (size_t n = 0; same && n < s_.dests.size() && n < original_.dests.size(); ++n)
+				same = original_.dests[n].ingest_key == s_.dests[n].ingest_key;
+			if (!same) {
+				i.proxy = true;
+				i.outputs = true;
+			}
 		}
 		if (original_.dests.size() != s_.dests.size()) {
 			i.proxy = true;
@@ -1915,6 +2656,27 @@ private:
 
 	Settings s_;
 	Settings original_;
+	// Every input, the platforms' own ones included. A file without [input …]
+	// arrives as one own input per platform — what the engine runs for it.
+	std::vector<Input> ins_;
+	int inCurrent_ = -1;   // place in ins_ of the shared input on screen
+	std::string inShown_;  // the input the fields were filled from
+	QWidget *inPlatforms_ = nullptr;
+	QVBoxLayout *inPlatformsLay_ = nullptr;
+	QPushButton *inRemove_ = nullptr;
+	QWidget *obsPanel_ = nullptr; // the OBS row: who shares its encode
+	QWidget *obsBoxes_ = nullptr;
+	QVBoxLayout *obsBoxesLay_ = nullptr;
+	std::vector<QLabel *> obsKeys_; // one per platform, beside its tick
+	QLabel *obsSingle_ = nullptr;   // shown when Single PC meets several encodes
+	static constexpr int kObsRow = -2;                       // list row that is OBS itself
+	static constexpr const char *kPickShared = "\x01shared"; // picker entry: OBS, shared encode
+	QComboBox *input_ = nullptr; // on the platform form
+	QListWidget *inList_ = nullptr;
+	QLineEdit *inName_ = nullptr;
+	QLineEdit *inKey_ = nullptr;
+	QComboBox *delayMode_ = nullptr;
+	QWidget *inFields_ = nullptr;
 	QJsonObject overlay_;
 	OverlayRow rows_[4];
 	QCheckBox *armedAsLive_ = nullptr;
@@ -2039,8 +2801,14 @@ public:
 
 void ShowSettings(QWidget *parent)
 {
-	SettingsDialog dlg(parent);
-	dlg.exec();
+	bool wizard = false;
+	{
+		SettingsDialog dlg(parent);
+		wizard = dlg.exec() == QDialog::Accepted && dlg.openWizard_;
+	}
+	// Saved and closed first, so the wizard reads the file this window wrote.
+	if (wizard)
+		ShowVerticalWizard(parent);
 }
 
 bool ObsRoutedToLiveDelay()

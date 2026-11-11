@@ -150,6 +150,12 @@ pub struct Engine {
     evicted_cfg: [Option<Tag>; 3],
 
     pub arm_delay: Option<Duration>,
+    /// The armed delay that is switched on right now. `delay` is where the
+    /// playhead actually landed — a keyframe, so a little further back — and
+    /// cannot tell an interface whether a newly armed value is in force yet.
+    /// Arming another value while delayed and activating again moves the
+    /// playhead there without going live in between.
+    active: Option<Duration>,
 
     out: broadcast::Sender<OutMsg>,
     state: watch::Sender<u64>,
@@ -224,6 +230,8 @@ pub struct Status {
     pub buffer_s: f64,
     pub buffer_mb: f64,
     pub arm_delay_s: Option<f64>,
+    /// The armed delay in force while delayed; None when live.
+    pub active_s: Option<f64>,
     pub armed: bool,
     pub cut_pending: bool,
     /// Input bitrate from OBS over the last second.
@@ -258,6 +266,7 @@ impl Engine {
             in_window: (Instant::now(), 0),
             in_kbps: 0.0,
             arm_delay: None,
+            active: None,
             input_out: broadcast::channel(1).0,
             input_cfg: [None, None, None],
             out,
@@ -560,6 +569,7 @@ impl Engine {
         if !self.output_active {
             self.mode = Mode::Delayed;
             self.delay = d;
+            self.active = Some(d);
             self.changed();
             return Ok(());
         }
@@ -569,6 +579,7 @@ impl Engine {
         let kf = self.keyframe_before(now - d).ok_or("no_keyframe")?.clone();
         self.jump_to(&kf, d, now);
         self.mode = Mode::Delayed;
+        self.active = Some(d);
         self.cut_after_seq = None;
         self.changed();
         Ok(())
@@ -578,6 +589,7 @@ impl Engine {
     pub fn cut(&mut self, now: Instant) {
         self.cut_after_seq = None;
         self.mode = Mode::Live;
+        self.active = None;
         if self.output_active {
             if let Some(kf) = self.keyframe_before(now).cloned() {
                 if kf.seq > self.cursor {
@@ -621,6 +633,7 @@ impl Engine {
             buffer_s: self.tags.front().map(|f| now.saturating_duration_since(f.arrival).as_secs_f64()).unwrap_or(0.0),
             buffer_mb: self.bytes as f64 / 1_048_576.0,
             arm_delay_s: self.arm_delay.map(|d| d.as_secs_f64()),
+            active_s: self.active.map(|d| d.as_secs_f64()),
             armed: self.is_armed(now),
             cut_pending: self.cut_after_seq.is_some(),
             in_kbps: if !self.publishing {
@@ -766,6 +779,44 @@ mod tests {
         assert!(out.windows(2).all(|w| w[1].ts >= w[0].ts), "output timestamps never go back");
         // Two jumps (activate, cut) each re-send the AVC config.
         assert_eq!(out.iter().filter(|t| t.config).count(), 3);
+    }
+
+    #[test]
+    fn a_delay_can_be_made_longer_or_shorter_without_going_live() {
+        let (mut e, mut rx) = setup();
+        let t0 = Instant::now();
+        e.push(MSG_VIDEO, 0, vec![0x17, 0, 0, 0, 0, 1], t0); // AVC config
+        e.arm(Duration::from_secs(5)).unwrap();
+        feed(&mut e, t0, 0, 10);
+        let now = t0 + Duration::from_millis(9967);
+        e.activate(now).unwrap();
+        assert_eq!(e.status(now).active_s, Some(5.0));
+
+        // Longer: arming 10 s while 5 s is on needs the buffer to reach back that far first.
+        e.arm(Duration::from_secs(10)).unwrap();
+        assert_eq!(e.status(now).active_s, Some(5.0), "arming alone changes nothing on air");
+        feed(&mut e, t0, 10, 22);
+        let now = t0 + Duration::from_millis(21967);
+        assert!(e.is_armed(now));
+        e.activate(now).unwrap();
+        assert_eq!(e.mode, Mode::Delayed);
+        assert_eq!(e.status(now).active_s, Some(10.0));
+        assert!(e.delay >= Duration::from_secs(10) && e.delay < Duration::from_secs(11));
+
+        // Shorter: the buffer already holds it, so it is there at once.
+        e.arm(Duration::from_secs(3)).unwrap();
+        feed(&mut e, t0, 22, 24);
+        let now = t0 + Duration::from_millis(23967);
+        assert!(e.is_armed(now));
+        e.activate(now).unwrap();
+        assert_eq!(e.status(now).active_s, Some(3.0));
+        assert!(e.delay >= Duration::from_secs(3) && e.delay < Duration::from_secs(4));
+        feed(&mut e, t0, 24, 30);
+
+        e.cut(t0 + Duration::from_millis(29967));
+        assert_eq!(e.status(t0 + Duration::from_millis(29967)).active_s, None);
+        let out = drain(&mut rx);
+        assert!(out.windows(2).all(|w| w[1].ts >= w[0].ts), "output timestamps never go back");
     }
 
     #[test]

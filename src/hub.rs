@@ -324,6 +324,7 @@ impl Hub {
                 buffer_s: 0.0,
                 buffer_mb: 0.0,
                 arm_delay_s: None,
+                active_s: None,
                 armed: false,
                 cut_pending: false,
                 in_kbps: 0.0,
@@ -342,6 +343,7 @@ impl Hub {
         out.cut_pending = statuses.iter().any(|s| s.cut_pending);
         out.delay_s = statuses.iter().map(|s| s.delay_s).fold(0.0_f64, f64::max);
         out.arm_delay_s = statuses.iter().find_map(|s| s.arm_delay_s);
+        out.active_s = statuses.iter().find_map(|s| s.active_s);
         out.armed = match out.arm_delay_s {
             Some(_) if out.input => statuses.iter().filter(|s| s.input).all(|s| s.armed),
             Some(_) => false,

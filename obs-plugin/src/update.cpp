@@ -851,6 +851,7 @@ const ReleaseNote kReleaseNotes[] = {
 	{"1.0.38", "WhatsNew.Body1038"},
 	{"1.0.39", "WhatsNew.Body1039"},
 	{"1.0.40", "WhatsNew.Body1040"},
+	{"1.0.43", "WhatsNew.Body1043"},
 };
 
 QString SeenVersionPath()
