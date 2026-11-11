@@ -256,8 +256,8 @@ pub fn act_on(ctx: &Ctx, action: &str, delay: Option<f64>, input: Option<&str>) 
     r
 }
 
-pub async fn run(addr: String, ctx: Arc<Ctx>) -> io::Result<()> {
-    let listener = TcpListener::bind(&addr).await?;
+pub async fn run(listener: std::net::TcpListener, addr: String, ctx: Arc<Ctx>) -> io::Result<()> {
+    let listener = TcpListener::from_std(listener)?;
     log!("API: http://{addr}/state");
     loop {
         let (sock, _) = listener.accept().await?;

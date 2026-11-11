@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.45 – 2026-11-11
+
+- **A taken port no longer stops LiveDelay.** When another program (an RTMP server, a second OBS, a range Windows keeps for Hyper-V) holds 1935 or 7799, the engine takes the next free port, writes it to the ini and says so in the log; OBS's stream server and the dock follow it. Before, OBS showed *os error 10048* and the delay did not run.
+
 ## 1.0.44 – 2026-11-11
 
 - **An overlay per picture.** The overlay is drawn into the picture, so a picture another program feeds — Aitum Vertical for TikTok, say — can carry its own: a Browser source on `/overlay?input=NAME` shows that input's delay, and `/edit-theme?input=NAME` gives it a look of its own (`overlays/NAME.json` beside the ini). Without one it shows the main look. Settings → Inputs and the web panel's Overlay page give each input's address and a *Look* button.

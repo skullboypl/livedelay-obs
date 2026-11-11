@@ -537,15 +537,53 @@ std::string LastError()
 	return buf;
 }
 
+// The RTMP port OBS may still point at after the engine moved off it; 0 if none.
+static int g_moved_from = 0;
+
 std::string StartProxy()
 {
 	// Lets the web panel tell "served from inside OBS" from "served by the app".
 	ld_set_host("obs");
-	if (ld_start(ConfigPath().c_str()) == 0)
-		return {};
-	char buf[512];
-	ld_last_error(buf, sizeof(buf));
-	return buf;
+	const int before = Settings::Load(ConfigPath()).RtmpPort();
+	const int rc = ld_start(ConfigPath().c_str());
+	// The engine takes the next free port when another program holds ours and
+	// writes it to the ini; everything here reads the ports from there.
+	const Settings now = Settings::Load(ConfigPath());
+	const size_t c = now.api.rfind(':');
+	const int api = c == std::string::npos ? 0 : std::atoi(now.api.c_str() + c + 1);
+	g_api_port = uint16_t(api > 0 && api < 65536 ? api : 7799);
+	if (now.RtmpPort() != before && g_moved_from == 0)
+		g_moved_from = before;
+	FollowMovedRtmpPort();
+	std::string err = LastError();
+	if (rc != 0 && err.empty())
+		err = "LiveDelay could not start";
+	return err;
+}
+
+void FollowMovedRtmpPort()
+{
+	if (g_moved_from == 0)
+		return;
+	obs_service_t *svc = obs_frontend_get_streaming_service();
+	if (!svc)
+		return; // OBS has not loaded its service yet; FINISHED_LOADING calls again.
+	const int now = Settings::Load(ConfigPath()).RtmpPort();
+	const std::string from = "127.0.0.1:" + std::to_string(g_moved_from);
+	obs_data_t *st = obs_service_get_settings(svc);
+	std::string server = obs_data_get_string(st, "server");
+	const size_t at = server.find(from);
+	// Kept until it works: while OBS loads, the service it hands out is not
+	// the profile's yet, and FINISHED_LOADING asks again.
+	if (at != std::string::npos) {
+		g_moved_from = 0;
+		server.replace(at, from.size(), "127.0.0.1:" + std::to_string(now));
+		obs_data_set_string(st, "server", server.c_str());
+		obs_service_update(svc, st);
+		obs_frontend_save_streaming_service();
+		blog(LOG_INFO, "[livedelay] OBS stream server moved to %s", server.c_str());
+	}
+	obs_data_release(st);
 }
 
 static std::string ApiBase()
@@ -3025,6 +3063,7 @@ bool ObsRoutedToLiveDelay()
 
 void HardenObsForLiveDelay(bool during_start)
 {
+	FollowMovedRtmpPort();
 	const Settings s = Settings::Load(ConfigPath());
 	const int port = s.RtmpPort();
 	if (!RoutedTo(port))

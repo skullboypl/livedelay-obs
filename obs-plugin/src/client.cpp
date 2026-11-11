@@ -37,7 +37,7 @@ SOCKET Connect(int timeout_ms)
 	setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char *>(&t), sizeof(t));
 	sockaddr_in addr{};
 	addr.sin_family = AF_INET;
-	addr.sin_port = htons(kApiPort);
+	addr.sin_port = htons(g_api_port.load());
 	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 	if (connect(s, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
 		closesocket(s);

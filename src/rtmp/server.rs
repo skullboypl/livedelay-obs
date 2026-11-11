@@ -13,8 +13,8 @@ use tokio::net::{TcpListener, TcpStream};
 const WINDOW: u32 = 2_500_000;
 const STREAM_ID: u32 = 1;
 
-pub async fn run(addr: String, hub: Arc<Hub>) -> io::Result<()> {
-    let listener = TcpListener::bind(&addr).await?;
+pub async fn run(listener: std::net::TcpListener, addr: String, hub: Arc<Hub>) -> io::Result<()> {
+    let listener = TcpListener::from_std(listener)?;
     log!("RTMP: waiting for OBS on rtmp://{addr}/live (keys ld0… / _idle)");
     loop {
         let (sock, peer) = listener.accept().await?;

@@ -12,6 +12,7 @@ pub mod engine;
 mod ffi;
 pub mod hub;
 pub mod overlay;
+mod ports;
 mod preview;
 pub mod rtmp;
 
@@ -139,7 +140,19 @@ impl Proxy {
             delay_mode: std::sync::Mutex::new(cfg.delay_mode.clone()),
             input_flags: cfg.inputs.iter().map(|i| (i.own, i.external)).collect(),
         });
-        let (listen, api_addr) = (cfg.listen.clone(), cfg.api.clone());
+        // Bound here, before the thread, so a port taken by another program is
+        // swapped for a free one and written back before the host reads the ini.
+        let bound = ports::bind_free(&cfg.listen).and_then(|l| Ok((l, ports::bind_free(&cfg.api)?)));
+        let ((listen, listen_addr), (api_listener, api_addr)) = match bound {
+            Ok(b) => b,
+            Err(e) => {
+                on_fatal(format!("LiveDelay cannot run ({e}). No free port near {} / {}.", cfg.listen, cfg.api));
+                return Proxy { ctx, stop: None, thread: None };
+            }
+        };
+        if listen_addr != cfg.listen || api_addr != cfg.api {
+            ports::write_back(&cfg.ini_path, &listen_addr, &api_addr);
+        }
         let (stop_tx, stop_rx) = oneshot::channel();
         let proxy_ctx = ctx.clone();
         let thread = std::thread::Builder::new()
@@ -158,14 +171,14 @@ impl Proxy {
                         tokio::spawn(engine::run_pump(slot.shared.clone()));
                     }
                     extra(&hub);
-                    let api = tokio::spawn(api::run(api_addr, proxy_ctx));
-                    let ingest = tokio::spawn(rtmp::server::run(listen, hub));
+                    let api = tokio::spawn(api::run(api_listener, api_addr, proxy_ctx));
+                    let ingest = tokio::spawn(rtmp::server::run(listen, listen_addr, hub));
                     let err = tokio::select! {
                         _ = stop_rx => return,
                         r = api => format!("API: {r:?}"),
                         r = ingest => format!("RTMP: {r:?}"),
                     };
-                    on_fatal(format!("LiveDelay cannot run ({err}). Is the port already in use, e.g. by another copy?"));
+                    on_fatal(format!("LiveDelay stopped ({err})."));
                 });
             })
             .expect("spawn proxy thread");

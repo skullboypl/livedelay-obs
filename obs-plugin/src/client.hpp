@@ -10,7 +10,9 @@
 
 namespace livedelay {
 
-constexpr uint16_t kApiPort = 7799;
+// The engine's API port. 7799 unless that was taken and the engine moved;
+// StartProxy sets it from the ini after every start.
+inline std::atomic<uint16_t> g_api_port{7799};
 
 // Sends one request and returns the response body, or an empty string when the
 // proxy is unreachable. `status` gets the HTTP status code (0 on failure).

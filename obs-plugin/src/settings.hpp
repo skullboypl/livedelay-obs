@@ -137,6 +137,9 @@ std::string FreeIngestKey(const Settings &s);
 std::string ConfigPath();
 // (Re)starts the embedded proxy. Returns an empty string or the error.
 std::string StartProxy();
+// When the engine had to leave a taken RTMP port, points OBS's stream server
+// from the old port to the new one. Waits for OBS's service if not loaded yet.
+void FollowMovedRtmpPort();
 
 std::string OverlayUrl();
 std::string LivePreviewUrl();
