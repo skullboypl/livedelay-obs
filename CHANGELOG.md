@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.42 – 2026-11-11
+
+- **The update from 1.0.41 sticks.** 1.0.41 carried the right code but still called itself 1.0.40, so the dock kept offering the same update after it had been installed. The version now comes from one place in the build, so the two cannot drift apart again.
+- **Each platform is listed once in the dock.** With the 1.0.41 engine the dock also read every input as a platform — an older settings file gets one input per platform, named after it, so Twitch and Kick appeared twice. Worse, the Live and Stop buttons on the real rows were shifted and could act on the wrong platform. The dock now reads platforms from the platform list only.
+
 ## 1.0.41 – 2026-11-11
 
 - **One input can feed many platforms.** An input is now a thing of its own — `[input Nazwa]` with its own publish key — and a platform says which one feeds it with `input = Nazwa`. Twitch and YouTube can share one horizontal picture while TikTok takes a vertical one, so OBS encodes and uploads it once instead of once per platform. A file without `[input …]` is unchanged: one input per platform, on its own key, exactly as before. `/state` carries an `inputs` array with each input's rate, picture size and buffer; `/arm`, `/activate`, `/cut`, `/cut-after` and `/disarm` take an optional `?input=` and without it still act on everything, so Stream Deck keeps working. `delay_mode = per_input` tells the interfaces to show one set of buttons per input.

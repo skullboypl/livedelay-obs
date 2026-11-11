@@ -544,7 +544,11 @@ void Dock::ShowDestinations(const std::string &j)
 		destGrid_->addWidget(rate, row, 3);
 		row++;
 	}
-	size_t p = 0;
+	// Inputs carry a "name" too and come before the platforms, so the rows are
+	// read from the dests array alone. Reading every "name" in the document
+	// listed each input as a platform and shifted every row's dest/start index.
+	const size_t destsAt = j.find("\"dests\":[");
+	size_t p = destsAt == std::string::npos ? j.size() : destsAt;
 	int index = 0;
 	while ((p = j.find("\"name\":\"", p)) != std::string::npos) {
 		const std::string state = JsonString(j, "state", p);

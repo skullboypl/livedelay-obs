@@ -1,7 +1,9 @@
 #pragma once
 
-// Keep in sync with Cargo.toml, version.rc and CMakeLists.txt project VERSION.
-#define LD_VERSION_MAJOR 1
-#define LD_VERSION_MINOR 0
-#define LD_VERSION_PATCH 40
-#define LD_VERSION_STRING "1.0.40"
+// The version is project(VERSION ...) in CMakeLists.txt, passed in as a define.
+// A copy written out here went stale once: 1.0.41 shipped calling itself 1.0.40,
+// so every updated copy kept offering the same update. A release bumps
+// CMakeLists.txt and Cargo.toml, and nothing else.
+#ifndef LD_VERSION_STRING
+#error "LD_VERSION_STRING comes from CMakeLists.txt"
+#endif
