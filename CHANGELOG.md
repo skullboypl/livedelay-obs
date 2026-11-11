@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.41 – 2026-11-11
+
+- **One input can feed many platforms.** An input is now a thing of its own — `[input Nazwa]` with its own publish key — and a platform says which one feeds it with `input = Nazwa`. Twitch and YouTube can share one horizontal picture while TikTok takes a vertical one, so OBS encodes and uploads it once instead of once per platform. A file without `[input …]` is unchanged: one input per platform, on its own key, exactly as before. `/state` carries an `inputs` array with each input's rate, picture size and buffer; `/arm`, `/activate`, `/cut`, `/cut-after` and `/disarm` take an optional `?input=` and without it still act on everything, so Stream Deck keeps working. `delay_mode = per_input` tells the interfaces to show one set of buttons per input.
+- **Chat, activity and stream info as OBS docks.** Each platform offers its panels as tick boxes instead of addresses to paste: chat, the activity list and the page that changes the title and category, with the stream manager, moderation and analytics for whoever wants them. Every address was checked against a live account. Signing in happens in OBS's own cookie jar — LiveDelay neither sees nor stores it.
+- **The settings file keeps what this build does not understand.** A section from a newer or older build used to lose its header while its keys were read as global settings, so `delay = 20` under such a section quietly became the global delay and the file was rewritten into something that meant something else. Unknown sections are now copied back word for word and their keys applied to nothing.
+- **The web panel can create inputs, not only read them.** `POST /config` writes `[input …]` sections and points a platform at one, refusing a name that cannot be written back, two inputs sharing a publish key, or a platform naming an input that is not there.
+
 ## 1.0.40 – 2026-11-04
 
 - **New settings show their names again.** An update of the flat plugin DLL wrote the locale files next to OBS instead of next to the plugin, so OBS kept the old file and the new rows appeared as `Encode.BufferCodec`. The install now puts those files in the plugin folder, and a missing line is downloaded on startup.
