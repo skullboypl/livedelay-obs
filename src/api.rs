@@ -14,6 +14,7 @@
 //! POST /dest/start?i=0   start / stop one destination (/dest/stop?i=0)
 //! POST /settings         hot-apply delay / max_buffer_mb without restarting
 //! GET  /overlay/config   overlay look and texts as JSON; POST replaces it
+//!                         (?input=NAME: that input's own look, see overlay.rs)
 //! GET  /edit-theme       visual editor for the overlay
 //! GET  /panel            settings page (keys only readable from this machine)
 //! GET  /config           the ini as JSON; localhost only
@@ -792,8 +793,8 @@ async fn handle(mut sock: TcpStream, ctx: &Ctx) -> io::Result<()> {
                 Err(e) => respond(&mut sock, "400 Bad Request", &format!("{{\"error\":\"{}\"}}", esc(&e))).await,
             }
         }
-        ("GET", "/overlay/config") => respond(&mut sock, "200 OK", &ctx.overlay.get()).await,
-        ("POST", "/overlay/config") => match ctx.overlay.set(&String::from_utf8_lossy(&body)) {
+        ("GET", "/overlay/config") => respond(&mut sock, "200 OK", &ctx.overlay.get_for(input.as_deref())).await,
+        ("POST", "/overlay/config") => match ctx.overlay.set_for(input.as_deref(), &String::from_utf8_lossy(&body)) {
             Ok(()) => {
                 ctx.hub.bump();
                 respond(&mut sock, "200 OK", "{\"ok\":true}").await

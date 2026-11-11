@@ -157,7 +157,10 @@ Settings Settings::Load(const std::string &path)
 				d.name = Trim(sec.substr(4));
 				s.dests.push_back(d);
 				at = In::Dest;
-			} else if (sec.rfind("input ", 0) == 0 && !Trim(sec.substr(6)).empty()) {
+			} else if (sec.rfind("input ", 0) == 0 && !Trim(sec.substr(6)).empty() &&
+				   std::none_of(s.inputs.begin(), s.inputs.end(),
+						[&](const Input &x) { return x.name == Trim(sec.substr(6)); })) {
+				// A repeated name (the engine does the same) stays as foreign text.
 				Input i;
 				i.name = Trim(sec.substr(6));
 				s.inputs.push_back(i);
@@ -1224,12 +1227,25 @@ public:
 		destLayout->addLayout(destBtns);
 
 		// Overlay for a Browser source.
-		auto *urlLine = new QLineEdit(Q(OverlayUrl()));
+		ovUrl_ = new QLineEdit(Q(OverlayUrl()));
+		auto *urlLine = ovUrl_;
 		urlLine->setReadOnly(true);
+		// Which picture's overlay this page edits: OBS's own, or one another
+		// program feeds (the overlay is drawn into the picture, so each has one).
+		ovPick_ = new QComboBox;
+		ovOwn_ = new QCheckBox(T("Overlay.Own"));
+		ovOwn_->setToolTip(T("Overlay.OwnTip"));
+		ovPickBox_ = new QWidget;
+		auto *pickLay = new QHBoxLayout(ovPickBox_);
+		pickLay->setContentsMargins(0, 0, 0, 0);
+		pickLay->addWidget(ovPick_, 1);
+		pickLay->addWidget(ovOwn_);
+		ovNote_ = Hint(T("Overlay.PerInputNote"));
 		auto *copy = new QPushButton(T("Settings.Copy"));
 		auto *preview = new QPushButton(T("Settings.Preview"));
 		preview->setToolTip(T("Settings.PreviewTip"));
 		auto *toScene = new QPushButton(T("Settings.AddToScene"));
+		ovToScene_ = toScene;
 		auto *editor = new QPushButton(T("Settings.ThemeEditor"));
 		editor->setToolTip(T("Settings.ThemeEditorTip"));
 		auto *urlRow = new QHBoxLayout;
@@ -1242,6 +1258,9 @@ public:
 		const QJsonObject texts = overlay_.value("texts").toObject(), showMap = overlay_.value("show").toObject(),
 				  colors = overlay_.value("colors").toObject();
 		auto *ovForm = new QFormLayout;
+		ovForm_ = ovForm;
+		ovForm->addRow(T("Overlay.Picture"), ovPickBox_);
+		ovForm->addRow(QString(), ovNote_);
 		ovForm->addRow(T("Settings.Address"), urlRow);
 		const char *kinds[] = {"live", "arming", "armed", "delayed"};
 		const char *labels[] = {"Settings.Live", "Settings.Arming", "Settings.Armed", "Settings.Delayed"};
@@ -1269,6 +1288,16 @@ public:
 		armedAsLive_->setToolTip(T("Settings.ArmedAsLiveTip"));
 		armedAsLive_->setChecked(overlay_.value("armedAsLive").toBool(false));
 		ovForm->addRow(QString(), armedAsLive_);
+		ov_[QString()] = OvLook{overlay_, overlay_, true, true};
+		connect(ovPick_, &QComboBox::currentIndexChanged, this, [this] {
+			const QString next = ovPick_->currentData().toString();
+			if (next == ovAt_)
+				return;
+			ReadOvRows();
+			ovAt_ = next;
+			ShowOvRows();
+		});
+		connect(ovOwn_, &QCheckBox::toggled, this, [this] { OvEnable(); });
 		auto *editorRow = new QHBoxLayout;
 		editorRow->addWidget(Hint(T("Settings.ThemeEditorAbout")), 1);
 		editorRow->addWidget(editor);
@@ -1391,7 +1420,13 @@ public:
 			ShowIn();
 		});
 		tabs->addTab(ScrollWrap(BuildAudioPage()), T("Settings.TabAudio"));
-		tabs->addTab(ScrollWrap(ovPage), T("Settings.TabOverlay"));
+		QWidget *ovTab = ScrollWrap(ovPage);
+		tabs->addTab(ovTab, T("Settings.TabOverlay"));
+		connect(tabs, &QTabWidget::currentChanged, this, [this, tabs, ovTab](int i) {
+			if (tabs->widget(i) == ovTab)
+				RefreshOvPick();
+		});
+		RefreshOvPick();
 		tabs->addTab(MakeLogPage(), T("Settings.TabLogs"));
 		tabs->addTab(ScrollWrap(aboutPage), T("Settings.TabAbout"));
 
@@ -1539,13 +1574,15 @@ public:
 		connect(helpBtn, &QPushButton::clicked, this, [this] { ShowHelp(this); });
 		connect(copy, &QPushButton::clicked, this,
 			[urlLine] { QApplication::clipboard()->setText(urlLine->text()); });
-		connect(preview, &QPushButton::clicked, this,
-			[] { QDesktopServices::openUrl(QUrl(Q(OverlayUrl() + "?preview"))); });
+		connect(preview, &QPushButton::clicked, this, [this] {
+			QDesktopServices::openUrl(QUrl(Q(OverlayUrl()) + QStringLiteral("?preview") + OvQuery(QStringLiteral("&"))));
+		});
 		connect(toScene, &QPushButton::clicked, this, [this] { AddOverlayToScene(this); });
-		connect(editor, &QPushButton::clicked, this, [] {
+		connect(editor, &QPushButton::clicked, this, [this] {
 			const char *locale = obs_get_locale();
 			QDesktopServices::openUrl(QUrl(Q(OverlayUrl().substr(0, OverlayUrl().size() - 8) + "/edit-theme?lang=" +
-						      std::string(locale ? locale : "en").substr(0, 2))));
+						      std::string(locale ? locale : "en").substr(0, 2)) +
+						    OvQuery(QStringLiteral("&"))));
 		});
 		connect(support, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(kSupportUrl)); });
 		connect(wizard, &QPushButton::clicked, this, [] { QDesktopServices::openUrl(QUrl(kSmoothWizardUrl)); });
@@ -1665,7 +1702,19 @@ private:
 			auto *addrForm = new QFormLayout;
 			addrForm->setContentsMargins(0, 0, 0, 0);
 			addrForm->addRow(T("Inputs.Address"), row);
+			// The key OBS's own stream lands on. Any other key lands here too,
+			// so OBS works without one; only the other inputs need theirs.
+			obsKey_ = new QLineEdit;
+			obsKey_->setReadOnly(true);
+			auto *obsKeyCopy = new QPushButton(T("Settings.Copy"));
+			connect(obsKeyCopy, &QPushButton::clicked, this,
+				[this] { QApplication::clipboard()->setText(obsKey_->text()); });
+			auto *keyRow = new QHBoxLayout;
+			keyRow->addWidget(obsKey_, 1);
+			keyRow->addWidget(obsKeyCopy);
+			addrForm->addRow(T("Inputs.Key"), keyRow);
 			obsLay->addLayout(addrForm);
+			obsLay->addWidget(Hint(T("Inputs.ObsKeyNote")));
 		}
 		auto *sharedTitle = new QLabel(T("Inputs.ObsShared"));
 		sharedTitle->setStyleSheet(QStringLiteral("font-weight: 600;"));
@@ -1696,6 +1745,16 @@ private:
 		auto *addrRow = new QHBoxLayout;
 		addrRow->addWidget(addr, 1);
 		addrRow->addWidget(copyAddr);
+		// The overlay is drawn into the picture, so this picture takes its own.
+		inOverlay_ = new QLineEdit;
+		inOverlay_->setReadOnly(true);
+		auto *copyOverlay = new QPushButton(T("Settings.Copy"));
+		auto *overlayLook = new QPushButton(T("Inputs.OverlayLook"));
+		overlayLook->setToolTip(T("Inputs.OverlayLookTip"));
+		auto *overlayRow = new QHBoxLayout;
+		overlayRow->addWidget(inOverlay_, 1);
+		overlayRow->addWidget(copyOverlay);
+		overlayRow->addWidget(overlayLook);
 		inPlatforms_ = new QWidget;
 		inPlatformsLay_ = new QVBoxLayout(inPlatforms_);
 		inPlatformsLay_->setContentsMargins(0, 0, 0, 0);
@@ -1707,6 +1766,8 @@ private:
 		form->addRow(T("Inputs.Address"), addrRow);
 		form->addRow(T("Inputs.Key"), keyRow);
 		form->addRow(T("Inputs.Platforms"), inPlatforms_);
+		form->addRow(T("Inputs.Overlay"), overlayRow);
+		form->addRow(QString(), Hint(T("Inputs.OverlayAbout")));
 		inFields_ = new QWidget;
 		inFields_->setLayout(form);
 
@@ -1747,6 +1808,17 @@ private:
 		connect(inName_, &QLineEdit::textEdited, this, [this](const QString &t) {
 			if (QListWidgetItem *item = inList_->currentItem(); item && inCurrent_ >= 0)
 				item->setText(t);
+			inOverlay_->setText(InputOverlayUrl(t));
+		});
+		connect(copyOverlay, &QPushButton::clicked, this,
+			[this] { QApplication::clipboard()->setText(inOverlay_->text()); });
+		connect(overlayLook, &QPushButton::clicked, this, [this] {
+			const char *locale = obs_get_locale();
+			const QString base = Q(OverlayUrl().substr(0, OverlayUrl().size() - 8));
+			QDesktopServices::openUrl(QUrl(base + QStringLiteral("/edit-theme?lang=") +
+						       Q(std::string(locale ? locale : "en").substr(0, 2)) +
+						       QStringLiteral("&input=") +
+						       QString::fromUtf8(QUrl::toPercentEncoding(inName_->text().trimmed()))));
 		});
 		connect(inName_, &QLineEdit::editingFinished, this, [this] { InStore(); });
 		connect(copyKey, &QPushButton::clicked, this, [this] { QApplication::clipboard()->setText(inKey_->text()); });
@@ -1995,6 +2067,7 @@ private:
 		inShown_ = in.name;
 		inName_->setText(Q(in.name));
 		inKey_->setText(Q(in.key));
+		inOverlay_->setText(InputOverlayUrl(Q(in.name)));
 		for (size_t n = 0; n < s_.dests.size(); ++n) {
 			const Destination &d = s_.dests[n];
 			auto *box = new QCheckBox(Q(d.name));
@@ -2027,6 +2100,17 @@ private:
 
 	void RefreshObsKeys()
 	{
+		if (obsKey_) {
+			std::string key;
+			for (const Input &in : ins_)
+				if (!in.external) {
+					key = in.key;
+					break;
+				}
+			if (key.empty() && !s_.dests.empty())
+				key = s_.dests.front().ingest_key;
+			obsKey_->setText(Q(key.empty() ? std::string("ld0") : key));
+		}
 		// Single PC has exactly one encode to give.
 		if (obsSingle_)
 			obsSingle_->setVisible(singlePc_ && singlePc_->isChecked() && ObsEncodes() > 1);
@@ -2115,28 +2199,134 @@ private:
 					    : QString("color: %1; padding: 3px 10px; font-style: italic;").arg(ThemeColor(true)));
 	}
 
-	// Texts and on/off go straight to the running overlay; no restart needed.
-	void SaveOverlay()
+	/// One picture's overlay as the server has it and as edited here.
+	struct OvLook {
+		QJsonObject saved, now;
+		bool ownSaved = true, own = true; // false: shows the main look
+	};
+
+	/// "?input=NAME" for the picture on screen, or nothing for OBS's own.
+	QString OvQuery(const QString &lead = QStringLiteral("?")) const
 	{
-		if (overlay_.isEmpty())
+		if (ovAt_.isEmpty())
+			return QString();
+		return lead + QStringLiteral("input=") + QString::fromUtf8(QUrl::toPercentEncoding(ovAt_));
+	}
+
+	void ReadOvRows()
+	{
+		auto it = ov_.find(ovAt_);
+		if (it == ov_.end())
 			return;
-		QJsonObject texts = overlay_.value("texts").toObject(), show = overlay_.value("show").toObject();
+		QJsonObject &now = it->second.now;
+		QJsonObject texts = now.value("texts").toObject(), show = now.value("show").toObject();
 		for (const OverlayRow &r : rows_) {
 			texts[r.kind] = r.text->text().trimmed();
 			show[r.kind] = r.show->isChecked();
 		}
-		QJsonObject next = overlay_;
-		next["texts"] = texts;
-		next["show"] = show;
-		next["armedAsLive"] = armedAsLive_ && armedAsLive_->isChecked();
-		if (next == overlay_)
+		now["texts"] = texts;
+		now["show"] = show;
+		now["armedAsLive"] = armedAsLive_ && armedAsLive_->isChecked();
+		if (!ovAt_.isEmpty())
+			it->second.own = ovOwn_->isChecked();
+	}
+
+	void ShowOvRows()
+	{
+		if (ov_.find(ovAt_) == ov_.end()) {
+			QJsonObject got = QJsonDocument::fromJson(QByteArray::fromStdString(
+								  Request("GET", "/overlay/config" + S(OvQuery()))))
+						  .object();
+			const bool own = !got.value("inherited").toBool(false);
+			got.remove("inherited");
+			ov_[ovAt_] = OvLook{got, got, own, own};
+		}
+		const OvLook &look = ov_[ovAt_];
+		const QJsonObject texts = look.now.value("texts").toObject(), show = look.now.value("show").toObject(),
+				  colors = look.now.value("colors").toObject();
+		for (OverlayRow &r : rows_) {
+			const QSignalBlocker a(r.show), b(r.text);
+			r.color = colors.value(r.kind).toString("#3ddc84");
+			r.show->setChecked(show.value(r.kind).toBool(true));
+			r.text->setText(texts.value(r.kind).toString());
+		}
+		armedAsLive_->setChecked(look.now.value("armedAsLive").toBool(false));
+		{
+			const QSignalBlocker c(ovOwn_);
+			ovOwn_->setChecked(look.own);
+		}
+		ovOwn_->setVisible(!ovAt_.isEmpty());
+		ovUrl_->setText(Q(OverlayUrl()) + OvQuery());
+		// Add to scene puts it in OBS's current scene: right only for OBS's picture.
+		ovToScene_->setEnabled(ovAt_.isEmpty());
+		ovToScene_->setToolTip(ovAt_.isEmpty() ? QString() : T("Overlay.OtherScene"));
+		OvEnable();
+	}
+
+	void OvEnable()
+	{
+		const bool on = ovAt_.isEmpty() || ovOwn_->isChecked();
+		for (OverlayRow &r : rows_) {
+			r.show->setEnabled(on);
+			UpdateOverlayPreview(r);
+			if (!on)
+				r.text->setEnabled(false);
+		}
+		armedAsLive_->setEnabled(on);
+	}
+
+	/// The pictures to choose from: OBS's own and every input another program
+	/// feeds, as the Inputs tab has them right now.
+	void RefreshOvPick()
+	{
+		if (!ovPick_)
 			return;
-		int status = 0;
-		Request("POST", "/overlay/config", QJsonDocument(next).toJson(QJsonDocument::Compact).toStdString(), &status);
-		if (status != 200)
-			QMessageBox::warning(this, "LiveDelay", T("Settings.SaveFailed"));
-		else
-			overlay_ = next;
+		ReadOvRows();
+		std::vector<QString> names;
+		for (const Input &in : ins_)
+			if (in.external && !in.name.empty())
+				names.push_back(Q(in.name));
+		if (std::find(names.begin(), names.end(), ovAt_) == names.end())
+			ovAt_.clear();
+		{
+			const QSignalBlocker block(ovPick_);
+			ovPick_->clear();
+			ovPick_->addItem(T("Overlay.Main"), QString());
+			for (const QString &n : names)
+				ovPick_->addItem(n, n);
+			ovPick_->setCurrentIndex(std::max(0, ovPick_->findData(ovAt_)));
+		}
+		const bool perInput = delayMode_ && delayMode_->currentData().toString() == QStringLiteral("per_input");
+		ovForm_->setRowVisible(ovPickBox_, !names.empty());
+		ovForm_->setRowVisible(ovNote_, names.empty() && perInput);
+		ShowOvRows();
+	}
+
+	// Texts and on/off go straight to the running overlays; no restart needed.
+	void SaveOverlay()
+	{
+		if (overlay_.isEmpty())
+			return;
+		ReadOvRows();
+		for (auto &[name, look] : ov_) {
+			const bool changed = look.own != look.ownSaved || (look.own && look.now != look.saved);
+			if (!changed)
+				continue;
+			const QJsonObject body = look.own ? look.now : QJsonObject{{"inherited", true}};
+			const std::string path =
+				"/overlay/config" +
+				(name.isEmpty() ? std::string() : "?input=" + std::string(QUrl::toPercentEncoding(name).constData()));
+			int status = 0;
+			Request("POST", path, QJsonDocument(body).toJson(QJsonDocument::Compact).toStdString(), &status);
+			if (status != 200) {
+				QMessageBox::warning(this, "LiveDelay", T("Settings.SaveFailed"));
+				continue;
+			}
+			look.saved = look.now;
+			look.ownSaved = look.own;
+			if (name.isEmpty())
+				overlay_ = look.now;
+		}
 	}
 
 	// Lists the servers (regions) of `service`. `pick` is the saved row
@@ -2667,18 +2857,35 @@ private:
 	QWidget *obsPanel_ = nullptr; // the OBS row: who shares its encode
 	QWidget *obsBoxes_ = nullptr;
 	QVBoxLayout *obsBoxesLay_ = nullptr;
+	/// The Browser source address of one input's overlay.
+	static QString InputOverlayUrl(const QString &name)
+	{
+		return Q(OverlayUrl()) + QStringLiteral("?input=") + QString::fromUtf8(QUrl::toPercentEncoding(name.trimmed()));
+	}
+
 	std::vector<QLabel *> obsKeys_; // one per platform, beside its tick
 	QLabel *obsSingle_ = nullptr;   // shown when Single PC meets several encodes
+	QLineEdit *obsKey_ = nullptr;   // the key OBS's own picture lands on
 	static constexpr int kObsRow = -2;                       // list row that is OBS itself
 	static constexpr const char *kPickShared = "\x01shared"; // picker entry: OBS, shared encode
 	QComboBox *input_ = nullptr; // on the platform form
 	QListWidget *inList_ = nullptr;
 	QLineEdit *inName_ = nullptr;
 	QLineEdit *inKey_ = nullptr;
+	QLineEdit *inOverlay_ = nullptr;
 	QComboBox *delayMode_ = nullptr;
 	QWidget *inFields_ = nullptr;
 	QJsonObject overlay_;
 	OverlayRow rows_[4];
+	std::map<QString, OvLook> ov_; // picture ("" = OBS's own) → its look
+	QString ovAt_;                 // the picture on screen
+	QComboBox *ovPick_ = nullptr;
+	QCheckBox *ovOwn_ = nullptr;
+	QWidget *ovPickBox_ = nullptr;
+	QLabel *ovNote_ = nullptr;
+	QLineEdit *ovUrl_ = nullptr;
+	QPushButton *ovToScene_ = nullptr;
+	QFormLayout *ovForm_ = nullptr;
 	QCheckBox *armedAsLive_ = nullptr;
 	QComboBox *language_;
 	QComboBox *dockTheme_ = nullptr;

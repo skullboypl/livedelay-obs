@@ -287,6 +287,7 @@ input.capturing { border-color: var(--tally); color: var(--tally); }
         <a href="/live-preview">Podgląd obrazu</a>
         <a href="/dock">Panel sterowania</a>
       </div>
+      <div id="ovinputs"></div>
       <div id="ovfields" class="grid2"></div>
       <label class="check" style="margin-top:14px"><input type="checkbox" id="ovArmed"><span>Uzbrajanie i uzbrojone jak Na żywo</span></label>
     </section>
@@ -431,6 +432,7 @@ function show(id) {
   });
   if (id === 'platforms') renderPlat();
   if (id === 'inputs') renderInputs();
+  if (id === 'overlay') renderOvInputs();
   if (id === 'audio') renderAudio();
   if (id === 'logs') refreshLogs();
   const bar = document.querySelector('.savebar');
@@ -919,6 +921,34 @@ function renderAudio() {
     tr.append(name, a, b);
     body.append(tr);
   });
+}
+
+// A picture of its own (Aitum Vertical, say) takes an overlay of its own:
+// its address names the input, and the editor can give it another look.
+function renderOvInputs() {
+  const box = document.getElementById('ovinputs');
+  box.replaceChildren();
+  const others = inputs.filter(x => x.external && x.name);
+  if (!others.length) return;
+  const head = document.createElement('p');
+  head.className = 'hint';
+  head.textContent = 'Każdy obraz ma swój overlay. Dodaj źródło Przeglądarka z tym adresem do sceny tego obrazu (np. pionowej w Aitum Vertical). Bez własnego wyglądu pokazuje główny.';
+  box.append(head);
+  const rows = [['Obraz OBS', '/overlay', '/edit-theme']].concat(others.map(x => {
+    const q = '?input=' + encodeURIComponent(x.name);
+    return [x.name, '/overlay' + q, '/edit-theme' + q];
+  }));
+  for (const [name, url, edit] of rows) {
+    const row = document.createElement('div');
+    row.className = 'links';
+    const label = document.createElement('code');
+    label.textContent = name + ': ' + location.origin + url;
+    label.style.alignSelf = 'center';
+    const a = document.createElement('a');
+    a.href = edit; a.textContent = 'Wygląd';
+    row.append(label, a);
+    box.append(row);
+  }
 }
 
 function renderOverlay() {

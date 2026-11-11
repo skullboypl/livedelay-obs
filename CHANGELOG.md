@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.44 – 2026-11-11
+
+- **An overlay per picture.** The overlay is drawn into the picture, so a picture another program feeds — Aitum Vertical for TikTok, say — can carry its own: a Browser source on `/overlay?input=NAME` shows that input's delay, and `/edit-theme?input=NAME` gives it a look of its own (`overlays/NAME.json` beside the ini). Without one it shows the main look. Settings → Inputs and the web panel's Overlay page give each input's address and a *Look* button.
+- **Settings → Overlay picks the picture.** With an input another program feeds, the tab has a *Picture* list: the main look or that input's, with *Own look* to give it texts of its own; the address, Preview and the theme editor follow the choice. With the delay per input but one picture, the tab says why there is one overlay.
+- **Inputs → OBS shows its key.** The OBS row has the server address and the key OBS's own picture lands on, with Copy. Any other key from this PC lands there too; only the other inputs need their exact key.
+- **A key nobody has lands on the OBS input,** not on whichever input the file lists first: a vertical input listed before OBS no longer catches a stray publish.
+- **A quieter log.** "Twitch: scaling … for classic Twitch RTMP" is written once per platform and size instead of every few seconds while the dock is open.
+- **A repeated input name is not a second input.** A file with two `[input X]` sections keeps the second as text and ignores it, in the engine and the plugin alike, since platforms and overlays pick inputs by name.
+- **The main overlay follows OBS's own picture.** Once another program feeds an input, `/overlay` shows the delay of the first input OBS feeds instead of a summary of all of them, so arming the vertical picture no longer shows ARMING on the horizontal one.
+
 ## 1.0.43 – 2026-11-11
 
 - **Inputs and outputs in the plugin.** Settings has an **Inputs** tab and the platforms tab is now **Outputs (platforms)**. Inputs lists OBS itself and any input another program feeds; each output picks its input: *OBS — own encode* (as before), *OBS — shared encode*, or one of the others.

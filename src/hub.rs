@@ -32,6 +32,9 @@ pub struct Hub {
     idle_active: AtomicBool,
     /// When set, `_idle` is the preview stream instead of being discarded.
     accept_idle: AtomicBool,
+    /// The slot a publish with a key nobody has lands on: the first input OBS
+    /// itself feeds. Only the other inputs need their exact key.
+    fallback: std::sync::atomic::AtomicUsize,
     /// Aggregated change counter for SSE / tray.
     pub state: watch::Sender<u64>,
 }
@@ -59,8 +62,20 @@ impl Hub {
             claimed: Mutex::new(HashMap::new()),
             idle_active: AtomicBool::new(false),
             accept_idle: AtomicBool::new(accept_idle),
+            fallback: std::sync::atomic::AtomicUsize::new(0),
             state,
         })
+    }
+
+    /// Which slot takes a publish whose key matches no input (see `fallback`).
+    pub fn set_fallback(&self, i: usize) {
+        if i < self.slots.len() {
+            self.fallback.store(i, Ordering::Relaxed);
+        }
+    }
+
+    fn fallback_slot(&self) -> Option<&Slot> {
+        self.slots.get(self.fallback.load(Ordering::Relaxed)).or_else(|| self.slots.first())
     }
 
     pub fn idle_active(&self) -> bool {
@@ -132,11 +147,11 @@ impl Hub {
         self.index.get(key).map(|i| self.slots[*i].ingest_key.clone()).unwrap_or_else(|| key.to_string())
     }
 
-    /// Take the first platform slot when it is free. The publish key is remembered
-    /// so release clears that slot instead of leaving it busy.
+    /// Take the fallback slot (the first input OBS feeds) when it is free. The
+    /// publish key is remembered so release clears that slot instead of leaving it busy.
     fn claim_first_free(&self, key: &str) -> Option<Arc<Shared>> {
         let mut busy = self.busy.lock().unwrap();
-        let slot = self.slots.first()?;
+        let slot = self.fallback_slot()?;
         let map_key = slot.ingest_key.clone();
         if busy.get(&map_key).copied().unwrap_or(false) {
             return None;
@@ -171,7 +186,7 @@ impl Hub {
             // A program on this PC often publishes with its own key, not ld0.
             // One free slot takes that stream. A second publisher cannot steal a busy slot.
             if let Some(shared) = self.claim_first_free(key) {
-                let map_key = self.slots[0].ingest_key.clone();
+                let map_key = self.fallback_slot().map(|s| s.ingest_key.clone()).unwrap_or_default();
                 log!("RTMP: ingest key is not {map_key} — accepting it as the stream from this PC");
                 return Ok(Some(shared));
             }
@@ -366,5 +381,20 @@ impl Hub {
 
     pub fn bump(&self) {
         self.state.send_modify(|v| *v += 1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_key_nobody_has_lands_on_the_obs_input_even_when_it_is_not_first() {
+        let hub = Hub::new(&[("Pionowe".into(), "ld1".into()), ("OBS".into(), "ld0".into())], 1 << 20, false);
+        hub.set_fallback(1);
+        let got = hub.try_claim("live_123_abc").unwrap().unwrap();
+        assert!(Arc::ptr_eq(&got, &hub.slot(1).unwrap().shared));
+        // The vertical input still wants its own key, and it is still free.
+        assert!(hub.try_claim("ld1").unwrap().is_some());
     }
 }

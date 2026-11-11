@@ -42,6 +42,8 @@
   .state input[type=color] { width: 36px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; }
   .state small { grid-column: 2 / 4; color: var(--muted); margin-top: -4px; }
   .hint { color: var(--muted); font-size: 12.5px; }
+  .pick select { margin-bottom: 8px; }
+  body.inherit aside section.look { opacity: .4; pointer-events: none; }
   .stage { padding: 22px; display: flex; flex-direction: column; gap: 12px; }
   .stage iframe { width: 100%; flex: 1; min-height: 420px; border: 1px solid var(--line); border-radius: 0; background: #1d1f25; }
   html.inapp .side, html.inapp .ribbon, html.inapp .brand { display: none !important; }
@@ -76,11 +78,17 @@
 </header>
 <main class="editor">
   <aside>
-    <section>
+    <section class="pick" id="pick" hidden>
+      <h2 data-t="input"></h2>
+      <select id="input"></select>
+      <div class="toggles" id="ownWrap"><label><input type="checkbox" id="ownLook"> <span data-t="ownLook"></span></label></div>
+      <div class="hint" data-t="inputHint"></div>
+    </section>
+    <section class="look">
       <h2 data-t="theme"></h2>
       <div class="themes" id="themes"></div>
     </section>
-    <section>
+    <section class="look">
       <h2 data-t="layout"></h2>
       <div class="field"><label data-t="align"></label>
         <div class="seg" id="align"><button data-v="left" data-t="left"></button><button data-v="center" data-t="center"></button><button data-v="right" data-t="right"></button></div></div>
@@ -102,7 +110,7 @@
       </div>
       <div class="hint" data-t="armedAsLiveHint"></div>
     </section>
-    <section>
+    <section class="look">
       <h2 data-t="states"></h2>
       <div id="states"></div>
       <div class="hint" data-t="placeholders"></div>
@@ -128,7 +136,7 @@
           states: 'States', live: 'Live', arming: 'Arming', armed: 'Armed', delayed: 'Delayed',
           showState: 'show', placeholders: '{s} = delay in seconds, {buf} = seconds buffered.',
           stageHint: 'Preview with sample values (25 s delay, 12 s buffered). Unsaved changes show here only.', url: 'Browser source address:',
-          glass: 'Glass', frost: 'Frost', clear: 'Clear', soft: 'Soft', minimal: 'Minimal', solid: 'Solid', neon: 'Neon', bar: 'Lower third' },
+          glass: 'Glass', frost: 'Frost', clear: 'Clear', soft: 'Soft', minimal: 'Minimal', solid: 'Solid', neon: 'Neon', bar: 'Lower third', input: 'Picture', mainLook: 'Main look (OBS and every input without its own)', ownLook: 'Own look for this input', inputHint: 'The overlay is drawn into the picture, so each picture can carry its own: another one on the vertical picture for TikTok, say. Platforms on one input share one picture.' },
     pl: { title: 'wygląd overlayu', save: 'Zapisz', revert: 'Cofnij zmiany', reset: 'Domyślne motywu', saved: 'Zapisano – źródło Przeglądarka już to pokazuje.',
           failed: 'Nie udało się zapisać.', theme: 'Motyw', layout: 'Układ', align: 'Wyrównanie', left: 'Lewo', center: 'Środek', right: 'Prawo',
           alignHint: 'Prawo: pudełko rośnie w lewo, więc pasuje do prawego rogu.', size: 'Rozmiar', font: 'Czcionka', radius: 'Rogi',
@@ -138,7 +146,7 @@
           states: 'Stany', live: 'Na żywo', arming: 'Uzbrajanie', armed: 'Uzbrojone', delayed: 'Opóźnienie',
           showState: 'pokazuj', placeholders: '{s} = opóźnienie w sekundach, {buf} = sekundy w buforze.',
           stageHint: 'Podgląd z przykładowymi wartościami (25 s opóźnienia, 12 s w buforze). Niezapisane zmiany widać tylko tutaj.', url: 'Adres źródła Przeglądarka:',
-          glass: 'Szkło', frost: 'Szron', clear: 'Przezroczysty', soft: 'Miękki', minimal: 'Minimalny', solid: 'Pełny kolor', neon: 'Neon', bar: 'Belka TV' },
+          glass: 'Szkło', frost: 'Szron', clear: 'Przezroczysty', soft: 'Miękki', minimal: 'Minimalny', solid: 'Pełny kolor', neon: 'Neon', bar: 'Belka TV', input: 'Obraz', mainLook: 'Główny wygląd (OBS i każde wejście bez własnego)', ownLook: 'Własny wygląd dla tego wejścia', inputHint: 'Overlay jest wtopiony w obraz, więc każdy obraz może mieć swój: np. inny na pionowym obrazie dla TikToka. Platformy na jednym wejściu mają wspólny obraz.' },
     de: { title: 'Overlay-Aussehen', save: 'Speichern', revert: 'Änderungen verwerfen', reset: 'Theme-Standard', saved: 'Gespeichert – die Browser-Quelle zeigt es schon.',
           failed: 'Speichern fehlgeschlagen.', theme: 'Theme', layout: 'Layout', align: 'Ausrichtung', left: 'Links', center: 'Mitte', right: 'Rechts',
           alignHint: 'Rechts: Die Box wächst nach links und passt so in eine rechte Ecke.', size: 'Größe', font: 'Schrift', radius: 'Ecken',
@@ -148,7 +156,7 @@
           states: 'Zustände', live: 'Live', arming: 'Vorbereitung', armed: 'Bereit', delayed: 'Verzögert',
           showState: 'anzeigen', placeholders: '{s} = Verzögerung in Sekunden, {buf} = Sekunden im Puffer.',
           stageHint: 'Vorschau mit Beispielwerten (25 s Verzögerung, 12 s gepuffert). Ungespeicherte Änderungen nur hier.', url: 'Adresse der Browser-Quelle:',
-          glass: 'Glas', frost: 'Frost', clear: 'Klar', soft: 'Weich', minimal: 'Minimal', solid: 'Vollfarbe', neon: 'Neon', bar: 'Bauchbinde' },
+          glass: 'Glas', frost: 'Frost', clear: 'Klar', soft: 'Weich', minimal: 'Minimal', solid: 'Vollfarbe', neon: 'Neon', bar: 'Bauchbinde', input: 'Bild', mainLook: 'Haupt-Look (OBS und jeder Eingang ohne eigenen)', ownLook: 'Eigener Look für diesen Eingang', inputHint: 'Das Overlay steckt im Bild, also kann jedes Bild sein eigenes haben: etwa ein anderes auf dem Hochkant-Bild für TikTok. Plattformen an einem Eingang teilen ein Bild.' },
     ru: { title: 'вид оверлея', save: 'Сохранить', revert: 'Отменить изменения', reset: 'По умолчанию', saved: 'Сохранено – источник «Браузер» уже показывает это.',
           failed: 'Не удалось сохранить.', theme: 'Тема', layout: 'Макет', align: 'Выравнивание', left: 'Слева', center: 'По центру', right: 'Справа',
           alignHint: 'Справа: блок растёт влево и помещается в правый угол.', size: 'Размер', font: 'Шрифт', radius: 'Углы',
@@ -158,13 +166,18 @@
           states: 'Состояния', live: 'Эфир', arming: 'Подготовка', armed: 'Готово', delayed: 'Задержка',
           showState: 'показывать', placeholders: '{s} = задержка в секундах, {buf} = секунд в буфере.',
           stageHint: 'Предпросмотр с примером (задержка 25 с, в буфере 12 с). Несохранённые изменения видны только здесь.', url: 'Адрес источника «Браузер»:',
-          glass: 'Стекло', frost: 'Иней', clear: 'Прозрачный', soft: 'Мягкий', minimal: 'Минимал', solid: 'Сплошной', neon: 'Неон', bar: 'Плашка ТВ' },
+          glass: 'Стекло', frost: 'Иней', clear: 'Прозрачный', soft: 'Мягкий', minimal: 'Минимал', solid: 'Сплошной', neon: 'Неон', bar: 'Плашка ТВ', input: 'Картинка', mainLook: 'Основной вид (OBS и каждый вход без своего)', ownLook: 'Свой вид для этого входа', inputHint: 'Оверлей встроен в картинку, поэтому у каждой картинки может быть свой: например, другой на вертикальной картинке для TikTok. Платформы на одном входе делят одну картинку.' },
   };
   const q = new URLSearchParams(location.search);
   const lang = (q.get('lang') || navigator.language || 'en').slice(0, 2);
   const L = I18N[lang] || I18N.en;
   document.querySelectorAll('[data-t]').forEach(el => el.textContent = L[el.dataset.t]);
-  document.getElementById('url').textContent = location.origin + '/overlay';
+  // ?input=NAME edits the look of one input's overlay; none edits the main look.
+  const INPUT = q.get('input') || '';
+  const CFG_URL = '/overlay/config' + (INPUT ? '?input=' + encodeURIComponent(INPUT) : '');
+  document.getElementById('url').textContent = location.origin + '/overlay' + (INPUT ? '?input=' + encodeURIComponent(INPUT) : '');
+  const ownLook = document.getElementById('ownLook');
+  document.getElementById('ownWrap').hidden = !INPUT;
 
   const KINDS = ['live', 'arming', 'armed', 'delayed'];
   const THEMES = {
@@ -257,8 +270,31 @@
     t.classList.add('on'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 3500);
   }
 
+  // Every input that is a picture of its own; inputs OBS encodes all carry the OBS picture.
+  async function buildPicker() {
+    let s = null;
+    try { s = await (await fetch('/state', { cache: 'no-store' })).json(); } catch (e) {}
+    const others = ((s && s.inputs) || []).filter(x => x.external || x.name === INPUT);
+    if (!others.length && !INPUT) return;
+    const sel = document.getElementById('input');
+    sel.add(new Option(L.mainLook, ''));
+    for (const x of others) sel.add(new Option(x.name, x.name));
+    sel.value = INPUT;
+    sel.onchange = () => {
+      const next = new URLSearchParams(location.search);
+      if (sel.value) next.set('input', sel.value); else next.delete('input');
+      location.search = next.toString();
+    };
+    document.getElementById('pick').hidden = false;
+  }
+  function inheritView() { document.body.classList.toggle('inherit', !!INPUT && !ownLook.checked); }
+  ownLook.onchange = inheritView;
+
   async function load() {
-    saved = await (await fetch('/overlay/config', { cache: 'no-store' })).json();
+    saved = await (await fetch(CFG_URL, { cache: 'no-store' })).json();
+    ownLook.checked = !saved.inherited;
+    delete saved.inherited;
+    inheritView();
     cfg = JSON.parse(JSON.stringify(saved));
     cfg.colors = cfg.colors || {}; cfg.texts = cfg.texts || {}; cfg.show = cfg.show || {};
     cfg.armedAsLive = !!cfg.armedAsLive;
@@ -266,11 +302,14 @@
   }
   preview.onload = send;
   document.getElementById('save').onclick = async () => {
-    const r = await fetch('/overlay/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg) });
+    // An input set back to the main look drops its own file.
+    const body = INPUT && !ownLook.checked ? { inherited: true } : cfg;
+    const r = await fetch(CFG_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     if (r.ok) { saved = JSON.parse(JSON.stringify(cfg)); notifyBrowserSources(); toast(L.saved, true); } else toast(L.failed, false);
   };
   document.getElementById('revert').onclick = () => { cfg = JSON.parse(JSON.stringify(saved)); sync(); };
   document.getElementById('reset').onclick = () => { Object.assign(cfg, JSON.parse(JSON.stringify(THEMES[cfg.theme] || THEMES.glass))); sync(); };
+  buildPicker();
   load();
 </script>
 </body>

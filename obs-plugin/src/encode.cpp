@@ -12,6 +12,9 @@
 #include <cmath>
 #include <cstring>
 #include <initializer_list>
+#include <map>
+#include <mutex>
+#include <string>
 
 namespace livedelay {
 
@@ -462,8 +465,22 @@ EncodeSettings ResolveEncode(const Destination &d)
 				e.width = 1920;
 			if (e.height < 2)
 				e.height = 1080;
-			blog(LOG_INFO, "[livedelay] %s: scaling %ux%u → %ux%u for classic Twitch RTMP", d.name.c_str(),
-			     out_w, out_h, e.width, e.height);
+			// The dock and the settings window ask for this every few seconds,
+			// so the log says it once per platform and size, not every time.
+			static std::mutex logged_lock;
+			static std::map<std::string, std::string> logged;
+			const std::string what = std::to_string(out_w) + "x" + std::to_string(out_h) + ">" +
+						 std::to_string(e.width) + "x" + std::to_string(e.height);
+			bool say = false;
+			{
+				std::lock_guard<std::mutex> g(logged_lock);
+				std::string &last = logged[d.name];
+				say = last != what;
+				last = what;
+			}
+			if (say)
+				blog(LOG_INFO, "[livedelay] %s: scaling %ux%u → %ux%u for classic Twitch RTMP", d.name.c_str(),
+				     out_w, out_h, e.width, e.height);
 			e.summary += QStringLiteral(" · %1x%2").arg(e.width).arg(e.height);
 		}
 	}

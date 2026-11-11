@@ -127,6 +127,20 @@
 <script>
   const q = new URLSearchParams(location.search);
   const preview = q.has('preview');
+  // ?input=Pionowe: this overlay sits in that input's picture (Aitum Vertical
+  // for TikTok, say), so it shows that input's delay and that input's look.
+  const INPUT = q.get('input') || '';
+  const CFG_URL = '/overlay/config' + (INPUT ? '?input=' + encodeURIComponent(INPUT) : '');
+  // Without ?input the overlay is in OBS's own picture: once another program
+  // feeds an input too, the summary would show that input's delay as well,
+  // so it follows the first input OBS itself feeds.
+  function pick(s) {
+    if (!s || !Array.isArray(s.inputs)) return s;
+    let one = null;
+    if (INPUT) one = s.inputs.find(x => x.name === INPUT) || s.inputs.find(x => x.key === INPUT);
+    else if (s.inputs.some(x => x.external)) one = s.inputs.find(x => !x.external);
+    return one ? { ...s, ...one, overlay_rev: s.overlay_rev } : s;
+  }
   const KINDS = ['live', 'arming', 'armed', 'delayed'];
   const RADIUS = { pill: '999px', rounded: '.35em', square: '0' };
   let cfg = { theme: 'glass', align: 'left', size: 30, font: 'Segoe UI', uppercase: false, dot: true, animate: true,
@@ -227,7 +241,7 @@
     else if (lastState) { render(tag, describe(lastState, current), current, !first); first = false; }
   }
   async function loadConfig() {
-    try { cfg = await (await fetch('/overlay/config', { cache: 'no-store' })).json(); } catch (e) {}
+    try { cfg = await (await fetch(CFG_URL, { cache: 'no-store' })).json(); } catch (e) {}
     current = effective(cfg);
     refresh();
   }
@@ -253,7 +267,7 @@
     } catch (e) {}
     const es = new EventSource('/events');
     es.onmessage = (e) => {
-      const s = JSON.parse(e.data);
+      const s = pick(JSON.parse(e.data));
       lastState = s;
       if (s.overlay_rev !== rev) { rev = s.overlay_rev; loadConfig(); } else refresh();
     };
@@ -261,7 +275,7 @@
     // CEF / idle SSE can lag — poll overlay_rev so Save is visible without Refresh.
     setInterval(async () => {
       try {
-        const s = await (await fetch('/state', { cache: 'no-store' })).json();
+        const s = pick(await (await fetch('/state', { cache: 'no-store' })).json());
         if (s) {
           lastState = s;
           onRev(s.overlay_rev);

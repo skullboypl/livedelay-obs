@@ -300,7 +300,9 @@ pub fn parse_report(text: &str) -> ParseReport {
                     let name = section_name(s, "dest").unwrap_or_default();
                     c.dests.push(Dest { name: name.to_string(), ..Dest::default() });
                 }
-                Some(s) if section_name(s, "input").is_some() => {
+                // A name already taken is not a second input: platforms and
+                // overlays pick inputs by name. The repeat is kept as text.
+                Some(s) if section_name(s, "input").is_some_and(|n| !c.inputs.iter().any(|i| i.name == n)) => {
                     section = Section::Input;
                     let name = section_name(s, "input").unwrap_or_default();
                     c.inputs.push(Input { name: name.to_string(), ..Input::default() });
@@ -1220,5 +1222,18 @@ server = auto
         assert!(out.contains("key = next"));
         assert!(out.contains("autostart = no"));
         assert!(!out.contains("secret"));
+    }
+
+    #[test]
+    fn a_repeated_input_name_is_not_a_second_input() {
+        let text = "[input Pionowe]
+key = ld0
+feed = external
+[input Pionowe]
+key = ld7
+";
+        let c = parse(text).unwrap();
+        assert_eq!(c.inputs.iter().filter(|i| i.name == "Pionowe").count(), 1);
+        assert_eq!(c.inputs.iter().find(|i| i.name == "Pionowe").unwrap().key, "ld0");
     }
 }
