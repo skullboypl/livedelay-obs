@@ -44,6 +44,11 @@ pub struct Ctx {
     pub overlay: crate::overlay::OverlayStore,
     /// livedelay.ini. Empty when the engine was started without a file.
     pub ini_path: PathBuf,
+    /// "together" or "per_input": which buttons an interface shows. Changed
+    /// live by POST /config; the engine itself does nothing with it.
+    pub delay_mode: std::sync::Mutex<String>,
+    /// Per input, in slot order: (own, external). See config::Input.
+    pub input_flags: Vec<(bool, bool)>,
 }
 
 const PANEL_HTML: &str = include_str!("panel.html");
@@ -109,7 +114,7 @@ pub fn state_json(ctx: &Ctx) -> String {
     let st = ctx.hub.status(Instant::now());
     let mode = if st.mode == Mode::Delayed { "delayed" } else { "live" };
     let mut j = format!(
-        "{{\"mode\":\"{mode}\",\"host\":\"{}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"active_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},",
+        "{{\"mode\":\"{mode}\",\"host\":\"{}\",\"input\":{},\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"active_delay\":{},\"armed\":{},\"cut_pending\":{},\"in_kbps\":{:.0},\"overlay_rev\":{},\"default_delay\":{},\"delay_mode\":\"{}\",",
         esc(&crate::ffi::host()),
         st.input,
         st.delay_s,
@@ -122,6 +127,7 @@ pub fn state_json(ctx: &Ctx) -> String {
         st.in_kbps,
         ctx.overlay.rev(),
         ctx.default_delay.lock().unwrap_or_else(|e| e.into_inner()).as_secs_f64(),
+        esc(&ctx.delay_mode.lock().unwrap_or_else(|e| e.into_inner())),
     );
     // Always present once the engine understands inputs, even when there is one
     // made up from an older file. Interfaces read this to decide whether they
@@ -131,7 +137,7 @@ pub fn state_json(ctx: &Ctx) -> String {
     for (i, (name, key, w, h, st)) in ctx.hub.input_states(Instant::now()).iter().enumerate() {
         let _ = write!(
             j,
-            "{}{{\"name\":\"{}\",\"key\":\"{}\",\"input\":{},\"in_kbps\":{:.0},\"mode\":\"{}\",\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"active_delay\":{},\"armed\":{},\"cut_pending\":{},\"width\":{},\"height\":{}}}",
+            "{}{{\"name\":\"{}\",\"key\":\"{}\",\"input\":{},\"in_kbps\":{:.0},\"mode\":\"{}\",\"delay\":{:.1},\"buffer_s\":{:.1},\"buffer_mb\":{:.1},\"arm_delay\":{},\"active_delay\":{},\"armed\":{},\"cut_pending\":{},\"width\":{},\"height\":{},\"own\":{},\"external\":{}}}",
             if i > 0 { "," } else { "" },
             esc(name),
             esc(key),
@@ -146,7 +152,9 @@ pub fn state_json(ctx: &Ctx) -> String {
             st.armed,
             st.cut_pending,
             w,
-            h
+            h,
+            ctx.input_flags.get(i).map(|f| f.0).unwrap_or(false),
+            ctx.input_flags.get(i).map(|f| f.1).unwrap_or(false)
         );
     }
     j.push_str("],\"dests\":[");
@@ -444,10 +452,12 @@ fn config_json(ctx: &Ctx) -> Result<String, String> {
     for (i, inp) in cfg.inputs.iter().enumerate() {
         let _ = write!(
             j,
-            "{}{{\"name\":\"{}\",\"key\":\"{}\"}}",
+            "{}{{\"name\":\"{}\",\"key\":\"{}\",\"own\":{},\"external\":{}}}",
             if i > 0 { "," } else { "" },
             esc(&inp.name),
-            esc(&inp.key)
+            esc(&inp.key),
+            inp.own,
+            inp.external
         );
     }
     j.push_str("],\"dests\":[");
@@ -543,6 +553,8 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
         input_updates.push(config::InputUpdate {
             name: Some(name),
             key: if key.is_empty() { None } else { Some(key) },
+            external: json_raw(obj, "external").map(|v| v == "true"),
+            own: json_raw(obj, "own").map(|v| v == "true"),
         });
     }
     let replace_inputs = body.contains("\"inputs\"");
@@ -637,7 +649,21 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
             enhanced: json_raw(obj, "enhanced").map(|v| v == "true"),
         });
     }
-    let structural = listen != before.listen
+    // Which input feeds what is decided when the engine starts, so a change
+    // there needs the same restart a new platform does.
+    let inputs_changed = replace_inputs
+        && (before.inputs.len() != upd.inputs.len()
+            || before.inputs.iter().zip(&upd.inputs).any(|(old, new)| {
+                new.name.as_deref() != Some(old.name.as_str()) || new.key.as_deref().is_some_and(|k| k != old.key)
+            }));
+    let feeds_changed = upd
+        .dests
+        .iter()
+        .enumerate()
+        .any(|(i, p)| p.input.as_deref().is_some_and(|name| before.dests.get(i).is_none_or(|old| old.input != name)));
+    let structural = inputs_changed
+        || feeds_changed
+        || listen != before.listen
         || api != before.api
         || codec != before.buffer_codec
         || single_pc != before.single_pc
@@ -658,6 +684,9 @@ fn apply_config(ctx: &Ctx, body: &str) -> Result<bool, String> {
     std::fs::write(&ctx.ini_path, &next).map_err(|e| e.to_string())?;
 
     ctx.hub.set_accept_idle(obs_live);
+    if let Some(mode) = &upd.delay_mode {
+        *ctx.delay_mode.lock().unwrap_or_else(|e| e.into_inner()) = mode.clone();
+    }
     *ctx.default_delay.lock().unwrap_or_else(|e| e.into_inner()) = Duration::from_secs_f64(delay);
     let n = ctx.hub.slots.len().max(1);
     let per = (buffer * 1024 * 1024) / n;

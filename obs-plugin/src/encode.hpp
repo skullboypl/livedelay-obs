@@ -35,6 +35,9 @@ EncodeSettings ResolveEncode(const Destination &d);
 // Problems when OBS Output (used by mode "obs") exceeds platform limits for
 // destinations that are in obs mode — shown in the dock banner.
 QStringList EncodeProblems();
+// Single PC / force live with an OBS output above 1080p and a Twitch platform:
+// says that the stream is sent smaller, and why. Empty when it does not apply.
+QString TwitchCapInfo();
 
 // Fits OBS → Output to the strictest limits among dests in mode "obs"
 // (and any that would use OBS as a template). Returns false on write failure.

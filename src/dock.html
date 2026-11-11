@@ -7,25 +7,50 @@
 <link rel="stylesheet" href="/chrome.css">
 <style>
   .pad { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
-  .status { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .status { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
   .chip { display: inline-flex; align-items: center; gap: 8px; font: 600 12px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
-  .chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  .chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
   .chip.live i { background: var(--live); box-shadow: 0 0 8px var(--live); }
   .chip.armed i { background: var(--arm); box-shadow: 0 0 8px var(--arm); }
   .chip.delayed i { background: var(--tally); box-shadow: 0 0 8px var(--tally); }
-  .meters { font: 500 11px/1 var(--mono); letter-spacing: .06em; color: var(--dim); text-transform: uppercase; }
-  .delay { display: flex; gap: 8px; }
+  .meters { font: 500 11px/1.3 var(--mono); letter-spacing: .06em; color: var(--dim); text-transform: uppercase; }
+  /* One set of delay controls: the big one for everything, or a small one per input. */
+  .ctl { display: flex; flex-direction: column; gap: 8px; }
+  .ctl .delay, .ctl .row { display: flex; flex-wrap: wrap; gap: 8px; }
   input[type="number"] { width: 96px; height: 44px; background: var(--ink); color: var(--text); border: 1px solid var(--line-2); font: 800 1.3rem/1 var(--sans); font-stretch: 112%; padding: 0 10px; }
-  button.act { flex: 1; height: 44px; cursor: pointer; background: transparent; color: var(--text); border: 1px solid var(--line-2); font: 600 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+  button.act { flex: 1 1 110px; min-width: 0; height: 44px; padding: 0 8px; cursor: pointer; background: transparent; color: var(--text); border: 1px solid var(--line-2); font: 600 12px/1.15 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
   button.act:hover:not(:disabled) { border-color: var(--text); }
   button.act:disabled { opacity: .35; cursor: default; }
   button.act.arm:not(:disabled) { border-color: var(--arm); color: var(--arm); }
   button.act.go:not(:disabled) { border-color: var(--tally); color: var(--tally); }
   button.act.live:not(:disabled) { border-color: var(--live); color: var(--live); }
-  .row { display: flex; gap: 8px; }
+  /* What the state is heading towards is the one filled button. */
+  button.act.next:not(:disabled) { background: currentColor; }
+  button.act.next:not(:disabled) > span { color: var(--ink); }
+  .ctl.mini { gap: 6px; padding: 2px 0 8px; }
+  .ctl.mini .delay, .ctl.mini .row { gap: 6px; }
+  .ctl.mini input[type="number"] { width: 72px; height: 32px; font-size: 1rem; }
+  .ctl.mini button.act { height: 32px; flex-basis: 72px; font-size: 10.5px; letter-spacing: .08em; }
+  .note { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.4; }
+  /* Folding hides the platforms, never an input's delay controls. */
+  button.fold { align-self: flex-start; cursor: pointer; background: none; border: 0; padding: 6px 0; color: var(--dim); font: 600 11px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+  button.fold:hover { color: var(--text); }
+  button.fold::before { content: "▾ "; }
+  button.fold[aria-expanded="false"]::before { content: "▸ "; }
+  .folded .dest { display: none; }
+  .folded .grp.own:not(.ownctl) { display: none; }
+  .folded .grp.ownctl .dest { display: flex; border-top: 0; padding-top: 0; }
+  .folded .grp.ownctl .dest button.act { display: none; }
+  .grp { border-top: 1px solid var(--line); padding-top: 8px; }
+  .grp > .head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 10px; padding-bottom: 6px; }
+  .grp > .head b { font-weight: 800; }
+  .grp > .head small, .dest small { color: var(--dim); font: 500 10px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
   .dest { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); }
-  .dest b { font-weight: 700; }
-  .dest small { display: block; color: var(--dim); font: 500 10px/1.3 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  .grp .dest { padding-left: 14px; }
+  .dest > div { min-width: 0; }
+  .dest b { font-weight: 700; overflow-wrap: anywhere; }
+  .dest small { display: block; }
+  .dest button.act { flex: 0 0 auto; height: 36px; padding: 0 14px; }
   .stage { max-width: 420px; margin: 0 auto; padding: 16px 16px 28px; display: flex; flex-direction: column; gap: 18px; }
   .embed { display: flex; flex-direction: column; gap: 8px; }
   .embed select, .url input { height: 36px; background: var(--ink); color: var(--text); border: 1px solid var(--line); font: 500 12px/1 var(--mono); padding: 0 10px; }
@@ -37,32 +62,65 @@
   body.menu-hide .app, html.menu-hide .app { grid-template-columns: 1fr; grid-template-rows: 1fr; height: auto; min-height: 100vh; }
   html.menu-hide .stage { max-width: none; min-height: 100vh; padding: 0; box-sizing: border-box; }
   html.menu-hide .pad { min-height: 100%; }
+  /* A dock dragged narrow: less padding, smaller seconds box, words may wrap. */
+  @media (max-width: 300px) {
+    .pad { padding: 10px; gap: 8px; }
+    input[type="number"] { width: 72px; font-size: 1.05rem; }
+    button.act { letter-spacing: .06em; flex-basis: 84px; }
+    .dest button.act { padding: 0 10px; }
+  }
+  /* A dock dragged short: everything tightens before anything scrolls. */
+  @media (max-height: 460px) {
+    .pad { padding: 8px 10px; gap: 6px; }
+    .ctl { gap: 6px; }
+    .ctl .delay, .ctl .row { gap: 6px; }
+    input[type="number"], button.act { height: 32px; }
+    input[type="number"] { font-size: 1.05rem; }
+    .dest { padding: 4px 0; }
+    .dest button.act { height: 28px; }
+    .note { font-size: 11.5px; }
+  }
   .pad[data-style="tally"] { background: #ff3b2f; color: #070707; }
   .pad[data-style="tally"] .chip,
   .pad[data-style="tally"] .meters,
+  .pad[data-style="tally"] .note,
+  .pad[data-style="tally"] button.fold,
+  .pad[data-style="tally"] .grp > .head small,
   .pad[data-style="tally"] .dest small { color: #3a0c09; }
   .pad[data-style="tally"] input,
   .pad[data-style="tally"] button.act { background: #070707; color: #ebe8e3; border-color: #070707; }
-  .pad[data-style="tally"] .dest { border-color: rgba(7,7,7,.28); }
+  .pad[data-style="tally"] button.act.next:not(:disabled) { background: #ebe8e3; }
+  .pad[data-style="tally"] button.act.next:not(:disabled) > span { color: #070707; }
+  .pad[data-style="tally"] .dest, .pad[data-style="tally"] .grp { border-color: rgba(7,7,7,.28); }
   .pad[data-style="paper"] { background: #f4f1ea; color: #161513; }
   .pad[data-style="paper"] .chip,
   .pad[data-style="paper"] .meters,
+  .pad[data-style="paper"] .note,
+  .pad[data-style="paper"] button.fold,
+  .pad[data-style="paper"] .grp > .head small,
   .pad[data-style="paper"] .dest small { color: #5c574e; }
   .pad[data-style="paper"] input,
   .pad[data-style="paper"] button.act { background: #fffdf8; color: #161513; border-color: #cfc8ba; }
-  .pad[data-style="paper"] .dest { border-color: #e4dfd4; }
+  .pad[data-style="paper"] .dest, .pad[data-style="paper"] .grp { border-color: #e4dfd4; }
   .pad[data-style="paper"] button.act.go:not(:disabled) { border-color: #ff3b2f; color: #ff3b2f; }
+  .pad[data-style="paper"] button.act.next:not(:disabled) { background: currentColor; }
+  .pad[data-style="paper"] button.act.next:not(:disabled) > span { color: #fffdf8; }
   .pad[data-style="live"] button.act.arm:not(:disabled),
   .pad[data-style="live"] button.act.go:not(:disabled) { border-color: #3ddc84; color: #3ddc84; }
   .pad[data-style="glass"] { background: #171b24; color: #e7eefc; }
   .pad[data-style="glass"] .chip,
   .pad[data-style="glass"] .meters,
+  .pad[data-style="glass"] .note,
+  .pad[data-style="glass"] button.fold,
+  .pad[data-style="glass"] .grp > .head small,
   .pad[data-style="glass"] .dest small { color: #93a0b8; }
   .pad[data-style="glass"] input,
   .pad[data-style="glass"] button.act { background: #10131a; color: #e7eefc; border-color: #3a4458; }
-  .pad[data-style="glass"] .dest { border-color: #2a3140; }
+  .pad[data-style="glass"] .dest, .pad[data-style="glass"] .grp { border-color: #2a3140; }
   .pad[data-style="glass"] button.act.go:not(:disabled),
   .pad[data-style="glass"] button.act.arm:not(:disabled) { border-color: #7eb6ff; color: #7eb6ff; }
+  .pad[data-style="glass"] button.act.next:not(:disabled) { background: currentColor; }
+  .pad[data-style="glass"] button.act.next:not(:disabled) > span { color: #10131a; }
   html.menu-hide body:has(.pad[data-style="tally"]) { background: #ff3b2f; }
   html.menu-hide body:has(.pad[data-style="paper"]) { background: #f4f1ea; }
   html.menu-hide body:has(.pad[data-style="glass"]) { background: #171b24; }
@@ -83,16 +141,9 @@
           <span class="chip wait" id="chip"><i></i><b>…</b></span>
           <span class="meters" id="meters">bufor 0.0 s</span>
         </div>
-        <div class="delay">
-          <input id="delay" type="number" min="1" max="3600" value="15" aria-label="Opóźnienie w sekundach">
-          <button type="button" class="act arm" id="arm">Uzbrój</button>
-        </div>
-        <button type="button" class="act go" id="activate">Włącz opóźnienie</button>
-        <div class="row">
-          <button type="button" class="act live" id="cut">Na żywo</button>
-          <button type="button" class="act live" id="cutafter">Na żywo po emisji</button>
-        </div>
-        <button type="button" class="act" id="disarm">Rozbrój</button>
+        <div id="main"></div>
+        <p class="note" id="note" hidden></p>
+        <button type="button" class="fold" id="outsum" aria-expanded="true">Wyjścia</button>
         <div id="dests"></div>
       </div>
       <div class="embed">
@@ -142,67 +193,247 @@ document.getElementById('copy').addEventListener('click', async () => {
   setTimeout(() => { document.getElementById('copy').textContent = 'Kopiuj'; }, 1200);
 });
 url.addEventListener('focus', () => url.select());
-let delaySet = false;
 
 function post(path) {
   return fetch(path, { method: 'POST' }).then(r => r.json().catch(() => ({})));
 }
-document.getElementById('arm').onclick = () => post('/arm?delay=' + document.getElementById('delay').value).then(tick);
-document.getElementById('activate').onclick = () => post('/activate').then(tick);
-document.getElementById('cut').onclick = () => post('/cut').then(tick);
-document.getElementById('cutafter').onclick = () => post('/cut-after').then(tick);
-document.getElementById('disarm').onclick = () => post('/disarm').then(tick);
-
-function paint(kind, label) {
-  const el = document.getElementById('chip');
-  el.className = 'chip ' + kind;
-  el.querySelector('b').textContent = label;
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
 }
+// The words sit in a span so a filled button can colour them apart from its background.
+function btn(cls, text) {
+  const b = el('button', 'act ' + cls);
+  b.type = 'button';
+  b.append(el('span', null, text));
+  return b;
+}
+function label(b, text) { b.firstChild.textContent = text; }
+
+// One set of delay controls. `who` is '' for everything at once, or
+// '?input=KEY' for a single input when the delay is set per input.
+const sets = new Map();
+function controls(id, who, mini) {
+  const root = el('div', 'ctl' + (mini ? ' mini' : ''));
+  const secs = el('input');
+  secs.type = 'number';
+  secs.min = '1';
+  secs.max = '3600';
+  secs.value = '15';
+  secs.setAttribute('aria-label', 'Opóźnienie w sekundach');
+  const arm = btn('arm', 'Uzbrój');
+  const act = btn('go', mini ? 'Włącz' : 'Włącz opóźnienie');
+  const cut = btn('live', 'Na żywo');
+  const after = btn('live', mini ? 'Po emisji' : 'Na żywo po emisji');
+  const dis = btn('', 'Rozbrój');
+  const top = el('div', 'delay');
+  top.append(secs, arm);
+  const set = { root, secs, arm, act, cut, after, dis, who, mini, touched: false, seen: 0, st: null };
+  if (mini) {
+    const row = el('div', 'row');
+    row.append(act, cut, after, dis);
+    root.append(top, row);
+  } else {
+    const r1 = el('div', 'row'), r2 = el('div', 'row');
+    r1.append(act, cut);
+    r2.append(after, dis);
+    root.append(top, r1, r2);
+  }
+  const and = who ? '&' : '?';
+  arm.onclick = () => post('/arm' + who + and + 'delay=' + secs.value).then(tick);
+  act.onclick = () => post('/activate' + who).then(tick);
+  cut.onclick = () => post('/cut' + who).then(tick);
+  after.onclick = () => post('/cut-after' + who).then(tick);
+  dis.onclick = () => post('/disarm' + who).then(tick);
+  secs.addEventListener('input', () => { set.touched = true; if (set.st) paintSet(set, set.st, set.fallback); });
+  sets.set(id, set);
+  return set;
+}
+
+// The same rules as the OBS dock: the same seconds cannot be armed twice,
+// other seconds can at any time — also while the delay is on, which is how it
+// is made longer or shorter without going live in between.
+function paintSet(set, st, fallback) {
+  set.st = st;
+  set.fallback = fallback;
+  const delayed = st.mode === 'delayed';
+  const arm = Math.round(Number(st.arm_delay) || 0);
+  const active = Math.round(Number(st.active_delay) || 0);
+  // Armed from elsewhere — a hotkey, Stream Deck, OBS: the box follows.
+  if (arm > 0 && arm !== set.seen && document.activeElement !== set.secs) set.secs.value = arm;
+  else if (!set.touched && arm <= 0 && fallback && document.activeElement !== set.secs) set.secs.value = Math.round(fallback);
+  set.seen = arm;
+  const want = Math.round(Number(set.secs.value) || 0);
+  const retime = delayed && arm > 0 && active > 0 && arm !== active;
+  const rearm = (arm > 0 && arm !== want) || (delayed && arm <= 0 && active > 0 && active !== want);
+  label(set.arm, rearm ? 'Dozbrój' : 'Uzbrój');
+  set.arm.disabled = !((!delayed && arm <= 0) || rearm) || want < 1;
+  label(set.act, retime ? (set.mini ? 'Przestaw' : 'Przestaw na ' + arm + ' s') : (set.mini ? 'Włącz' : 'Włącz opóźnienie'));
+  set.act.disabled = !(st.armed && (!delayed || retime));
+  set.cut.disabled = !delayed;
+  set.after.disabled = !delayed || !!st.cut_pending;
+  set.dis.disabled = !(arm > 0 && (!delayed || retime));
+  const next = rearm ? set.arm : retime ? set.act : delayed ? set.cut : arm > 0 ? set.act : set.arm;
+  for (const b of [set.arm, set.act, set.cut, set.after, set.dis]) b.classList.toggle('next', b === next);
+  return { retime, arm, active, armed: !!st.armed };
+}
+
+function delayWords(st) {
+  const delayed = st.mode === 'delayed';
+  const arm = Math.round(Number(st.arm_delay) || 0);
+  const active = Math.round(Number(st.active_delay) || 0);
+  const buf = Math.floor(Number(st.buffer_s) || 0);
+  const next = arm <= 0 ? '' : st.armed ? 'uzbrojone ' + arm + ' s' : 'bufor ' + buf + '/' + arm + ' s';
+  if (!delayed) return next;
+  let s = 'opóźnienie ' + (active || Math.round(Number(st.delay) || 0)) + ' s';
+  if (arm > 0 && active > 0 && arm !== active) s += ' → ' + next;
+  return s;
+}
+
+function paint(kind, text) {
+  const c = document.getElementById('chip');
+  c.className = 'chip ' + kind;
+  c.querySelector('b').textContent = text;
+}
+
+// A platform's own input is that platform's row, not a heading. The engine
+// says which ones those are; an older engine is judged by the names.
+function isOwn(inp, dests) {
+  if (typeof inp.own === 'boolean') return inp.own;
+  const fed = dests.filter(d => d.input === inp.name);
+  return fed.length === 1 && fed[0].name === inp.name;
+}
+
+const STATE = { live: 'nadaje', connecting: 'łączę', waiting: 'czeka', error: 'błąd', stopped: 'zatrzymana' };
+let shape = '';
+const rows = new Map();
+
+function build(s, perInput) {
+  sets.clear();
+  rows.clear();
+  const main = document.getElementById('main');
+  main.replaceChildren();
+  // With a delay per input nothing on screen may claim to act on everything.
+  if (!perInput) main.append(controls('all', '', false).root);
+  const list = document.getElementById('dests');
+  list.replaceChildren();
+  const dests = s.dests || [];
+  const shown = new Set();
+  const destRow = (d, i, parent) => {
+    const row = el('div', 'dest');
+    const name = el('div');
+    const b = el('b', null, d.name || ('Platforma ' + (i + 1)));
+    const sm = el('small');
+    name.append(b, sm);
+    const go = btn('live', 'Live');
+    row.append(name, go);
+    parent.append(row);
+    rows.set(i, { sm, go });
+    shown.add(i);
+  };
+  (s.inputs || []).forEach(inp => {
+    const own = isOwn(inp, dests);
+    const who = '?input=' + encodeURIComponent(inp.key);
+    const grp = el('div', 'grp ' + (own ? 'own' : 'shared') + (own && perInput ? ' ownctl' : ''));
+    if (!own) {
+      const head = el('div', 'head');
+      const b = el('b', null, inp.name);
+      const sm = el('small');
+      head.append(b, sm);
+      grp.append(head);
+      rows.set('in:' + inp.key, { sm });
+    }
+    dests.forEach((d, i) => { if (d.input === inp.name) destRow(d, i, grp); });
+    if (own && !grp.children.length) return;
+    if (perInput) {
+      const set = controls('in:' + inp.key, who, true);
+      // Under the heading for a shared input, under its row for a platform's own.
+      if (own) grp.append(set.root);
+      else grp.children[0].after(set.root);
+    }
+    list.append(grp);
+  });
+  dests.forEach((d, i) => { if (!shown.has(i)) destRow(d, i, list); });
+}
+
 function tick() {
   return fetch('/state').then(r => r.json()).then(s => {
+    const dests = s.dests || [];
+    const inputs = s.inputs || [];
+    const perInput = s.delay_mode === 'per_input' && inputs.length > 0;
+    const sig = JSON.stringify([perInput, inputs.map(i => [i.name, i.key, isOwn(i, dests)]), dests.map(d => [d.name, d.input])]);
+    if (sig !== shape) { shape = sig; build(s, perInput); }
+
     const delayed = s.mode === 'delayed';
-    const armed = !!s.armed;
     const input = !!s.input;
-    let kind = 'wait', label = input ? 'Na żywo' : 'Czekam na stream';
-    if (!input) { kind = 'wait'; label = 'Czekam na stream'; }
-    else if (delayed) { kind = 'delayed'; label = 'Opóźnienie'; }
-    else if (armed) { kind = 'armed'; label = 'Uzbrojone'; }
-    else if (Number(s.arm_delay) > 0) { kind = 'armed'; label = 'Uzbrajanie'; }
-    else { kind = 'live'; label = 'Na żywo'; }
-    paint(kind, label);
+    const armS = Math.round(Number(s.arm_delay) || 0);
+    const activeS = Math.round(Number(s.active_delay) || 0);
+    if (!input && !delayed) paint('wait', 'Czekam na stream');
+    else if (delayed) paint('delayed', 'Opóźnienie ' + (activeS || armS || Math.round(s.delay || 0)) + ' s');
+    else if (s.armed) paint('armed', 'Uzbrojone ' + armS + ' s');
+    else if (armS > 0) paint('armed', 'Uzbrajanie');
+    else paint('live', 'Na żywo');
     const buf = Number(s.buffer_s) || 0;
     document.getElementById('meters').textContent = 'bufor ' + buf.toFixed(1) + ' s · ' + Math.round(s.in_kbps || 0) + ' kb/s';
-    if (!delaySet) {
-      delaySet = true;
-      const n = s.arm_delay != null ? s.arm_delay : s.default_delay;
-      if (n) document.getElementById('delay').value = Math.round(n);
+
+    const note = document.getElementById('note');
+    let words = '';
+    if (!perInput) {
+      const r = paintSet(sets.get('all'), s, s.default_delay);
+      if (r.retime) {
+        words = r.armed
+          ? 'Uzbrojone ' + r.arm + ' s — kliknij „Przestaw”, żeby zmienić opóźnienie bez wychodzenia na żywo.'
+          : 'Dozbrajam: bufor ' + Math.floor(buf) + '/' + r.arm + ' s. Obecne opóźnienie zostaje włączone.';
+      }
     }
-    document.getElementById('arm').disabled = delayed;
-    document.getElementById('activate').disabled = !(armed && !delayed);
-    document.getElementById('cut').disabled = !delayed;
-    document.getElementById('cutafter').disabled = !delayed || !!s.cut_pending;
-    document.getElementById('disarm').disabled = delayed || !(s.arm_delay > 0);
-    const box = document.getElementById('dests');
-    box.replaceChildren();
-    (s.dests || []).forEach((d, i) => {
-      const row = document.createElement('div');
-      row.className = 'dest';
-      const name = document.createElement('div');
-      const b = document.createElement('b');
-      b.textContent = d.name || ('Platforma ' + (i + 1));
-      const sm = document.createElement('small');
-      sm.textContent = (d.state || 'stop') + ' · ' + Math.round(d.kbps || 0) + ' kb/s';
-      name.append(b, sm);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'act ' + (d.on ? 'go' : 'live');
-      btn.textContent = d.on ? 'Zakończ' : 'Live';
-      btn.onclick = () => post('/dest/' + (d.on ? 'stop' : 'start') + '?i=' + i).then(tick);
-      row.append(name, btn);
-      box.append(row);
+    note.textContent = words;
+    note.hidden = !words;
+
+    inputs.forEach(inp => {
+      const set = sets.get('in:' + inp.key);
+      if (set) paintSet(set, inp, s.default_delay);
+      const head = rows.get('in:' + inp.key);
+      if (head) {
+        const sig = inp.input ? Math.round(inp.in_kbps || 0) + ' kb/s' : 'brak sygnału';
+        const dw = perInput ? delayWords(inp) : (inp.mode === 'delayed' ? 'opóźnienie ' + Math.round(inp.active_delay || inp.delay || 0) + ' s' : '');
+        head.sm.textContent = dw ? sig + ' · ' + dw : sig;
+      }
     });
+    let live = 0;
+    dests.forEach((d, i) => {
+      if (d.state === 'live') live++;
+      const row = rows.get(i);
+      if (!row) return;
+      let t = (STATE[d.state] || d.state || 'zatrzymana');
+      if (d.kbps > 0) t += ' · ' + Math.round(d.kbps) + ' kb/s';
+      const inp = inputs.find(x => x.name === d.input);
+      if (perInput && inp && isOwn(inp, dests)) { const dw = delayWords(inp); if (dw) t += ' · ' + dw; }
+      row.sm.textContent = t;
+      row.sm.title = d.error || '';
+      label(row.go, d.on ? 'Zakończ' : 'Live');
+      row.go.className = 'act ' + (d.on ? 'go' : 'live');
+      row.go.onclick = () => post('/dest/' + (d.on ? 'stop' : 'start') + '?i=' + i).then(tick);
+    });
+    fold.textContent = 'Wyjścia · ' + live + ' z ' + dests.length + ' nadaje';
+    fold.hidden = !dests.length;
   }).catch(() => paint('wait', 'Brak silnika'));
 }
+
+// Folded or not is remembered: a short dock is usually kept folded.
+const fold = document.getElementById('outsum');
+function setFolded(on) {
+  document.getElementById('dests').classList.toggle('folded', on);
+  fold.setAttribute('aria-expanded', on ? 'false' : 'true');
+}
+try { setFolded(localStorage.getItem('ld-dock-outs') === 'closed'); } catch (_) {}
+fold.addEventListener('click', () => {
+  const on = fold.getAttribute('aria-expanded') === 'true';
+  setFolded(on);
+  try { localStorage.setItem('ld-dock-outs', on ? 'closed' : 'open'); } catch (_) {}
+});
+
 tick();
 setInterval(tick, 1000);
 </script>

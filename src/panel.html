@@ -110,6 +110,13 @@ input.capturing { border-color: var(--tally); color: var(--tally); }
 .rows { width: 100%; border-collapse: collapse; }
 .rows th, .rows td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .rows th { font: 500 10.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--dim); font-weight: 500; }
+.inbox { border: 1px solid var(--line); background: var(--panel); padding: 16px; margin: 0 0 14px; }
+.inbox h2 { margin: 0 0 6px; font-size: 1.1rem; }
+.inbox .hint { margin: 0 0 12px; }
+.inrow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 14px; padding: 7px 0; border-top: 1px solid var(--line); }
+.inrow small { color: var(--dim); font: 500 11px/1.3 var(--mono); letter-spacing: .06em; }
+.inhead { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-bottom: 10px; }
+.inhead .field { flex: 1 1 180px; margin: 0; }
 .links { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 16px; }
 .links a { height: 34px; display: inline-flex; align-items: center; padding: 0 12px; border: 1px solid var(--line-2); font: 600 10px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; text-decoration: none; color: var(--text); }
 .links a:hover { border-color: var(--text); }
@@ -217,9 +224,31 @@ input.capturing { border-color: var(--tally); color: var(--tally); }
       </div>
     </section>
 
+    <section class="page" id="page-inputs" hidden>
+      <h1>Wejścia</h1>
+      <p class="hint">Wejścia to obrazy, które przychodzą do LiveDelay: zawsze ten z programu na tym PC, a do tego — jeśli chcesz — dodatkowe z innych programów, np. pionowy z Aitum Vertical. W zakładce Wyjścia każda platforma wybiera, z którego wejścia bierze obraz. Zmiana wejść podnosi silnik.</p>
+      <div class="grid2" style="margin-bottom:14px">
+        <label class="field"><span class="tag">Opóźnienie</span>
+          <select id="delay_mode">
+            <option value="together">Wspólne dla wszystkich wejść (domyślnie)</option>
+            <option value="per_input">Osobne dla każdego wejścia</option>
+          </select>
+        </label>
+        <label class="field"><span class="tag">Adres serwera (dla każdego wejścia)</span><input class="code" id="in_addr" type="text" readonly></label>
+      </div>
+      <div class="inbox">
+        <h2 id="mainTitle">OBS</h2>
+        <p class="hint">Główny obraz. Domyślnie każda platforma koduje go osobno, z własnymi ustawieniami. Zaznacz platformy, które mają dzielić jedno kodowanie — obraz jest wtedy kodowany i wysyłany raz. Każde kodowanie ma własny klucz wejścia.</p>
+        <div id="mainRows"></div>
+        <p class="hint" id="singleNote" hidden style="color:var(--arm);margin:10px 0 0">Włączony jest tryb „Jeden PC”: jest jedno kodowanie, więc obraz dostaną tylko platformy na wspólnym kodowaniu.</p>
+      </div>
+      <div id="extBoxes"></div>
+      <button type="button" class="mini" id="addInput">Dodaj wejście dla innego programu</button>
+    </section>
+
     <section class="page" id="page-platforms" hidden>
-      <h1>Platformy</h1>
-      <p class="hint">Każda platforma ma własny adres, klucz, kodowanie, ścieżki audio i Enhanced Broadcasting. Lista usług jest ta sama co w OBS. Dodanie albo usunięcie platformy podnosi silnik.</p>
+      <h1>Wyjścia (platformy)</h1>
+      <p class="hint">Każda platforma ma własny adres, klucz, kodowanie, ścieżki audio i Enhanced Broadcasting, i wybiera wejście, z którego bierze obraz. Lista usług jest ta sama co w OBS. Dodanie albo usunięcie platformy podnosi silnik.</p>
       <div class="importrow">
         <button type="button" class="mini" id="importObs">Przenieś z OBS</button>
         <select id="obsProfile" hidden></select>
@@ -401,6 +430,7 @@ function show(id) {
     if (on) a.setAttribute('aria-current', 'true');
   });
   if (id === 'platforms') renderPlat();
+  if (id === 'inputs') renderInputs();
   if (id === 'audio') renderAudio();
   if (id === 'logs') refreshLogs();
   const bar = document.querySelector('.savebar');
@@ -435,7 +465,7 @@ function renderList() {
     const name = document.createElement('span');
     name.textContent = d.name || ('Platforma ' + (i + 1));
     const sub = document.createElement('small');
-    sub.textContent = (d.ingest_key || ('ld' + i)) + (d.service ? ' · ' + d.service : '');
+    sub.textContent = feedWords(d) + (d.service ? ' · ' + d.service : '');
     b.append(name, sub);
     b.addEventListener('click', () => { sel = i; renderPlat(); });
     li.append(b);
@@ -464,7 +494,19 @@ function renderForm() {
   const grid = document.createElement('div');
   grid.className = 'grid2';
   const name = textIn(d.name);
-  name.addEventListener('input', () => { d.name = name.value; renderList(); });
+  name.addEventListener('input', () => { renameDest(d, name.value); renderList(); });
+  const feed = document.createElement('select');
+  [['', 'OBS — własne kodowanie'], [PICK_SHARED, 'OBS — wspólne kodowanie']]
+    .concat(inputs.filter(x => x.external).map(x => [x.name, x.name + ' — z innego programu']))
+    .forEach(([v, t]) => { const o = document.createElement('option'); o.value = v; o.textContent = t; feed.append(o); });
+  {
+    const cur = inputOf(d);
+    feed.value = !cur || cur.own ? '' : cur.external ? cur.name : PICK_SHARED;
+  }
+  feed.addEventListener('change', () => {
+    moveDest(sel, feed.value === PICK_SHARED ? ensureShared() : feed.value);
+    renderList();
+  });
   const service = document.createElement('select');
   const custom = document.createElement('option');
   custom.value = '';
@@ -614,6 +656,7 @@ function renderForm() {
   });
   const fields = [
     field('Nazwa', name),
+    field('Wejście', feed),
     field('Usługa', service),
     field('Serwer', server),
     field('Adres', url),
@@ -703,6 +746,155 @@ function renderForm() {
   box.append(ing);
 }
 
+// ---- inputs ---------------------------------------------------------------
+// What the page shows is simpler than what the file holds. There is always the
+// main picture (OBS, or the program on this PC). Behind it sit the platforms'
+// own inputs — each encoding for itself, as every older file has it — and at
+// most one shared input for the platforms that share an encode. Every other
+// input is one another program publishes to.
+let inputs = [];
+const PICK_SHARED = '\u0001shared';
+function inputOf(d) { return inputs.find(x => x.name === d.input); }
+function sharedInput() { return inputs.find(x => !x.own && !x.external); }
+function freeKey() {
+  for (let n = 0; ; n++) if (!inputs.some(x => x.key === 'ld' + n)) return 'ld' + n;
+}
+function uniqueName(base) {
+  let name = base;
+  for (let n = 2; inputs.some(x => x.name === name); n++) name = base + ' ' + n;
+  return name;
+}
+function giveOwn(d) {
+  const own = { name: uniqueName(d.name || 'Platforma'), key: freeKey(), own: true, external: false };
+  inputs.push(own);
+  d.input = own.name;
+}
+function ensureShared() {
+  let s = sharedInput();
+  if (!s) { s = { name: uniqueName('OBS'), key: freeKey(), own: false, external: false }; inputs.push(s); }
+  return s.name;
+}
+// Points a platform at the input `target`, or — with an empty name — back at
+// an encode of its own. An own input nobody needs goes with the move, and so
+// does the shared one once it is empty.
+function moveDest(i, target) {
+  const d = dests[i];
+  if (!d) return;
+  const cur = inputOf(d);
+  const hadOwn = !!(cur && cur.own);
+  if (!target) {
+    if (hadOwn) return;
+    giveOwn(d);
+  } else {
+    if (d.input === target || !inputs.some(x => x.name === target)) return;
+    d.input = target;
+    if (hadOwn) inputs = inputs.filter(x => x !== cur);
+  }
+  const s = sharedInput();
+  if (s && !dests.some(x => x.input === s.name)) inputs = inputs.filter(x => x !== s);
+}
+// Its own input carries a platform's name; keep the two in step.
+function renameDest(d, name) {
+  const cur = inputOf(d);
+  d.name = name;
+  if (cur && cur.own && name.trim() && !inputs.some(x => x !== cur && x.name === name.trim())) {
+    cur.name = name.trim();
+    d.input = cur.name;
+  }
+}
+function feedWords(d) {
+  const cur = inputOf(d);
+  if (!cur || cur.own) return 'własne kodowanie' + (cur ? ' · ' + cur.key : '');
+  return (cur.external ? cur.name : 'wspólne kodowanie') + ' · ' + cur.key;
+}
+function renderInputs() {
+  const main = document.getElementById('mainRows');
+  if (!main) return;
+  main.replaceChildren();
+  const shared = sharedInput();
+  dests.forEach((d, i) => {
+    const cur = inputOf(d);
+    const row = document.createElement('div');
+    row.className = 'inrow';
+    const lab = document.createElement('label');
+    lab.className = 'check';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = !!(shared && cur === shared);
+    box.addEventListener('change', () => { moveDest(i, box.checked ? ensureShared() : ''); renderInputs(); });
+    lab.append(box, document.createTextNode(d.name || ('Platforma ' + (i + 1))));
+    const note = document.createElement('small');
+    note.textContent = !cur ? '' : cur.external ? 'bierze obraz z wejścia ' + cur.name
+      : 'klucz ' + cur.key + (cur === shared ? ' · wspólny' : '');
+    row.append(lab, note);
+    main.append(row);
+  });
+  if (!dests.length) {
+    const p = document.createElement('p');
+    p.className = 'hint';
+    p.textContent = 'Brak platform: dodaj je w zakładce Wyjścia.';
+    main.append(p);
+  }
+  const encodes = new Set(dests.map(inputOf).filter(x => x && !x.external).map(x => x.key));
+  document.getElementById('singleNote').hidden = !(document.getElementById('single_pc').checked && encodes.size > 1);
+
+  const ext = document.getElementById('extBoxes');
+  ext.replaceChildren();
+  inputs.filter(x => x.external).forEach(inp => {
+    const boxEl = document.createElement('div');
+    boxEl.className = 'inbox';
+    const head = document.createElement('div');
+    head.className = 'inhead';
+    const name = textIn(inp.name);
+    name.addEventListener('input', () => {
+      const next = name.value.trim();
+      if (!next || inputs.some(x => x !== inp && x.name === next)) return;
+      dests.forEach(d => { if (d.input === inp.name) d.input = next; });
+      inp.name = next;
+    });
+    const key = textIn(inp.key, true);
+    key.readOnly = true;
+    const copy = document.createElement('button');
+    copy.type = 'button';
+    copy.className = 'mini';
+    copy.textContent = 'Kopiuj klucz';
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(inp.key); } catch (_) { key.select(); document.execCommand('copy'); }
+      copy.textContent = 'Skopiowany';
+      setTimeout(() => { copy.textContent = 'Kopiuj klucz'; }, 1200);
+    });
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'mini';
+    del.textContent = 'Usuń';
+    del.addEventListener('click', () => {
+      // Its platforms go back to the main picture, encoding for themselves.
+      dests.forEach((d, i) => { if (d.input === inp.name) moveDest(i, ''); });
+      inputs = inputs.filter(x => x !== inp);
+      renderInputs();
+    });
+    head.append(field('Nazwa wejścia', name), field('Klucz wejścia', key), copy, del);
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = 'Wejście dla innego programu, np. Aitum Vertical. Wklej w nim adres serwera z góry strony i ten klucz — program sam wysyła obraz do LiveDelay. Zaznacz platformy, które mają go brać:';
+    boxEl.append(head, hint);
+    dests.forEach((d, i) => {
+      const row = document.createElement('div');
+      row.className = 'inrow';
+      const lab = document.createElement('label');
+      lab.className = 'check';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = d.input === inp.name;
+      box.addEventListener('change', () => { moveDest(i, box.checked ? inp.name : ''); renderInputs(); });
+      lab.append(box, document.createTextNode(d.name || ('Platforma ' + (i + 1))));
+      row.append(lab);
+      boxEl.append(row);
+    });
+    ext.append(boxEl);
+  });
+}
+
 function renderPlat() { renderList(); renderForm(); }
 
 function renderAudio() {
@@ -766,15 +958,26 @@ document.getElementById('addDest').addEventListener('click', () => {
     width: 0, height: 0, audio_track: 0, vod_track: 0, vod_override: false, enhanced: false
   });
   sel = dests.length - 1;
+  // A new platform takes the main picture and encodes for itself, as before.
+  giveOwn(dests[sel]);
   renderPlat();
 });
 document.getElementById('delDest').addEventListener('click', () => {
   if (!dests[sel]) return;
   if (!confirm('Usunąć platformę „' + (dests[sel].name || '') + '”?')) return;
+  // Its own input goes with it; a shared one stays while anybody still uses it.
+  const cur = inputOf(dests[sel]);
   dests.splice(sel, 1);
+  if (cur && (cur.own || (!cur.external && !dests.some(d => d.input === cur.name))))
+    inputs = inputs.filter(x => x !== cur);
   sel = Math.max(0, sel - 1);
   renderPlat();
 });
+document.getElementById('addInput').addEventListener('click', () => {
+  inputs.push({ name: uniqueName('Pionowe'), key: freeKey(), own: false, external: true });
+  renderInputs();
+});
+document.getElementById('single_pc').addEventListener('change', renderInputs);
 
 function paint(kind, label) {
   for (const id of ['sidechip', 'topchip']) {
@@ -848,8 +1051,13 @@ async function load() {
   for (const k of ['hotkey_arm', 'hotkey_activate', 'hotkey_cut', 'hotkey_cut_after'])
     document.getElementById(k).value = c[k] || '';
   renderSlots(c.arm_slots || []);
+  document.getElementById('delay_mode').value = c.delay_mode === 'per_input' ? 'per_input' : 'together';
+  document.getElementById('in_addr').value = 'rtmp://' + String(c.listen || '').replace(/^0\.0\.0\.0/, '127.0.0.1') + '/live';
+  document.getElementById('mainTitle').textContent = c.host === 'obs' ? 'OBS' : 'Program na tym PC';
+  inputs = (c.inputs || []).map(x => ({ name: x.name || '', key: x.key || '', own: !!x.own, external: !!x.external }));
   dests = (c.dests || []).map(d => {
     const row = {
+      input: d.input || '',
       name: d.name || '', service: d.service || '', server: d.server || '', url: d.url || '', key: d.key || '',
       ingest_key: d.ingest_key || '', autostart: !!d.autostart, enabled: d.enabled !== false,
       encode_mode: d.encode_mode || 'obs', video_kbps: d.video_kbps || 0, audio_kbps: d.audio_kbps || 0,
@@ -869,8 +1077,11 @@ async function load() {
     }
     return row;
   });
+  // A platform the file names no input for encodes for itself.
+  dests.forEach(d => { if (!inputOf(d)) giveOwn(d); });
   sel = 0;
   renderPlat();
+  renderInputs();
   try {
     const o = await fetch('/overlay/config');
     if (o.ok) overlay = await o.json();
@@ -889,8 +1100,21 @@ document.getElementById('save').addEventListener('click', async () => {
       show('platforms');
       return;
     }
+    if (!inputOf(d)) giveOwn(d);
     if (d.vod_track && Number(d.vod_track) === Number(d.audio_track)) d.vod_track = 0;
     if (!isTwitch(d)) d.enhanced = false;
+  }
+  {
+    const seen = new Set();
+    for (const x of inputs) {
+      const n = String(x.name || '').trim();
+      if (!n || /[\]\r\n]/.test(n) || seen.has(n)) {
+        say('Każde wejście potrzebuje własnej nazwy, bez znaku ].', 'bad');
+        show('inputs');
+        return;
+      }
+      seen.add(n);
+    }
   }
   save.disabled = true;
   say('Zapisuję…');
@@ -910,7 +1134,14 @@ document.getElementById('save').addEventListener('click', async () => {
     hotkey_cut_after: hotkeyValue('hotkey_cut_after')
   };
   for (let i = 0; i < 6; i++) body['arm_slot_' + i] = document.getElementById('arm_slot_' + i).value.trim();
+  body.delay_mode = document.getElementById('delay_mode').value;
+  // Inputs go into the file only when one of them is shared or fed by another
+  // program. While every platform encodes for itself the file keeps the shape
+  // it always had.
+  const written = inputs.some(x => !x.own);
+  body.inputs = written ? inputs.map(x => ({ name: x.name.trim(), key: x.key, own: !!x.own, external: !!x.external })) : [];
   body.dests = dests.map(d => ({
+    input: written ? d.input : '',
     name: d.name.trim(), service: d.service || '', server: d.server || '', url: d.url.trim(), key: d.key,
     enabled: d.enabled !== false, autostart: !!d.autostart, encode_mode: d.encode_mode || 'obs',
     video_kbps: Number(d.video_kbps) || 0, audio_kbps: Number(d.audio_kbps) || 0,

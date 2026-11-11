@@ -545,6 +545,29 @@ bool FitEncodeForObsMode()
 	return FitObsOutput(tight);
 }
 
+QString TwitchCapInfo()
+{
+	const Settings s = Settings::Load(ConfigPath());
+	if (!s.single_pc && !s.obs_live)
+		return {};
+	bool twitch = false;
+	for (const Destination &d : s.dests) {
+		const Input *in = s.FindInput(d.input);
+		const bool by_hand = d.encode_mode == EncodeMode::Manual && d.width > 0 && d.height > 0;
+		twitch = twitch || (d.enabled && !(in && in->external) && !by_hand &&
+				    IsTwitchTarget(QString::fromStdString(d.service), QString::fromStdString(d.url)));
+	}
+	obs_video_info ovi{};
+	if (!twitch || !obs_get_video_info(&ovi) || (ovi.output_width <= 1920 && ovi.output_height <= 1080))
+		return {};
+	const double scale = std::min(1920.0 / double(ovi.output_width), 1080.0 / double(ovi.output_height));
+	return T("Limits.TwitchCapInfo")
+		.arg(ovi.output_width)
+		.arg(ovi.output_height)
+		.arg(uint32_t(std::lround(ovi.output_width * scale)) & ~1u)
+		.arg(uint32_t(std::lround(ovi.output_height * scale)) & ~1u);
+}
+
 QString MultiEncodeInfo()
 {
 	const Settings s = Settings::Load(ConfigPath());

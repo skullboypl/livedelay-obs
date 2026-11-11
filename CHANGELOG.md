@@ -8,6 +8,11 @@
 - **Delay shared or per input.** Inputs → Delay. Per input, each input gets one button in the dock that does the next thing for it: arm, switch the delay on, go back live. The big buttons still act on everything.
 - **The dock groups platforms under a shared input** and stays as it was — one line for OBS, then the platforms — while every platform encodes for itself.
 - **Single PC feeds every platform on the shared encode,** not only the first one. Saving with Single PC on and several separate encodes asks whether to switch them to the shared one.
+- **Re-arm and move a delay that is on.** The same seconds cannot be armed twice; other seconds can, and Arm then reads *Re-arm*. While the delay is on, Activate becomes *Move to N s*: longer or shorter without going live in between. The engine reports `active_delay` for it.
+- **Twitch error #1000 in Single PC.** Classic Twitch plays nothing above 1080p: the channel shows live and every viewer gets error #1000. The plugin's own encoders were already capped; in Single PC and Force live from OBS the stream is OBS's own and was not. It is now sent at 1080p as well, unless that platform has a size set by hand.
+- **The dock fits the space it is given.** It scrolls instead of squeezing rows flat, tightens when it is short, keeps two columns with shorter words when it is narrow, and the outputs fold away. The note about what is being sent can be closed.
+- **A setting changed elsewhere during a stream is applied when the stream ends,** instead of being forgotten.
+- **The browser dock and the web panel follow.** `/dock` groups outputs by input and has the same per-input controls; `/panel` has an Inputs page and an input picker on each output.
 - **The plugin no longer mangles inputs written by the app or the web panel.** Its settings reader knew only platforms, so `key = ld1` under `[input …]` was read as the stream key of the platform above it, and a save dropped the section. It now reads inputs, and keeps every key and section it does not know.
 
 ## 1.0.42 – 2026-11-11

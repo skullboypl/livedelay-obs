@@ -86,6 +86,15 @@ pub struct Input {
     pub name: String,
     /// RTMP publish key into this proxy (`ld0`, …). Empty takes the next free one.
     pub key: String,
+    /// `feed = external`: another program publishes here — Aitum Vertical, a
+    /// second OBS. The engine treats every input alike; the interfaces need it
+    /// to know which inputs OBS itself must leave alone.
+    pub external: bool,
+    /// `own = yes`: one platform's own encode, the arrangement every older
+    /// file has. Interfaces show it as that platform's "own encode" and not as
+    /// an input. An unmarked input feeding exactly one platform of its own
+    /// name counts too — that is what the app writes.
+    pub own: bool,
 }
 
 
@@ -318,8 +327,11 @@ pub fn parse_report(text: &str) -> ParseReport {
         let mut keep = true;
         if let Section::Input = section {
             if let Some(inp) = c.inputs.last_mut() {
-                if k == "key" {
-                    inp.key = v.into();
+                match k {
+                    "key" => inp.key = v.into(),
+                    "feed" => inp.external = v == "external",
+                    "own" => inp.own = yes(v),
+                    _ => {}
                 }
             }
             kept.push(raw);
@@ -516,6 +528,8 @@ pub struct IniUpdate {
 pub struct InputUpdate {
     pub name: Option<String>,
     pub key: Option<String>,
+    pub external: Option<bool>,
+    pub own: Option<bool>,
 }
 
 #[derive(Default)]
@@ -553,6 +567,20 @@ fn split_key(line: &str) -> Option<(String, String)> {
         return None;
     }
     Some((k.to_string(), v.trim().to_string()))
+}
+
+fn drop_line(lines: &mut Vec<String>, key: &str) {
+    lines.retain(|line| split_key(line).map(|(k, _)| k != key).unwrap_or(true));
+}
+
+/// A yes/no key that is written when it is on and absent when it is off, so a
+/// plain input stays two lines long.
+fn set_flag(lines: &mut Vec<String>, key: &str, value: &str, on: Option<bool>) {
+    match on {
+        Some(true) => set_line(lines, key, value),
+        Some(false) => drop_line(lines, key),
+        None => {}
+    }
 }
 
 fn set_line(lines: &mut Vec<String>, key: &str, value: &str) {
@@ -605,7 +633,7 @@ fn next_ld_key(dests: &[(String, Vec<String>)]) -> String {
 fn finish_inputs(c: &mut Config, dropped: &mut Vec<String>) {
     if c.inputs.is_empty() {
         for d in &c.dests {
-            c.inputs.push(Input { name: d.name.clone(), key: d.ingest_key.clone() });
+            c.inputs.push(Input { name: d.name.clone(), key: d.ingest_key.clone(), external: false, own: true });
         }
         let names: Vec<String> = c.inputs.iter().map(|i| i.name.clone()).collect();
         for (d, name) in c.dests.iter_mut().zip(names) {
@@ -638,6 +666,14 @@ fn finish_inputs(c: &mut Config, dropped: &mut Vec<String>) {
             dropped.push(format!("livedelay.ini: platform {} points at input {}, which is not there", d.name, d.input));
             d.input = first.clone();
         }
+    }
+    // A file the app wrote carries no mark for a platform's own input.
+    for inp in c.inputs.iter_mut() {
+        if inp.own || inp.external {
+            continue;
+        }
+        let fed: Vec<&Dest> = c.dests.iter().filter(|d| d.input == inp.name).collect();
+        inp.own = fed.len() == 1 && fed[0].name == inp.name;
     }
 }
 
@@ -737,7 +773,11 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
                 set_line(lines, key, v);
             }
         };
-        set(lines, "input", &patch.input);
+        match patch.input.as_deref() {
+            Some("") => drop_line(lines, "input"),
+            Some(name) => set_line(lines, "input", name),
+            None => {}
+        }
         set(lines, "service", &patch.service);
         set(lines, "server", &patch.server);
         set(lines, "url", &patch.url);
@@ -782,6 +822,8 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
             if let Some(k) = &patch.key {
                 set_line(&mut lines, "key", k);
             }
+            set_flag(&mut lines, "feed", "external", patch.external);
+            set_flag(&mut lines, "own", "yes", patch.own);
             inputs.push((format!("[input {name}]"), lines));
             continue;
         }
@@ -795,6 +837,8 @@ pub fn update_ini(text: &str, upd: &IniUpdate) -> String {
         if let Some(k) = &patch.key {
             set_line(lines, "key", k);
         }
+        set_flag(lines, "feed", "external", patch.external);
+        set_flag(lines, "own", "yes", patch.own);
     }
 
     if upd.replace_dests {
@@ -1015,8 +1059,13 @@ encode_mode = nope
         let upd = IniUpdate {
             replace_inputs: true,
             inputs: vec![
-                InputUpdate { name: Some("Poziome".into()), key: Some("ld0".into()) },
-                InputUpdate { name: Some("Pionowe".into()), key: Some("ld1".into()) },
+                InputUpdate { name: Some("Poziome".into()), key: Some("ld0".into()), ..InputUpdate::default() },
+                InputUpdate {
+                    name: Some("Pionowe".into()),
+                    key: Some("ld1".into()),
+                    external: Some(true),
+                    ..InputUpdate::default()
+                },
             ],
             ..IniUpdate::default()
         };

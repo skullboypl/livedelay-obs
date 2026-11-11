@@ -13,6 +13,8 @@
 #include <QJsonObject>
 #include <QTimer>
 
+#include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -837,12 +839,65 @@ void OutputsShutdown()
 	g_inited = false;
 }
 
+// Single PC and "force live from OBS" send OBS's own encode to the platforms,
+// so nothing of ours stands between the OBS output size and Twitch. Classic
+// Twitch plays nothing above 1080p: the channel shows LIVE with a healthy
+// bitrate and every viewer gets player error #1000. The plugin's own encoders
+// are capped in ResolveEncode; this is the same cap on OBS's stream encoder.
+// OBS sets that encoder's size from the profile before it raises
+// STREAMING_STARTING and does not touch it again before the output starts, so
+// this holds for the stream being started and has to be done on every start.
+void CapObsStreamForTwitch()
+{
+	const Settings s = Settings::Load(ConfigPath());
+	if (!s.single_pc && !s.obs_live)
+		return;
+	// There is nothing to ask classic Twitch about what an account may send —
+	// the only negotiation Twitch offers is Enhanced Broadcasting, and that
+	// needs encoders of our own. So the cap is the default, and a size typed
+	// by hand (encode mode Manual) is the way to say "my account takes more",
+	// exactly as it is for the plugin's own encoders.
+	bool twitch = false;
+	for (size_t i = 0; i < s.dests.size(); ++i) {
+		const Destination &d = s.dests[i];
+		const bool by_hand = d.encode_mode == EncodeMode::Manual && d.width > 0 && d.height > 0;
+		twitch = twitch || (d.enabled && DestIsTwitch(d) && !FedFromOutside(s, i) && !by_hand);
+	}
+	if (!twitch)
+		return;
+	obs_output_t *out = obs_frontend_get_streaming_output();
+	if (!out)
+		return;
+	obs_encoder_t *venc = obs_output_get_video_encoder(out);
+	if (venc && !obs_encoder_active(venc)) {
+		obs_video_info ovi{};
+		obs_get_video_info(&ovi);
+		uint32_t w = obs_encoder_get_width(venc), h = obs_encoder_get_height(venc);
+		if (!w || !h) {
+			w = ovi.output_width;
+			h = ovi.output_height;
+		}
+		if (w > 1920 || h > 1080) {
+			const double scale = std::min(1920.0 / double(w), 1080.0 / double(h));
+			const uint32_t nw = std::max<uint32_t>(2, uint32_t(std::lround(w * scale)) & ~1u);
+			const uint32_t nh = std::max<uint32_t>(2, uint32_t(std::lround(h * scale)) & ~1u);
+			obs_encoder_set_scaled_size(venc, nw, nh);
+			if (obs_encoder_get_scale_type(venc) == OBS_SCALE_DISABLE)
+				obs_encoder_set_gpu_scale_type(venc, OBS_SCALE_BICUBIC);
+			blog(LOG_INFO, "[livedelay] OBS stream %ux%u → %ux%u: classic Twitch plays nothing above 1080p", w, h, nw,
+			     nh);
+		}
+	}
+	obs_output_release(out);
+}
+
 void OutputsOnStreamingStarting()
 {
 	// Last chance before we encode to platforms: stock Multitrack off + key=_idle.
 	// Do not start encoders or sleep here. This callback runs before OBS connects
 	// to LiveDelay; blocking it is why platform start failed and _idle arrived after.
 	HardenObsForLiveDelay(true);
+	CapObsStreamForTwitch();
 	if (g_outs.empty())
 		Rebuild(false);
 	g_arm_pending = true;

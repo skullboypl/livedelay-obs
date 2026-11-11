@@ -28,6 +28,9 @@
 #include <QPainterPath>
 #include <QPointer>
 #include <QProgressBar>
+#include <QResizeEvent>
+#include <QScrollArea>
+#include <QSettings>
 #include <QPushButton>
 #include <QSpinBox>
 #include <QTimer>
@@ -38,6 +41,10 @@
 #include <thread>
 
 namespace livedelay {
+
+// Set by the dock when it is short of height: the pill and everything else
+// take less room. One dock per OBS, so one flag.
+static bool s_compact = false;
 
 // A tiny bitrate line for one row of the panel.
 class Sparkline : public QWidget {
@@ -171,6 +178,7 @@ void Dock::Retranslate()
 			w->setToolTip(T(tip.constData()));
 	}
 	delay_->setToolTip(T("Dock.DelayTip"));
+	Reflow();
 	if (last_.empty())
 		ShowOffline();
 	else
@@ -220,6 +228,7 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	status_ = new QLabel;
 	status_->setAlignment(Qt::AlignCenter);
 	status_->setMinimumHeight(36);
+	status_->setWordWrap(true);
 	detail_ = new QLabel;
 	detail_->setWordWrap(true);
 	detail_->setAlignment(Qt::AlignCenter);
@@ -263,34 +272,48 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	auto *armRow = new QHBoxLayout;
 	armRow->addWidget(delay_);
 	armRow->addWidget(arm_, 1);
-	auto *mainRow = new QHBoxLayout;
-	mainRow->addWidget(activate_);
-	mainRow->addWidget(cut_);
-	auto *moreRow = new QHBoxLayout;
-	moreRow->addWidget(cut_after_);
-	moreRow->addWidget(disarm_);
-	// Four tools in one row would squeeze their labels out of a narrow dock.
-	auto *toolsRow = new QGridLayout;
-	toolsRow->addWidget(settings, 0, 0);
-	toolsRow->addWidget(panel, 0, 1);
-	toolsRow->addWidget(preview, 1, 0);
-	toolsRow->addWidget(help, 1, 1);
+	// Two by two while there is room, one under another in a narrow dock:
+	// Reflow() places them.
+	bigGrid_ = new QGridLayout;
+	toolsGrid_ = new QGridLayout;
+	tools_ = {settings, panel, preview, help};
+	outputsFolded_ = QSettings(QStringLiteral("skullboypl"), QStringLiteral("livedelay-obs"))
+				 .value(QStringLiteral("dock/outputsFolded"), false)
+				 .toBool();
 
-	auto *layout = new QVBoxLayout(this);
-	AttachUpdateBanner(this, layout);
+	// Everything sits in a scroll area: a dock dragged short gets a scroll bar
+	// instead of rows squeezed flat and text cut off.
+	auto *body = new QWidget;
+	auto *layout = new QVBoxLayout(body);
+	AttachUpdateBanner(body, layout);
 	layout->addWidget(banner_);
 	layout->addWidget(limits_);
 	layout->addWidget(status_);
 	layout->addWidget(fill_);
 	layout->addWidget(detail_);
 	layout->addLayout(armRow);
-	layout->addLayout(mainRow);
-	layout->addLayout(moreRow);
+	layout->addLayout(bigGrid_);
 	layout->addWidget(dests_);
 	layout->addWidget(start_);
-	layout->addLayout(toolsRow);
+	layout->addLayout(toolsGrid_);
 	layout->addWidget(error_);
 	layout->addStretch();
+	auto *scroll = new QScrollArea;
+	scroll->setFrameShape(QFrame::NoFrame);
+	scroll->setWidgetResizable(true);
+	scroll->setWidget(body);
+	scroll->viewport()->setAutoFillBackground(false);
+	body->setAutoFillBackground(false);
+	scroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; }"));
+	body_ = body;
+	scroll_ = scroll;
+	normalMargins_ = layout->contentsMargins();
+	normalSpacing_ = layout->spacing();
+	auto *outer = new QVBoxLayout(this);
+	outer->setContentsMargins(0, 0, 0, 0);
+	outer->addWidget(scroll);
+	setMinimumWidth(220);
+	Reflow();
 
 	connect(arm_, &QPushButton::clicked, this, [this] { Hotkey("arm"); });
 	connect(activate_, &QPushButton::clicked, this, [this] { Act("activate"); });
@@ -323,6 +346,10 @@ Dock::Dock(QWidget *parent) : QWidget(parent)
 	// file. Watching its write time is cheaper than re-reading it every second.
 	auto *iniTimer = new QTimer(this);
 	connect(iniTimer, &QTimer::timeout, this, [this] {
+		if (enginePending_ && !obs_frontend_streaming_active()) {
+			ReloadConfig();
+			return;
+		}
 		const unsigned long long stamp = ConfigStamp();
 		if (stamp == 0 || stamp == configStamp_)
 			return;
@@ -421,11 +448,19 @@ void Dock::ReloadConfig()
 	}
 	const std::string engine = EngineText(s);
 	if (engine != engine_text_) {
-		engine_text_ = engine;
 		if (!obs_frontend_streaming_active()) {
+			engine_text_ = engine;
+			enginePending_ = false;
 			ShowError(QString::fromStdString(StartProxy()));
 			OutputsReloadConfig();
+		} else {
+			// Remembered, not forgotten: the timer applies it once the stream
+			// ends. Taking the new text as current here used to lose the change
+			// for good.
+			enginePending_ = true;
 		}
+	} else {
+		enginePending_ = false;
 	}
 	// A default delay changed elsewhere is only safe to adopt while nothing is
 	// armed — otherwise it would overwrite what the user is about to arm.
@@ -433,6 +468,103 @@ void Dock::ReloadConfig()
 	    s.delay <= delay_->maximum())
 		delay_->setValue(s.delay);
 	UpdateBanner();
+}
+
+// The big buttons stay two by two: a narrow dock gets shorter words, not a
+// taller column. The tools become one row of icons when words do not fit or
+// height is short; their names stay in the tooltips.
+void Dock::Reflow()
+{
+	QPushButton *big[] = {activate_, cut_, cut_after_, disarm_};
+	for (int i = 0; i < 4; ++i) {
+		bigGrid_->removeWidget(big[i]);
+		bigGrid_->addWidget(big[i], i / 2, i % 2);
+	}
+	cut_after_->setText(T(narrow_ ? "Inputs.CutAfterShort" : "Dock.CutAfter"));
+	const bool icons = narrow_ || compact_;
+	const int cols = icons ? int(tools_.size()) : 2;
+	for (int i = 0; i < int(tools_.size()); ++i) {
+		QPushButton *b = tools_[size_t(i)];
+		toolsGrid_->removeWidget(b);
+		toolsGrid_->addWidget(b, i / cols, i % cols);
+		b->setText(icons ? QString() : T(b->property("ldText").toByteArray().constData()));
+	}
+}
+
+// Short of height, the dock tightens before it scrolls: smaller buttons and
+// gaps, the hint line folded into a tooltip.
+void Dock::ApplyDensity()
+{
+	s_compact = compact_;
+	QLayout *lay = body_->layout();
+	lay->setSpacing(compact_ ? 3 : normalSpacing_);
+	lay->setContentsMargins(compact_ ? QMargins(5, 4, 5, 4) : normalMargins_);
+	const int h = compact_ ? 24 : 32;
+	for (QPushButton *b : {arm_, activate_, cut_, cut_after_, disarm_, start_})
+		b->setMinimumHeight(h);
+	for (QPushButton *b : tools_)
+		b->setMinimumHeight(h);
+	delay_->setMinimumHeight(h);
+	status_->setMinimumHeight(compact_ ? 22 : 36);
+	destGrid_->setContentsMargins(compact_ ? QMargins(6, 2, 6, 2) : QMargins(8, 6, 8, 6));
+	destGrid_->setVerticalSpacing(compact_ ? 1 : -1);
+	bigGrid_->setSpacing(compact_ ? 3 : -1);
+	toolsGrid_->setSpacing(compact_ ? 3 : -1);
+}
+
+void Dock::resizeEvent(QResizeEvent *event)
+{
+	QWidget::resizeEvent(event);
+	FitWidth();
+}
+
+// The wide form is used while it fits. What "fits" means depends on what is
+// on screen — a delay per input needs more room than a list of platforms — so
+// it is measured, not assumed: the width the wide form asked for when it last
+// overflowed is the width at which it is tried again.
+void Dock::FitWidth()
+{
+	if (fitting_ || !body_ || !scroll_)
+		return;
+	fitting_ = true;
+	const int have = scroll_->viewport()->width();
+	auto redraw = [this] {
+		ApplyDensity();
+		Reflow();
+		if (last_.empty())
+			ShowOffline();
+		else
+			ShowState(std::string(last_));
+		body_->layout()->activate();
+	};
+	if (narrow_ && wideNeeds_ > 0 && have >= wideNeeds_) {
+		narrow_ = false;
+		redraw();
+	}
+	if (!narrow_) {
+		const int need = body_->minimumSizeHint().width();
+		if (need > have) {
+			wideNeeds_ = need;
+			narrow_ = true;
+			redraw();
+		}
+	}
+	// Height the same way: the roomy form while it fits, the tight one when
+	// it does not, and scrolling only for what is left after that.
+	const int tall = scroll_->viewport()->height();
+	if (compact_ && roomyNeeds_ > 0 && tall >= roomyNeeds_) {
+		compact_ = false;
+		redraw();
+	}
+	if (!compact_) {
+		const int need = body_->minimumSizeHint().height();
+		if (need > tall) {
+			roomyNeeds_ = need;
+			compact_ = true;
+			redraw();
+		}
+	}
+	fitting_ = false;
 }
 
 // Which inputs are a platform's own encode and which are shared: the dock
@@ -488,14 +620,21 @@ void Dock::UpdateBanner()
 	const bool routed = ObsRoutedToLiveDelay();
 	banner_->setVisible(!routed);
 	QStringList problems = routed ? EncodeProblems() : QStringList();
-	const QString info = MultiEncodeInfo();
+	QString info = MultiEncodeInfo();
+	const QString cap = TwitchCapInfo();
+	if (!cap.isEmpty())
+		info = info.isEmpty() ? cap : info + QStringLiteral("<br>") + cap;
+	limits_->setToolTip(cap.isEmpty() ? QString() : T("Limits.TwitchCapTip"));
 	if (problems.isEmpty() && !info.isEmpty()) {
 		// Not a problem, just something worth knowing: a quiet card, no accent.
+		// It closes like a warning does, and comes back only with other news.
+		limitsKey_ = QStringLiteral("info%1").arg(qHash(info));
+		const bool show = limitsKey_ != limitsAck_;
 		limitsText_->setText(info);
 		limits_->setStyleSheet(CardSheet("ldLimits", pal_, pal_.muted));
 		limitsFit_->setVisible(false);
-		limitsHide_->setVisible(false);
-		limits_->setVisible(true);
+		limitsHide_->setVisible(show);
+		limits_->setVisible(show);
 		return;
 	}
 	limits_->setStyleSheet(CardSheet("ldLimits", pal_, pal_.tally));
@@ -511,9 +650,11 @@ void Dock::UpdateBanner()
 static void Pill(QLabel *l, const QString &text, const QColor &bg, const Palette &p, bool filled = true)
 {
 	l->setText(text);
-	l->setStyleSheet(QStringLiteral("font-size: 15px; font-weight: 700; letter-spacing: .04em; border-radius: 6px;"
-					" padding: 6px 10px; color: %1; background: %2;")
-				 .arg(filled ? InkOn(bg).name() : p.text.name(), filled ? bg.name() : Rgba(p.muted, .20)));
+	l->setStyleSheet(QStringLiteral("font-size: %3px; font-weight: 700; letter-spacing: .04em; border-radius: 6px;"
+					" padding: %4; color: %1; background: %2;")
+				 .arg(filled ? InkOn(bg).name() : p.text.name(), filled ? bg.name() : Rgba(p.muted, .20))
+				 .arg(s_compact ? 12 : 15)
+				 .arg(s_compact ? QStringLiteral("2px 8px") : QStringLiteral("6px 10px")));
 }
 
 void Dock::ShowOffline()
@@ -531,6 +672,20 @@ void Dock::ShowOffline()
 
 void Dock::ShowDestinations(const std::string &j)
 {
+	// A row rebuilt between a button going down and coming up swallows the
+	// click — and while a stream runs, the state changes every second.
+	if (QApplication::mouseButtons() != Qt::NoButton && dests_->isVisible() &&
+	    dests_->rect().contains(dests_->mapFromGlobal(QCursor::pos()))) {
+		if (!rowsDeferred_) {
+			rowsDeferred_ = true;
+			QTimer::singleShot(150, this, [this] {
+				rowsDeferred_ = false;
+				if (!last_.empty())
+					ShowDestinations(std::string(last_));
+			});
+		}
+		return;
+	}
 	QString focusKey;
 	if (QWidget *f = QApplication::focusWidget(); f && dests_->isAncestorOf(f))
 		focusKey = f->property("ldInputKey").toString();
@@ -640,6 +795,10 @@ void Dock::ShowDestinations(const std::string &j)
 		const Mini disBtn = make("Dock.Disarm", "Inputs.DisarmOneTip", Icon::Disarm, pal_.muted, "disarm" + who);
 		connect(armBtn.b, &QPushButton::clicked, this,
 			[this, spin, who] { Act("arm" + who + "&delay=" + std::to_string(spin->value())); });
+		// A narrow dock keeps the icons; the words are in the tooltips.
+		if (narrow_)
+			for (const Mini &m : {actBtn, cutBtn, afterBtn, disBtn})
+				m.b->setText(QString());
 		actBtn.b->setEnabled(armed && (!delayed || retime));
 		cutBtn.b->setEnabled(delayed);
 		afterBtn.b->setEnabled(delayed && !cutPending);
@@ -694,6 +853,8 @@ void Dock::ShowDestinations(const std::string &j)
 	// in. `own` is the input feeding only this platform, when its delay controls
 	// belong under this row.
 	auto addDest = [&](int index, bool indent, const QJsonObject &own) {
+		if (outputsFolded_ && (!perInput_ || own.value("key").toString().isEmpty()))
+			return;
 		const QJsonObject d = dests.at(index).toObject();
 		const std::string state = d.value("state").toString().toStdString();
 		const bool on = d.value("on").toBool();
@@ -714,32 +875,46 @@ void Dock::ShowDestinations(const std::string &j)
 			st += QString(" · %1 kb/s").arg(kbps, 0, 'f', 0);
 		if (const QString ds = delayState(own); !ds.isEmpty())
 			st += QStringLiteral(" · ") + ds;
-		auto *stateLabel = new QLabel(st);
-		stateLabel->setStyleSheet(muted);
-		if (!error.isEmpty())
-			stateLabel->setToolTip(error);
+		QLabel *stateLabel = nullptr;
+		if (narrow_) {
+			name->setTextFormat(Qt::RichText);
+			name->setText(QStringLiteral("%1<br><span style='%2 font-size: 11px;'>%3</span>")
+					      .arg(destName.toHtmlEscaped(), muted, st.toHtmlEscaped()));
+			name->setToolTip(error);
+		} else {
+			stateLabel = new QLabel(st);
+			stateLabel->setStyleSheet(muted);
+			if (!error.isEmpty())
+				stateLabel->setToolTip(error);
+		}
 		// Per-platform Start / Stop never shouts: the dock's loud button is
 		// the delay action, not one of a handful of rows.
-		auto *toggle = new QPushButton(on ? T("Dock.DestStop") : T("Dock.DestStart"));
-		toggle->setToolTip(on ? T("Dock.DestStopTip") : T("Dock.DestStartTip"));
-		toggle->setStyleSheet(GhostButton(on ? pal_.tally : pal_.live, pal_.text));
-		toggle->setIcon(MakeIcon(on ? Icon::Stop : Icon::Play, on ? pal_.tally : pal_.live));
-		toggle->setIconSize(QSize(12, 12));
-		toggle->setCursor(Qt::PointingHandCursor);
-		const std::string path = std::string(on ? "dest/stop" : "dest/start") + "?i=" + std::to_string(index);
-		const bool turningOn = !on;
-		connect(toggle, &QPushButton::clicked, this, [this, path, index, turningOn] {
-			if (turningOn)
-				OutputStartDest(size_t(index));
-			else
-				OutputStopDest(size_t(index));
-			Act(path);
-		});
+		QPushButton *toggle = nullptr;
+		if (!outputsFolded_) {
+			toggle = new QPushButton(on ? T("Dock.DestStop") : T("Dock.DestStart"));
+			toggle->setToolTip(on ? T("Dock.DestStopTip") : T("Dock.DestStartTip"));
+			toggle->setStyleSheet(GhostButton(on ? pal_.tally : pal_.live, pal_.text));
+			toggle->setIcon(MakeIcon(on ? Icon::Stop : Icon::Play, on ? pal_.tally : pal_.live));
+			toggle->setIconSize(QSize(12, 12));
+			toggle->setCursor(Qt::PointingHandCursor);
+			const std::string path = std::string(on ? "dest/stop" : "dest/start") + "?i=" + std::to_string(index);
+			const bool turningOn = !on;
+			connect(toggle, &QPushButton::clicked, this, [this, path, index, turningOn] {
+				if (turningOn)
+					OutputStartDest(size_t(index));
+				else
+					OutputStopDest(size_t(index));
+				Act(path);
+			});
+		}
 		destGrid_->addWidget(dot, row, 0);
 		destGrid_->addWidget(name, row, 1);
-		destGrid_->addWidget(new Sparkline(history(destName.toStdString(), state == "live" ? kbps : 0), color), row, 2);
-		destGrid_->addWidget(stateLabel, row, 3, 1, 2);
-		destGrid_->addWidget(toggle, row, 5);
+		if (!narrow_ && !outputsFolded_)
+			destGrid_->addWidget(new Sparkline(history(destName.toStdString(), state == "live" ? kbps : 0), color), row, 2);
+		if (stateLabel)
+			destGrid_->addWidget(stateLabel, row, 3, 1, 2);
+		if (toggle)
+			destGrid_->addWidget(toggle, row, 5);
 		row++;
 		if (QWidget *delay = delayControls(own)) {
 			destGrid_->addWidget(delay, row, 1, 1, 5);
@@ -769,12 +944,21 @@ void Dock::ShowDestinations(const std::string &j)
 			else if (delayed)
 				st += QStringLiteral(" · ") + T("Inputs.DelayedShort").arg(int(in.value("delay").toDouble() + 0.5));
 		}
-		auto *rate = new QLabel(st);
-		rate->setStyleSheet(muted);
+		QLabel *rate = nullptr;
+		if (narrow_) {
+			name->setTextFormat(Qt::RichText);
+			name->setText(QStringLiteral("%1<br><span style='%2 font-size: 11px; font-weight: 400;'>%3</span>")
+					      .arg(label.toHtmlEscaped(), muted, st.toHtmlEscaped()));
+		} else {
+			rate = new QLabel(st);
+			rate->setStyleSheet(muted);
+		}
 		destGrid_->addWidget(dot, row, 0);
 		destGrid_->addWidget(name, row, 1);
-		destGrid_->addWidget(new Sparkline(history("in:" + in.value("key").toString().toStdString(), kbps), color), row, 2);
-		destGrid_->addWidget(rate, row, 3, 1, 3);
+		if (!narrow_)
+			destGrid_->addWidget(new Sparkline(history("in:" + in.value("key").toString().toStdString(), kbps), color), row, 2);
+		if (rate)
+			destGrid_->addWidget(rate, row, 3, 1, 3);
 		row++;
 		if (QWidget *delay = shared ? delayControls(in) : nullptr) {
 			destGrid_->addWidget(delay, row, 1, 1, 5);
@@ -804,6 +988,34 @@ void Dock::ShowDestinations(const std::string &j)
 	bool anyShared = false;
 	for (const QJsonValue &v : inputs)
 		anyShared = anyShared || !isOwn(v.toObject());
+
+	// The outputs fold away: in a short dock the inputs and their delay matter
+	// more than a list of platforms that are simply running.
+	if (!dests.isEmpty()) {
+		int live = 0;
+		for (const QJsonValue &d : dests)
+			live += d.toObject().value("state").toString() == "live" ? 1 : 0;
+		auto *fold = new QPushButton((outputsFolded_ ? QStringLiteral("▸ ") : QStringLiteral("▾ ")) +
+					     T("Dock.OutputsFold").arg(live).arg(dests.size()));
+		fold->setCursor(Qt::PointingHandCursor);
+		fold->setToolTip(T("Dock.OutputsFoldTip"));
+		fold->setStyleSheet(QStringLiteral("QPushButton { text-align: left; border: none; background: transparent;"
+						   " padding: 0; color: %1; font-weight: 600; }"
+						   "QPushButton:hover { color: %2; }")
+					    .arg(pal_.muted.name(), pal_.text.name()));
+		connect(fold, &QPushButton::clicked, this, [this] {
+			outputsFolded_ = !outputsFolded_;
+			QSettings(QStringLiteral("skullboypl"), QStringLiteral("livedelay-obs"))
+				.setValue(QStringLiteral("dock/outputsFolded"), outputsFolded_);
+			// The button just clicked is one of the rows: redraw once the click is over.
+			QTimer::singleShot(0, this, [this] {
+				if (!last_.empty())
+					ShowDestinations(std::string(last_));
+			});
+		});
+		destGrid_->addWidget(fold, row, 0, 1, 6);
+		row++;
+	}
 
 	// Every platform encoding for itself is the picture the dock always had:
 	// one line for what OBS sends, then the platforms.
@@ -840,6 +1052,9 @@ void Dock::ShowDestinations(const std::string &j)
 	// The rows were rebuilt under whoever was typing seconds: give the box back.
 	if (auto it = spins.find(focusKey); !focusKey.isEmpty() && it != spins.end())
 		it->second->setFocus();
+	// What is on screen now may no longer fit the width it was drawn for.
+	if (!fitting_)
+		QTimer::singleShot(0, this, [this] { FitWidth(); });
 	dests_->show();
 }
 
@@ -897,7 +1112,8 @@ void Dock::ShowState(const std::string &j)
 	if (retime && !perInput_)
 		d += armed ? T("Dock.RetimeReady").arg(armS) : T("Dock.RetimeFilling").arg(buffer, 0, 'f', 0).arg(armS);
 	detail_->setText(d);
-	detail_->setVisible(!d.isEmpty());
+	detail_->setVisible(!d.isEmpty() && !compact_);
+	status_->setToolTip(compact_ ? d : QString());
 	ShowDestinations(j);
 
 	// The same seconds cannot be armed twice; other seconds can, at any time —
@@ -906,7 +1122,8 @@ void Dock::ShowState(const std::string &j)
 	arm_->setText(T(rearm ? "Dock.Rearm" : "Dock.Arm"));
 	arm_->setToolTip(T(rearm ? "Dock.RearmTip" : "Dock.ArmTip"));
 	arm_->setEnabled((!delayed && arm_delay <= 0) || rearm);
-	activate_->setText(retime ? T("Dock.Retime").arg(armS) : T("Dock.Activate"));
+	activate_->setText(retime ? (narrow_ ? T("Inputs.RetimeShort") : T("Dock.Retime").arg(armS))
+				  : T(narrow_ ? "Inputs.ActivateShort" : "Dock.Activate"));
 	activate_->setToolTip(retime ? T("Dock.RetimeTip").arg(armS) : T("Dock.ActivateTip"));
 	activate_->setEnabled(armed && (!delayed || retime));
 	cut_->setEnabled(delayed);

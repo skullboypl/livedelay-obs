@@ -135,6 +135,8 @@ impl Proxy {
             default_delay: std::sync::Mutex::new(Duration::from_secs_f64(cfg.delay_s)),
             overlay: overlay::OverlayStore::load(cfg.overlay_file.clone(), &cfg.overlay),
             ini_path: cfg.ini_path.clone(),
+            delay_mode: std::sync::Mutex::new(cfg.delay_mode.clone()),
+            input_flags: cfg.inputs.iter().map(|i| (i.own, i.external)).collect(),
         });
         let (listen, api_addr) = (cfg.listen.clone(), cfg.api.clone());
         let (stop_tx, stop_rx) = oneshot::channel();

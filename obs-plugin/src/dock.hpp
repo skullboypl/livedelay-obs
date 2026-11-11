@@ -3,6 +3,7 @@
 #include "settings.hpp"
 #include "theme.hpp"
 
+#include <QMargins>
 #include <QWidget>
 
 #include <chrono>
@@ -11,12 +12,15 @@
 #include <set>
 #include <memory>
 #include <string>
+#include <vector>
 
 class QFrame;
 class QGridLayout;
 class QLabel;
 class QPushButton;
 class QProgressBar;
+class QResizeEvent;
+class QScrollArea;
 class QSpinBox;
 
 namespace livedelay {
@@ -50,6 +54,10 @@ private:
 	void ShowDestinations(const std::string &json);
 	void UpdateBanner();
 	void ReadInputs(const Settings &s);
+	void Reflow();
+	void FitWidth();
+	void ApplyDensity();
+	void resizeEvent(QResizeEvent *event) override;
 
 	QFrame *banner_;
 	QFrame *limits_;
@@ -82,6 +90,21 @@ private:
 	std::set<std::string> ownInputs_, sharedInputs_; // by name, from the ini
 	std::map<std::string, int> inputDelay_;           // seconds typed per input key
 	std::map<std::string, int> inputArmSeen_;         // armed seconds last drawn, per input key
+	QGridLayout *bigGrid_ = nullptr;   // Activate, Live, Live after, Disarm
+	QGridLayout *toolsGrid_ = nullptr; // Settings, Panel, Preview, Help
+	std::vector<QPushButton *> tools_;
+	bool narrow_ = false;        // the wide form does not fit: one column, icons, no bitrate lines
+	int wideNeeds_ = 0;          // width the wide form asked for when it last overflowed
+	bool fitting_ = false;       // FitWidth is redrawing; do not start another round
+	bool compact_ = false;       // the roomy form does not fit the height: tighter everything
+	int roomyNeeds_ = 0;         // height the roomy form asked for when it last overflowed
+	QMargins normalMargins_;
+	int normalSpacing_ = -1;
+	QWidget *body_ = nullptr;
+	QScrollArea *scroll_ = nullptr;
+	bool outputsFolded_ = false; // platform rows hidden; remembered across sessions
+	bool rowsDeferred_ = false;  // a rebuild is waiting for a mouse button to come up
+	bool enginePending_ = false; // the ini changed during a stream; restart when it ends
 	std::string last_; // last state JSON, empty while offline
 	std::map<std::string, std::deque<double>> history_;
 	std::chrono::steady_clock::time_point lastSample_{};
