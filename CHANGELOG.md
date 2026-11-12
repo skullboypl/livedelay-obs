@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.46 – 2026-11-12
+
+- **Kick stays live next to Twitch.** Since 1.0.41 platforms on one input share one encode, so Kick got what Twitch was set up for: the VOD audio track and, with Enhanced Broadcasting, the extra video qualities. Kick connected, took the first keyframe and closed, in a loop. Now only Twitch (or a platform with the VOD track turned on by hand) gets the extra tracks; the rest get one audio and one video track. A shared encode also stays H.264 when Kick is on it, and stays within 1080p when Twitch is.
+
 ## 1.0.45 – 2026-11-11
 
 - **A taken port no longer stops LiveDelay.** When another program (an RTMP server, a second OBS, a range Windows keeps for Hyper-V) holds 1935 or 7799, the engine takes the next free port, writes it to the ini and says so in the log; OBS's stream server and the dock follow it. Before, OBS showed *os error 10048* and the delay did not run.

@@ -31,6 +31,9 @@ bool SupportsSeparateVodTrack(const QString &service, const QString &url);
 
 // Fills EncodeSettings from encode_mode + OBS Output + services.json / guidelines.
 EncodeSettings ResolveEncode(const Destination &d);
+// `d` as the encode it owns must be: without Enhanced Broadcasting or the VOD
+// track when another platform on the same input cannot take them.
+Destination SharedEncodeView(const Destination &d);
 
 // Problems when OBS Output (used by mode "obs") exceeds platform limits for
 // destinations that are in obs mode — shown in the dock banner.

@@ -15,6 +15,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <vector>
 
 namespace livedelay {
 
@@ -366,10 +367,54 @@ QString ObsStreamAudioEncoderId()
 	return resolved;
 }
 
-EncodeSettings ResolveEncode(const Destination &d)
+// The other enabled platforms on the same input key: since 1.0.41 they take
+// the encode of the first one instead of having their own.
+static std::vector<const Destination *> Sharers(const Settings &s, const Destination &d)
+{
+	std::vector<const Destination *> out;
+	if (d.ingest_key.empty())
+		return out;
+	for (const Destination &x : s.dests)
+		if (x.enabled && x.ingest_key == d.ingest_key && x.name != d.name)
+			out.push_back(&x);
+	return out;
+}
+
+Destination SharedEncodeView(const Settings &s, const Destination &d)
+{
+	Destination v = d;
+	for (const Destination *x : Sharers(s, d)) {
+		const QString svc = QString::fromStdString(x->service), url = QString::fromStdString(x->url);
+		// Kick, YouTube and the rest drop a stream with several video tracks
+		// (Enhanced Broadcasting) or a second AAC (Twitch's VOD track): they
+		// connect, take the first keyframe and close, over and over.
+		if (!IsTwitchTarget(svc, url))
+			v.enhanced_broadcasting = false;
+		if (!SupportsSeparateVodTrack(svc, url) && !x->vod_override) {
+			v.vod_track = 0;
+			v.vod_audio = false;
+			v.vod_override = false;
+		}
+	}
+	return v;
+}
+
+Destination SharedEncodeView(const Destination &d)
+{
+	return SharedEncodeView(Settings::Load(ConfigPath()), d);
+}
+
+EncodeSettings ResolveEncode(const Destination &own)
 {
 	EncodeSettings e;
 	const Settings cfg = Settings::Load(ConfigPath());
+	const Destination d = SharedEncodeView(cfg, own);
+	bool sharerKick = false, sharerTwitch = false;
+	for (const Destination *x : Sharers(cfg, own)) {
+		const QString svc = QString::fromStdString(x->service), url = QString::fromStdString(x->url);
+		sharerKick = sharerKick || IsKickTarget(svc, url);
+		sharerTwitch = sharerTwitch || IsTwitchTarget(svc, url);
+	}
 	e.video_encoder_id = ApplyBufferCodec(ObsStreamVideoEncoderId(), cfg.buffer_codec);
 	const ObsOutput obs = ReadObsOutput();
 	const Service *s = Svc(d);
@@ -435,13 +480,16 @@ EncodeSettings ResolveEncode(const Destination &d)
 		e.summary = T("Encode.SummaryManual").arg(e.video_kbps).arg(e.rate_control).arg(e.keyint_sec);
 		break;
 	}
-	const bool classicTwitch = NeedsClassicH264(d);
+	// Twitch's 1080p cap and Kick's H.264 also hold when that platform only
+	// shares this encode.
+	const bool classicTwitch = NeedsClassicH264(d) || sharerTwitch;
 	// Kick's ingest is H.264 only. Apply that only when this destination is
 	// Kick and it is actually enabled. A Twitch-only stream keeps the OBS
 	// codec, so NVENC is not switched from HEVC to H.264 behind the user's back.
 	// An explicit buffer codec wins over that default.
-	const bool kickLive = d.enabled && cfg.buffer_codec == "obs" &&
-			      IsKickTarget(QString::fromStdString(d.service), QString::fromStdString(d.url));
+	const bool kickLive = cfg.buffer_codec == "obs" &&
+			      ((d.enabled && IsKickTarget(QString::fromStdString(d.service), QString::fromStdString(d.url))) ||
+			       sharerKick);
 	if (kickLive) {
 		const QString was = e.video_encoder_id;
 		const QString h264 = ForceClassicH264(was);

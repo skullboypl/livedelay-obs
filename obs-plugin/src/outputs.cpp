@@ -250,7 +250,7 @@ bool BuildOne(DestOutput &o, const Destination &d, size_t index, const char *for
 	if (force_encoder)
 		enc.video_encoder_id = QString::fromUtf8(force_encoder);
 	const size_t liveMixer = ResolveLiveMixer(d);
-	const int vodTrack = ResolveVodTrack(d, int(liveMixer) + 1);
+	const int vodTrack = ResolveVodTrack(SharedEncodeView(d), int(liveMixer) + 1);
 	o.audio = AudioOn(liveMixer, enc.audio_kbps);
 	if (!o.audio)
 		return false;
@@ -571,7 +571,7 @@ bool StartOutput(size_t i)
 	Settings live = Settings::Load(ConfigPath());
 	if (i < live.dests.size()) {
 		const Destination &d = live.dests[i];
-		const bool wantEb = d.enhanced_broadcasting && DestIsTwitch(d);
+		const bool wantEb = SharedEncodeView(d).enhanced_broadcasting && DestIsTwitch(d);
 		bool retarget = false;
 		if (wantEb && !o.golive) {
 			retarget = TryAttachGoLive(o, d);

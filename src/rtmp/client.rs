@@ -63,6 +63,10 @@ pub struct DestStatus {
 pub struct Dest {
     pub status: Mutex<DestStatus>,
     pub autostart: bool,
+    /// Send one audio and one video track only. Twitch takes a second AAC (the
+    /// VOD mix) and the Enhanced Broadcasting ladder as multitrack packets;
+    /// Kick and most others connect, take the first keyframe and close.
+    pub single_track: bool,
     want: watch::Sender<bool>,
     target: watch::Sender<Target>,
 }
@@ -74,9 +78,26 @@ impl Dest {
         Arc::new(Self {
             status: Mutex::new(DestStatus { name: name.to_string(), state: "waiting", ..Default::default() }),
             autostart,
+            single_track: false,
             want,
             target: target_tx,
         })
+    }
+
+    /// Whether a platform takes extra tracks: Twitch does, or the user said so
+    /// for this one (`vod_override`).
+    pub fn takes_extra_tracks(service: &str, url: &str, vod_override: bool) -> bool {
+        let (s, u) = (service.to_ascii_lowercase(), url.to_ascii_lowercase());
+        if vod_override {
+            return true;
+        }
+        if s.contains("kick") || u.contains("kick.com") {
+            return false;
+        }
+        s.contains("twitch")
+            || u.contains("twitch.tv")
+            || u.contains("ttvnw.net")
+            || u.contains("ingest.global-contribute.live-video.net")
     }
 
     /// Point the next connection at a different ingest. An open publish drops and redials.
@@ -203,6 +224,7 @@ async fn stream(
     want: &mut watch::Receiver<bool>,
     shared: &Shared,
     status: &Mutex<DestStatus>,
+    single_track: bool,
 ) -> Ended {
     let Conn { io, mut reader, w, mut out } = c;
     let (rd, mut wr) = split(io);
@@ -235,6 +257,9 @@ async fn stream(
     let mut window_start = Instant::now();
     let initial = shared.eng.lock().unwrap().current_config();
     let mut pending: Vec<OutTag> = initial;
+    if single_track {
+        pending.retain(|t| !is_extra_track(t));
+    }
 
     let result = loop {
         let msg = tokio::select! {
@@ -256,12 +281,16 @@ async fn stream(
             }
         };
         let tag = match msg {
+            Ok(OutMsg::Tag(t)) if single_track && is_extra_track(&t) => continue,
             Ok(OutMsg::Tag(t)) => t,
             Ok(OutMsg::End) => break Ended::StreamEnd,
             Err(broadcast::error::RecvError::Lagged(_)) => {
                 // Reseed codec headers or Twitch reconnects with a header-less stream (#1000).
                 need_key = true;
                 pending = shared.eng.lock().unwrap().current_config();
+                if single_track {
+                    pending.retain(|t| !is_extra_track(t));
+                }
                 continue;
             }
             Err(broadcast::error::RecvError::Closed) => break Ended::StreamEnd,
@@ -328,6 +357,17 @@ async fn stream(
     result
 }
 
+/// A second track: Enhanced RTMP multitrack audio (format 9, packet type 5)
+/// or video (ex-header bit, packet type 6). OBS sends track 0 the plain way.
+fn is_extra_track(t: &OutTag) -> bool {
+    let b0 = t.data.first().copied().unwrap_or(0);
+    match t.kind {
+        MSG_AUDIO => b0 >> 4 == 9 && b0 & 0x0f == 5,
+        MSG_VIDEO => b0 & 0x80 != 0 && b0 & 0x0f == 6,
+        _ => false,
+    }
+}
+
 enum SessionEnd {
     Clean,
     Fail { connected: bool, err: io::Error },
@@ -346,7 +386,7 @@ async fn session(
             log!("{name}: connected (waiting for keyframe before live)");
             // Stay "connecting" until stream() has sent a keyframe — avoids
             // Twitch announcing LIVE with an empty/broken publish (#1000).
-            match stream(conn, sid, rx, want, shared, &dest.status).await {
+            match stream(conn, sid, rx, want, shared, &dest.status, dest.single_track).await {
                 Ended::StreamEnd => {
                     log!("{name}: stream ended");
                     dest.set_on(dest.autostart);
@@ -466,5 +506,33 @@ mod tests {
         let t = parse_url("rtmp://127.0.0.1:1940/live", "x").unwrap();
         assert_eq!((t.port, t.tc_url.as_str()), (1940, "rtmp://127.0.0.1:1940/live"));
         assert!(parse_url("http://x", "k").is_err());
+    }
+}
+
+#[cfg(test)]
+mod track_tests {
+    use super::*;
+
+    fn tag(kind: u8, data: Vec<u8>) -> OutTag {
+        OutTag { kind, ts: 0, key: false, config: false, data: Arc::new(data) }
+    }
+
+    #[test]
+    fn the_vod_mix_and_the_ladder_are_extra_tracks_but_track_0_is_not() {
+        assert!(is_extra_track(&tag(MSG_AUDIO, vec![0x95, 0x00, b'm', b'p', b'4', b'a', 1])));
+        assert!(is_extra_track(&tag(MSG_VIDEO, vec![0x96, 0x01, b'a', b'v', b'c', b'1', 1])));
+        assert!(!is_extra_track(&tag(MSG_AUDIO, vec![0xaf, 0x01, 0x21])));
+        assert!(!is_extra_track(&tag(MSG_VIDEO, vec![0x17, 0x01, 0, 0, 0])));
+        // Enhanced single-track HEVC is not an extra track.
+        assert!(!is_extra_track(&tag(MSG_VIDEO, vec![0x91, b'h', b'v', b'c', b'1'])));
+    }
+
+    #[test]
+    fn only_twitch_takes_extra_tracks() {
+        assert!(Dest::takes_extra_tracks("Twitch", "rtmp://waw.contribute.live-video.net/app", false));
+        assert!(Dest::takes_extra_tracks("", "rtmp://ingest.global-contribute.live-video.net/app", false));
+        assert!(!Dest::takes_extra_tracks("Kick", "rtmps://fa723fc1b171.global-contribute.live-video.net/app", false));
+        assert!(!Dest::takes_extra_tracks("YouTube - RTMPS", "rtmps://a.rtmp.youtube.com/live2", false));
+        assert!(Dest::takes_extra_tracks("", "rtmp://my.server/live", true));
     }
 }

@@ -112,7 +112,10 @@ impl Proxy {
                 Ok(t) => {
                     // Keep real autostart flag for the dock; want follows enabled+autostart
                     // until OBS Start Streaming / Live button turns egress on.
-                    let dest = rtmp::client::Dest::new(&d.name, d.autostart, t);
+                    let mut dest = rtmp::client::Dest::new(&d.name, d.autostart, t);
+                    if let Some(x) = Arc::get_mut(&mut dest) {
+                        x.single_track = !rtmp::client::Dest::takes_extra_tracks(&d.service, &d.url, d.vod_override);
+                    }
                     if !(d.enabled && d.autostart) {
                         dest.set_on(false);
                     }
