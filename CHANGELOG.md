@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.47 – 2026-11-12
+
+- **A second picture reaches its platform whatever key it is sent on.** Aitum Vertical set up on the platform's own key (`ld1`, from the platform row or an older setup) instead of its input's key landed on the OBS input, so the vertical input had no signal and TikTok waited. A platform's key now leads to the input that feeds it. Tested with Aitum Vertical 1.6.7 and *Force live from OBS*.
+- **Keys typed by hand match.** `Id1` with a capital I, `LD1`, spaces or quotes around it, or the whole address with the key at the end all find `ld1`. Capital I and small L, and O and 0, count as the same letter.
+
 ## 1.0.46 – 2026-11-12
 
 - **Kick stays live next to Twitch.** Since 1.0.41 platforms on one input share one encode, so Kick got what Twitch was set up for: the VOD audio track and, with Enhanced Broadcasting, the extra video qualities. Kick connected, took the first keyframe and closed, in a loop. Now only Twitch (or a platform with the VOD track turned on by hand) gets the extra tracks; the rest get one audio and one video track. A shared encode also stays H.264 when Kick is on it, and stays within 1080p when Twitch is.

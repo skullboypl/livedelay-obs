@@ -103,6 +103,11 @@ impl Proxy {
         let pairs: Vec<(String, String)> = cfg.inputs.iter().map(|i| (i.name.clone(), i.key.clone())).collect();
         let hub = hub::Hub::new(&pairs, per_slot, cfg.obs_live);
         hub.set_fallback(cfg.inputs.iter().position(|i| !i.external).unwrap_or(0));
+        for d in &cfg.dests {
+            if let Some(i) = cfg.inputs.iter().position(|i| i.name == d.input) {
+                hub.add_alias(&d.ingest_key, i);
+            }
+        }
 
         let mut dests = Vec::new();
         let mut dest_inputs = Vec::new();

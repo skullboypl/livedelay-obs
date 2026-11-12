@@ -24,6 +24,10 @@ pub struct Hub {
     pub slots: Vec<Slot>,
     /// ingest_key → slot index (excludes idle).
     index: HashMap<String, usize>,
+    /// A platform's own key (`ld1` from before inputs, or what the platform
+    /// row shows) → the slot of the input that feeds it. Aitum Vertical set up
+    /// on that key must land on its input, not on OBS's.
+    aliases: Mutex<HashMap<String, usize>>,
     /// Busy flag per ingest key currently publishing.
     busy: Mutex<HashMap<String, bool>>,
     /// Publish key that was not ld0… but was accepted on the first free slot.
@@ -39,6 +43,22 @@ pub struct Hub {
     pub state: watch::Sender<u64>,
 }
 
+/// A publish key as typed by hand, made comparable: `Id1`, ` LD1 `, `"ld1"`
+/// and `rtmp://127.0.0.1:1935/live/ld1` are all `ld1`. Capital I and small L,
+/// and O and 0, look the same in most fonts, so they count as one letter.
+pub fn norm_key(key: &str) -> String {
+    let k = key.trim().trim_matches(['"', '\'', '`']).trim();
+    let k = k.rsplit('/').next().unwrap_or(k).trim();
+    k.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'i' => 'l',
+            'o' => '0',
+            c => c,
+        })
+        .collect()
+}
+
 impl Hub {
     /// `per_slot_bytes` is the buffer cap for each engine.
     pub fn new(dests: &[(String, String)], per_slot_bytes: usize, accept_idle: bool) -> Arc<Self> {
@@ -47,7 +67,7 @@ impl Hub {
         let mut index = HashMap::new();
         for (i, (name, key)) in dests.iter().enumerate() {
             let ingest = if key.is_empty() { format!("ld{i}") } else { key.clone() };
-            index.insert(ingest.clone(), i);
+            index.insert(norm_key(&ingest), i);
             slots.push(Slot {
                 name: name.clone(),
                 ingest_key: ingest,
@@ -58,6 +78,7 @@ impl Hub {
         Arc::new(Self {
             slots,
             index,
+            aliases: Mutex::new(HashMap::new()),
             busy: Mutex::new(HashMap::new()),
             claimed: Mutex::new(HashMap::new()),
             idle_active: AtomicBool::new(false),
@@ -72,6 +93,20 @@ impl Hub {
         if i < self.slots.len() {
             self.fallback.store(i, Ordering::Relaxed);
         }
+    }
+
+    /// Lets a platform's key reach slot `i`. An input's own key always wins.
+    pub fn add_alias(&self, key: &str, i: usize) {
+        let key = norm_key(key);
+        if key.is_empty() || Self::is_idle_key(&key) || self.index.contains_key(&key) || i >= self.slots.len() {
+            return;
+        }
+        self.aliases.lock().unwrap().entry(key).or_insert(i);
+    }
+
+    fn slot_of(&self, key: &str) -> Option<usize> {
+        let key = norm_key(key);
+        self.index.get(&key).copied().or_else(|| self.aliases.lock().unwrap().get(&key).copied())
     }
 
     fn fallback_slot(&self) -> Option<&Slot> {
@@ -131,7 +166,7 @@ impl Hub {
         if Self::is_idle_key(key) {
             return None;
         }
-        self.index.get(key).map(|&i| self.slots[i].shared.clone())
+        self.slot_of(key).map(|i| self.slots[i].shared.clone())
     }
 
     pub fn is_idle_key(key: &str) -> bool {
@@ -144,7 +179,7 @@ impl Hub {
         if Self::is_idle_key(key) {
             return IDLE_KEY.to_string();
         }
-        self.index.get(key).map(|i| self.slots[*i].ingest_key.clone()).unwrap_or_else(|| key.to_string())
+        self.slot_of(key).map(|i| self.slots[i].ingest_key.clone()).unwrap_or_else(|| key.to_string())
     }
 
     /// Take the fallback slot (the first input OBS feeds) when it is free. The
@@ -225,7 +260,7 @@ impl Hub {
         busy.insert(self.map_key(key), false);
         busy.insert(format!("unknown:{key}"), false);
         // Unknown keys were treated as idle for OBS Start Streaming.
-        if !self.index.contains_key(key) {
+        if self.slot_of(key).is_none() {
             self.idle_active.store(false, Ordering::Relaxed);
             drop(busy);
             self.state.send_modify(|v| *v += 1);
@@ -396,5 +431,27 @@ mod tests {
         assert!(Arc::ptr_eq(&got, &hub.slot(1).unwrap().shared));
         // The vertical input still wants its own key, and it is still free.
         assert!(hub.try_claim("ld1").unwrap().is_some());
+    }
+
+    #[test]
+    fn a_platform_key_reaches_the_input_that_feeds_that_platform() {
+        // Aitum set up on the TikTok row's key (ld1), the input it feeds is "pionowe".
+        let hub = Hub::new(&[("OBS".into(), "ld0".into()), ("Pionowe".into(), "pionowe".into())], 1 << 20, true);
+        hub.add_alias("ld1", 1);
+        hub.add_alias("ld0", 1); // an input's own key is never taken over
+        let obs = hub.try_claim("_idle").unwrap().unwrap();
+        assert!(Arc::ptr_eq(&obs, &hub.slot(0).unwrap().shared));
+        let vertical = hub.try_claim("ld1").unwrap().unwrap();
+        assert!(Arc::ptr_eq(&vertical, &hub.slot(1).unwrap().shared));
+    }
+
+    #[test]
+    fn a_key_typed_by_hand_still_finds_its_input() {
+        for typed in ["Id1", " LD1 ", "\"ld1\"", "rtmp://127.0.0.1:1935/live/ld1", "PI0NOWE"] {
+            let hub = Hub::new(&[("OBS".into(), "ld0".into()), ("Pionowe".into(), "pionowe".into())], 1 << 20, false);
+            hub.add_alias("ld1", 1);
+            let got = hub.try_claim(typed).unwrap().unwrap();
+            assert!(Arc::ptr_eq(&got, &hub.slot(1).unwrap().shared), "{typed}");
+        }
     }
 }
