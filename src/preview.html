@@ -18,11 +18,19 @@
   #state.live i { background: var(--live); } #state.delayed i { background: var(--red); }
   #state.arming i, #state.armed i { background: var(--amber); }
   #dests { color: var(--muted); font-size: 13px; margin-left: auto; }
+  #pick { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 22px 0; }
+  #pick button { display: inline-flex; align-items: center; gap: 8px; background: var(--card); color: var(--muted); border: 1px solid var(--line); padding: 7px 12px; font: 600 13px/1 "Archivo", "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+  #pick button[aria-pressed="true"] { color: var(--text); border-color: var(--text); }
+  #pick i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  #pick i.on { background: var(--live); }
+  #pick small { font-weight: 400; font-size: 11px; }
+  html.inapp #pick { padding: 8px 8px 0; }
   main { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; padding: 18px 22px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 0; overflow: hidden; }
   .card h2 { margin: 0; padding: 12px 16px; font-size: 13px; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; display: flex; justify-content: space-between; gap: 12px; }
   .card h2 span { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
-  video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; }
+  video { display: block; width: 100%; aspect-ratio: var(--ar, 16 / 9); max-height: 72vh; margin: 0 auto; background: #000; }
+  .off { aspect-ratio: var(--ar, 16 / 9) !important; max-height: 72vh; }
   .note { color: var(--muted); font-size: 13px; padding: 0 24px 24px; max-width: 900px; }
   .chart { grid-column: 1 / -1; }
   .chart canvas { display: block; width: 100%; height: 220px; }
@@ -61,6 +69,7 @@
   <span id="state"><i></i><b id="stateText">…</b></span>
   <span id="dests"></span>
 </header>
+<nav id="pick" hidden></nav>
 <main>
   <section class="card">
     <h2><b data-t="in"></b><span data-t="inSub"></span></h2>
@@ -114,7 +123,55 @@
             .replace('{b}', Math.floor(Math.min(s.buffer_s, secs || 0)));
   };
 
+  // Which input this page shows: ?input=NAME, else the first one. With more
+  // than one input the bar on top switches between them.
+  let pickName = q.get('input') || '';
+  let pickIdx = 0;
   const players = {};
+  function stopAll() { for (const id of Object.keys(players)) { players[id].destroy(); delete players[id]; } }
+  function choose(name) {
+    pickName = name;
+    const u = new URL(location.href); u.searchParams.set('input', name); history.replaceState(null, '', u);
+    stopAll(); series.clear(); last = null;
+    if (latest) show(latest);
+  }
+  function renderPick(s) {
+    const box = document.getElementById('pick'), list = Array.isArray(s.inputs) ? s.inputs : [];
+    box.hidden = list.length < 2;
+    if (box.hidden) return;
+    // Built once per set of names; afterwards only the dot and kb/s change, so
+    // a click never lands on a button that was just replaced.
+    const names = list.map(x => x.name).join('|');
+    if (box.dataset.names !== names) {
+      box.dataset.names = names;
+      box.innerHTML = '';
+      list.forEach(x => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.append(document.createElement('i'), document.createTextNode(x.name), document.createElement('small'));
+        b.onclick = () => choose(x.name);
+        box.append(b);
+      });
+    }
+    list.forEach((x, k) => {
+      const b = box.children[k];
+      b.setAttribute('aria-pressed', String(k === pickIdx));
+      b.querySelector('i').className = x.input ? 'on' : '';
+      b.querySelector('small').textContent = x.input ? Math.round(x.in_kbps || 0) + ' kb/s' : '—';
+    });
+  }
+  // The chosen input's own state, in the shape the page already reads.
+  function pick(s) {
+    const list = Array.isArray(s.inputs) ? s.inputs : [];
+    let k = list.findIndex(x => x.name === pickName);
+    if (k < 0) k = list.findIndex(x => x.key === pickName);
+    if (k < 0) k = 0;
+    pickIdx = k;
+    const one = list[k];
+    if (!one) return s;
+    const dests = (s.dests || []).filter(d => d.input === one.name || (!d.input && k === 0));
+    return { ...s, ...one, dests };
+  }
   function play(id, on) {
     const video = document.getElementById(id), off = document.getElementById(id + 'Off');
     if (!on) {
@@ -123,7 +180,7 @@
       return;
     }
     if (players[id] || !window.mpegts || !mpegts.isSupported()) return;
-    const p = mpegts.createPlayer({ type: 'flv', isLive: true, url: '/live-preview/' + id + '.flv' },
+    const p = mpegts.createPlayer({ type: 'flv', isLive: true, url: '/live-preview/' + id + '.flv?i=' + pickIdx },
       { enableStashBuffer: false, liveBufferLatencyChasing: true, liveBufferLatencyMaxLatency: 3 });
     p.attachMediaElement(video);
     p.load();
@@ -133,10 +190,22 @@
     video.hidden = false; off.hidden = true;
   }
 
-  let last = null;
+  let last = null, latest = null;
   const es = new EventSource('/events');
-  es.onmessage = (e) => {
-    const s = JSON.parse(e.data);
+  es.onmessage = (e) => { latest = JSON.parse(e.data); show(latest); };
+  function show(all) {
+    const s = pick(all);
+    renderPick(all);
+    // A vertical picture gets a vertical frame instead of bars in a 16:9 one.
+    if (s.width > 0 && s.height > 0) {
+      const ar = s.width + ' / ' + s.height;
+      const vert = s.height > s.width;
+      document.querySelectorAll('video, .off').forEach(el => {
+        el.style.setProperty('--ar', ar);
+        el.style.width = vert ? 'auto' : '';
+        el.style.height = vert ? '72vh' : '';
+      });
+    }
     const state = document.getElementById('state'), text = document.getElementById('stateText');
     let kind = 'live', label = L.sLive;
     if (!s.input && s.mode !== 'delayed') { kind = ''; label = L.waiting; }
@@ -148,7 +217,7 @@
     if (!last || last.input !== s.input) { play('in', s.input); play('out', s.input); }
     last = s;
     record(s);
-  };
+  }
 
   // Bitrate history: OBS input plus one line per platform, one point a second.
   const HISTORY = 120, COLORS = ['#3ddc84', '#5ac8fa', '#ff9f0a', '#bf5af2', '#ff5a4f', '#ffd60a'];
@@ -158,7 +227,8 @@
     const now = Date.now();
     if (now - lastPoint < 900) return;
     lastPoint = now;
-    const values = [[L.inLine, s.input ? s.in_kbps : 0]];
+    const many = latest && Array.isArray(latest.inputs) && latest.inputs.length > 1;
+    const values = [[many ? s.name : L.inLine, s.input ? s.in_kbps : 0]];
     for (const d of s.dests) values.push([d.name, d.state === 'live' ? d.kbps : 0]);
     for (const [name, v] of values) {
       if (!series.has(name)) series.set(name, []);

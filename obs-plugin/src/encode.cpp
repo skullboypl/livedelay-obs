@@ -385,15 +385,21 @@ Destination SharedEncodeView(const Settings &s, const Destination &d)
 	Destination v = d;
 	for (const Destination *x : Sharers(s, d)) {
 		const QString svc = QString::fromStdString(x->service), url = QString::fromStdString(x->url);
-		// Kick, YouTube and the rest drop a stream with several video tracks
-		// (Enhanced Broadcasting) or a second AAC (Twitch's VOD track): they
-		// connect, take the first keyframe and close, over and over.
+		// Enhanced Broadcasting changes the encode itself (Twitch's bitrate
+		// ladder), so a non-Twitch sharer turns it off for everyone.
 		if (!IsTwitchTarget(svc, url))
 			v.enhanced_broadcasting = false;
-		if (!SupportsSeparateVodTrack(svc, url) && !x->vod_override) {
-			v.vod_track = 0;
-			v.vod_audio = false;
-			v.vod_override = false;
+		// Twitch's VOD track stays: the engine drops the second AAC before it
+		// reaches Kick and the others (Dest::single_track), so Twitch keeps
+		// its VOD audio on a shared input. When the encode belongs to Kick
+		// (listed first), it takes the Twitch sharer's VOD choice.
+		const bool ownVod = SupportsSeparateVodTrack(QString::fromStdString(d.service),
+							     QString::fromStdString(d.url)) || d.vod_override;
+		if (!ownVod && SupportsSeparateVodTrack(svc, url) && (x->vod_track != 0 || x->vod_audio)) {
+			v.vod_track = x->vod_track;
+			v.vod_track_set = x->vod_track_set;
+			v.vod_audio = x->vod_audio;
+			v.vod_override = true;
 		}
 	}
 	return v;

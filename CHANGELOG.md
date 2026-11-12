@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.48 – 2026-11-12
+
+- **A preview for every picture.** With more than one input the preview page has a bar on top: OBS, Pionowe and so on, each with its signal and kb/s. Each shows what comes in on that input and what goes out of it after its own delay, its own platforms and bitrate line, in a frame of the picture's shape (a vertical picture gets a vertical frame). `/live-preview?input=NAME` opens one directly, and each input row in the dock has a ▶ button for it.
+- **Twitch VOD audio is back when Twitch and Kick share an input.** Since 1.0.46 a Kick (or YouTube) platform on the same input removed the VOD track from the shared encode, so Twitch's VODs had the live mix. The engine already strips that track before it reaches Kick, so the encode keeps it again. When Kick is listed above Twitch and owns the encode, it now takes Twitch's VOD track setting.
+
 ## 1.0.47 – 2026-11-12
 
 - **A second picture reaches its platform whatever key it is sent on.** Aitum Vertical set up on the platform's own key (`ld1`, from the platform row or an older setup) instead of its input's key landed on the OBS input, so the vertical input had no signal and TikTok waited. A platform's key now leads to the input that feeds it. Tested with Aitum Vertical 1.6.7 and *Force live from OBS*.

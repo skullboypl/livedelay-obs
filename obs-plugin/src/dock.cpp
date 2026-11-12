@@ -35,6 +35,7 @@
 #include <QSpinBox>
 #include <QTimer>
 #include <QUrl>
+#include <QUrlQuery>
 #include <QVBoxLayout>
 
 #include <chrono>
@@ -957,8 +958,28 @@ void Dock::ShowDestinations(const std::string &j)
 		destGrid_->addWidget(name, row, 1);
 		if (!narrow_)
 			destGrid_->addWidget(new Sparkline(history("in:" + in.value("key").toString().toStdString(), kbps), color), row, 2);
+		// Each picture has its own preview: what comes in on this input and
+		// what goes out of it, with its own delay.
+		QPushButton *look = nullptr;
+		if (inputs.size() > 1 && !in.value("name").toString().isEmpty()) {
+			look = new QPushButton(QString::fromUtf8("▶"));
+			look->setFlat(true);
+			look->setCursor(Qt::PointingHandCursor);
+			look->setFixedWidth(26);
+			look->setToolTip(T("Dock.PreviewInputTip").arg(label));
+			const QString inputName = in.value("name").toString();
+			connect(look, &QPushButton::clicked, this, [inputName] {
+				QUrl url(QString::fromStdString(LivePreviewUrl()));
+				QUrlQuery q(url);
+				q.addQueryItem(QStringLiteral("input"), inputName);
+				url.setQuery(q);
+				QDesktopServices::openUrl(url);
+			});
+		}
 		if (rate)
-			destGrid_->addWidget(rate, row, 3, 1, 3);
+			destGrid_->addWidget(rate, row, 3, 1, look ? 2 : 3);
+		if (look)
+			destGrid_->addWidget(look, row, 5);
 		row++;
 		if (QWidget *delay = shared ? delayControls(in) : nullptr) {
 			destGrid_->addWidget(delay, row, 1, 1, 5);
